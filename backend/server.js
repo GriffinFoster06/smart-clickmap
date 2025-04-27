@@ -16,11 +16,12 @@ if (useRedis) {
     redis = Redis.createClient({ url: process.env.REDIS_URL });
     await redis.connect();
 } else {
-    clicks = new Map();  // userId → {x, y}
+    clicks = new Map();  // userId → { x, y }
 }
 
 let isRunning = false;
 
+// --- Standard app setup ---
 const app = express();
 app.use(cors({
     origin: '*',
@@ -33,25 +34,30 @@ app.use((req, res, next) => {
     next();
 });
 
+// --- Click Handling ---
 app.post('/click', (req, res) => {
     try {
         const token = (req.headers.authorization || '').replace('Bearer ', '');
         const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
         const { x, y } = req.body;
+        const uid = payload.user_id || payload.opaque_user_id;  // 🔥 FIX HERE
+
         if (typeof x !== 'number' || typeof y !== 'number')
             return res.status(400).json({ error: 'coords' });
 
         if (useRedis) {
-            redis.hSet(`click:${payload.user_id}`, { x, y });
+            redis.hSet(`click:${uid}`, { x, y });
         } else {
-            clicks.set(payload.user_id, { x, y });
+            clicks.set(uid, { x, y });
         }
+
         return res.sendStatus(200);
     } catch (e) {
         return res.status(401).json({ error: 'jwt' });
     }
 });
 
+// --- Broadcaster controls ---
 app.post('/start', (_, res) => {
     isRunning = true;
     if (!useRedis) clicks.clear();
@@ -70,14 +76,23 @@ app.post('/reset', (_, res) => {
 
 app.get('/health', (_, res) => res.send('ok'));
 
-// ---- Dynamic Clustering
+// --- Clustering Utilities ---
 function distance(a, b) {
     const dx = a.x - b.x;
     const dy = a.y - b.y;
     return Math.hypot(dx, dy);
 }
 
-function clusterClicks(points, radius = 0.05) {
+function getClusterRadius(clickCount) {
+    if (clickCount < 50) return 0.05;
+    if (clickCount < 500) return 0.03;
+    if (clickCount < 2000) return 0.02;
+    return 0.01;
+}
+
+function clusterClicks(points, radius) {
+    if (points.length === 0) return [];
+
     const blobs = [];
     points.forEach(p => {
         let found = false;
@@ -92,19 +107,11 @@ function clusterClicks(points, radius = 0.05) {
         }
         if (!found) blobs.push({ x: p.x, y: p.y, count: 1 });
     });
+
     return blobs;
 }
 
-// Utility functions
-
-function getClusterRadius(clickCount) {
-    if (clickCount < 50) return 0.05;    // 5% map dimension for small groups
-    if (clickCount < 500) return 0.03;   // 3% for medium groups
-    if (clickCount < 2000) return 0.02;  // 2% for large groups
-    return 0.01;                         // 1% for massive crowds
-}
-
-// /heatmap route
+// --- /heatmap dynamic clustering ---
 app.get('/heatmap', async (req, res) => {
     let pts = [];
     if (useRedis) {
@@ -126,7 +133,7 @@ app.get('/heatmap', async (req, res) => {
     const radius = getClusterRadius(totalClicks);
     let blobs = clusterClicks(pts, radius);
 
-    // 🔥 Fallback: if somehow no blobs but there are clicks, create 1 blob per click
+    // 🔥 Fallback if somehow no blobs
     if (blobs.length === 0 && pts.length > 0) {
         blobs = pts.map(p => ({ x: p.x, y: p.y, count: 1 }));
     }
@@ -143,5 +150,5 @@ app.get('/heatmap', async (req, res) => {
     res.json({ running: isRunning, blobs: payload, totalClicks });
 });
 
-
+// --- WebSocket server (if needed) ---
 const server = app.listen(PORT, () => console.log('EBS on', PORT));

@@ -3,6 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <title>Click Map Control</title>
+
+    <!-- ✅ Load the Twitch Extension Helper Library -->
+    <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
+
     <style>
         body {
             font-family: sans-serif;
@@ -23,12 +27,13 @@
     </style>
 </head>
 <body>
+
     <button id="start">Start Map</button>
     <button id="stop">Stop Map</button>
     <button id="reset">Reset Map</button>
     <div id="status">Status: unknown</div>
 
-    <!-- Load external JS file -->
+    <!-- ✅ Load your external Config JS code -->
     <script src="config.js" type="module"></script>
 
 </body>

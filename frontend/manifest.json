@@ -1,0 +1,23 @@
+{
+  "manifest_version": 2,
+  "version": "0.0.1",
+  "author_name": "PhummyLW",
+  "description": "Smart Click Map Replica",
+  "permissions": [
+    "EXTENSION_BACKEND"
+  ],
+  "views": {
+    "video_overlay": {
+      "viewer_url": "index.html",
+      "width": 1920,
+      "height": 1080
+    },
+    "config": {
+      "viewer_url": "config.html",
+      "content_type": "application/html",
+      "height": 300,
+      "width": 400
+    }
+  },
+  "content_security_policy": "default-src 'self'; script-src 'self' https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js; connect-src 'self' https://smart-clickmap-backend.onrender.com wss://smart-clickmap-backend.onrender.com; img-src 'self' data:; style-src 'self'; frame-ancestors https://www.twitch.tv"
+}

@@ -8,16 +8,25 @@ function setOverlayVisible(v) {
     ctx.canvas.style.display = v ? 'block' : 'none';
 }
 
+// Every 1000 ms, fetch updated heatmap
+function startPolling() {
+    setInterval(async () => {
+        try {
+            const res = await fetch(`${EBS}/heatmap`);
+            const { type, data, grid, running: r } = await res.json();
+            if (type !== 'heatmap') return;
+            running = r;
+            setOverlayVisible(running);
+            drawHeat(ctx, data, grid);
+        } catch (e) {
+            console.error('Polling failed:', e);
+        }
+    }, 1000);
+}
+
 Twitch.ext.onAuthorized(auth => {
     authToken = auth.token;
-    const ws = new WebSocket(`wss://smart-clickmap-backend.onrender.com/ws`);
-    ws.onmessage = e => {
-        const { type, data, grid, running: r } = JSON.parse(e.data);
-        if (type !== 'heatmap') return;
-        running = r;
-        setOverlayVisible(running);
-        drawHeat(ctx, data, grid);
-    };
+    startPolling();
 });
 
 document.addEventListener('click', ev => {

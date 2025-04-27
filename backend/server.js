@@ -123,6 +123,12 @@ app.post('/reset', (_, res) => { clearAll(); res.send('reset'); });
 
 app.get('/health', (_, res) => res.send('ok'));
 
+app.get('/heatmap', async (req, res) => {
+    const data = await snapshot();
+    res.json({ type: 'heatmap', running: isRunning, data, grid: GRID });
+});
+
+
 const server = app.listen(PORT, () => console.log('EBS on', PORT));
 
 const wss = new WebSocketServer({ server, path: '/ws' });

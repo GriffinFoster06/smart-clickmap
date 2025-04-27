@@ -104,27 +104,6 @@ function getClusterRadius(clickCount) {
     return 0.01;                         // 1% for massive crowds
 }
 
-function clusterClicks(points, radius) {
-    if (points.length === 0) return [];
-
-    const blobs = [];
-    points.forEach(p => {
-        let found = false;
-        for (const b of blobs) {
-            if (distance(p, b) < radius) {
-                b.count++;
-                b.x = (b.x * (b.count - 1) + p.x) / b.count;
-                b.y = (b.y * (b.count - 1) + p.y) / b.count;
-                found = true;
-                break;
-            }
-        }
-        if (!found) blobs.push({ x: p.x, y: p.y, count: 1 });
-    });
-
-    return blobs;
-}
-
 // /heatmap route
 app.get('/heatmap', async (req, res) => {
     let pts = [];

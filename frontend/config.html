@@ -1,0 +1,44 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Click Map Control</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 10px;
+        }
+
+        button {
+            margin: 4px 0;
+            padding: 8px 14px;
+            font-size: 16px;
+            width: 100%;
+        }
+
+        #status {
+            margin-top: 8px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <button id="start">Start Map</button>
+    <button id="stop">Stop Map</button>
+    <button id="reset">Reset Map</button>
+    <div id="status">Status: unknown</div>
+    <script type="module">
+        const EBS = 'https://smart-clickmap-backend.onrender.com';   // ✅ Your backend
+        const s = document.getElementById('status');
+        function post(path) {
+            fetch(EBS + path, { method: 'POST' })
+                .then(r => r.text())
+                .then(t => s.textContent = 'Status: ' + t)
+                .catch(() => s.textContent = 'Status: error');
+        }
+        document.getElementById('start').onclick = () => post('/start');
+        document.getElementById('stop').onclick = () => post('/stop');
+        document.getElementById('reset').onclick = () => post('/reset');
+    </script>
+</body>
+</html>

@@ -95,6 +95,42 @@ function clusterClicks(points, radius = 0.05) {
     return blobs;
 }
 
+// Utility functions
+function distance(a, b) {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    return Math.hypot(dx, dy);
+}
+
+function getClusterRadius(clickCount) {
+    if (clickCount < 50) return 0.05;    // 5% map dimension for small groups
+    if (clickCount < 500) return 0.03;   // 3% for medium groups
+    if (clickCount < 2000) return 0.02;  // 2% for large groups
+    return 0.01;                         // 1% for massive crowds
+}
+
+function clusterClicks(points, radius) {
+    if (points.length === 0) return [];
+
+    const blobs = [];
+    points.forEach(p => {
+        let found = false;
+        for (const b of blobs) {
+            if (distance(p, b) < radius) {
+                b.count++;
+                b.x = (b.x * (b.count - 1) + p.x) / b.count;
+                b.y = (b.y * (b.count - 1) + p.y) / b.count;
+                found = true;
+                break;
+            }
+        }
+        if (!found) blobs.push({ x: p.x, y: p.y, count: 1 });
+    });
+
+    return blobs;
+}
+
+// /heatmap route
 app.get('/heatmap', async (req, res) => {
     let pts = [];
     if (useRedis) {
@@ -107,18 +143,31 @@ app.get('/heatmap', async (req, res) => {
         pts = Array.from(clicks.values());
     }
 
-    const blobs = clusterClicks(pts);
-    const total = pts.length || 1;
+    const totalClicks = pts.length;
+
+    if (totalClicks === 0) {
+        return res.json({ running: isRunning, blobs: [], totalClicks: 0 });
+    }
+
+    const radius = getClusterRadius(totalClicks);
+    let blobs = clusterClicks(pts, radius);
+
+    // 🔥 Fallback: if somehow no blobs but there are clicks, create 1 blob per click
+    if (blobs.length === 0 && pts.length > 0) {
+        blobs = pts.map(p => ({ x: p.x, y: p.y, count: 1 }));
+    }
+
     blobs.sort((a, b) => b.count - a.count);
 
     const payload = blobs.map((b, i) => ({
         x: b.x,
         y: b.y,
-        pct: Math.round((b.count / total) * 100),
+        pct: Math.round((b.count / totalClicks) * 100),
         isTop: i === 0
     }));
 
-    res.json({ running: isRunning, blobs: payload, totalClicks: total });
+    res.json({ running: isRunning, blobs: payload, totalClicks });
 });
+
 
 const server = app.listen(PORT, () => console.log('EBS on', PORT));

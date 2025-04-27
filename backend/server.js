@@ -83,11 +83,23 @@ function distance(a, b) {
     return Math.hypot(dx, dy);
 }
 
-function getClusterRadius(clickCount) {
-    if (clickCount < 50) return 0.05;
-    if (clickCount < 500) return 0.03;
-    if (clickCount < 2000) return 0.02;
-    return 0.01;
+function getClusterRadius(clicks) {
+    const n = clicks.length;
+    if (n === 0) return 0.05;
+
+    let avgDist = 0;
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            avgDist += distance(clicks[i], clicks[j]);
+        }
+    }
+    avgDist /= (n * (n - 1) / 2);
+
+    // Base it on average distance between clicks
+    if (avgDist < 0.05) return 0.01;  // Tight cluster
+    if (avgDist < 0.1) return 0.02;
+    if (avgDist < 0.2) return 0.03;
+    return 0.05;  // Very spread out
 }
 
 function clusterClicks(points, radius) {
@@ -130,7 +142,7 @@ app.get('/heatmap', async (req, res) => {
         return res.json({ running: isRunning, blobs: [], totalClicks: 0 });
     }
 
-    const radius = getClusterRadius(totalClicks);
+    const radius = getClusterRadius(pts);
     let blobs = clusterClicks(pts, radius);
 
     // 🔥 Fallback if somehow no blobs
@@ -140,12 +152,15 @@ app.get('/heatmap', async (req, res) => {
 
     blobs.sort((a, b) => b.count - a.count);
 
-    const payload = blobs.map((b, i) => ({
-        x: b.x,
-        y: b.y,
-        pct: Math.round((b.count / totalClicks) * 100),
-        isTop: i === 0
-    }));
+    const payload = blobs
+        .map((b, i) => ({
+            x: b.x,
+            y: b.y,
+            pct: Math.round((b.count / totalClicks) * 100),
+            isTop: i === 0
+        }))
+        .filter(b => b.pct >= 5 || b.isTop);  // 🔥 Only show blobs ≥5% or top blob always
+
 
     res.json({ running: isRunning, blobs: payload, totalClicks });
 });

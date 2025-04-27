@@ -9,7 +9,7 @@ export function drawBlobs(ctx, blobs) {
     blobs.forEach(b => {
         const cx = b.x * W;
         const cy = b.y * H;
-        const r = 20 + b.pct;  // Radius grows with percentage
+        const r = 10 + Math.sqrt(b.pct) * 4;
 
         ctx.fillStyle = b.isTop
             ? 'rgba(0,255,0,0.25)'

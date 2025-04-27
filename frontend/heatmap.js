@@ -1,43 +1,54 @@
-export function drawHeat(ctx, grid, size, maxIndex) {
-    const w = ctx.canvas.width / size;
-    const h = ctx.canvas.height / size;
-    const max = Math.max(...grid);
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    if (max === 0) return;
+﻿// Draw “bubble” clusters instead of red heat cells.
+// • Every grid-cell with heat > 0 is rendered as a circle.
+// • Circle radius ∝ sqrt(heat) so area grows with clicks.
+// • Most-clicked cell (maxIndex) is drawn in green.
+// • %-share label drawn inside each bubble.
 
-    const blobs = [];
+export function drawHeat(ctx, grid, size, maxIndex) {
+    const W = ctx.canvas.width;
+    const H = ctx.canvas.height;
+    const cellW = W / size;
+    const cellH = H / size;
+
+    // clear
+    ctx.clearRect(0, 0, W, H);
+
+    // find totals
+    const total = grid.reduce((a, b) => a + b, 0);
+    if (!total) return;                 // nothing to draw
+
+    const maxVal = Math.max(...grid);
+
     grid.forEach((v, i) => {
         if (!v) return;
-        blobs.push({ value: v, index: i });
-    });
+        const cx = (i % size) * cellW + cellW / 2;
+        const cy = Math.floor(i / size) * cellH + cellH / 2;
 
-    blobs.forEach(blob => {
-        const alpha = blob.value / max;
-        const x = (blob.index % size) * w + w / 2;
-        const y = Math.floor(blob.index / size) * h + h / 2;
-        const radius = Math.max(20, 40 * alpha);
+        // radius: base 12 px plus scale
+        const r = 12 + Math.sqrt(v) * 2;
+
+        const isMax = (i === maxIndex);
+
+        // fill colour
+        ctx.fillStyle = isMax
+            ? 'rgba(0,255,0,0.25)'          // green blob
+            : 'rgba(128,64,255,0.25)';      // purple blob
 
         ctx.beginPath();
-        ctx.arc(x, y, radius, 0, 2 * Math.PI);
-
-        if (blob.index === maxIndex) {
-            ctx.fillStyle = 'rgba(0,255,0,0.3)';  // Green fill for most clicked
-            ctx.strokeStyle = 'lime';
-        } else {
-            ctx.fillStyle = 'rgba(100,100,255,0.2)';  // Purple/blue fill
-            ctx.strokeStyle = 'white';
-        }
-
-        ctx.lineWidth = 3;
+        ctx.arc(cx, cy, r, 0, 2 * Math.PI);
         ctx.fill();
+
+        // outline
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = isMax ? 'rgb(0,255,0)' : 'white';
         ctx.stroke();
 
-        // Draw % text
+        // % label
+        const pct = Math.round((v / total) * 100);
+        ctx.font = `${Math.max(12, r * 0.75)}px sans-serif`;
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 18px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const percent = Math.round((blob.value / max) * 100);
-        ctx.fillText(`${percent}%`, x, y);
+        ctx.fillText(`${pct}%`, cx, cy);
     });
 }

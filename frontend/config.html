@@ -2,50 +2,23 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Smart Click Maps Config</title>
+    <title>Smart Click Maps – Control</title>
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
-    <style>
-        body {
-            font-family: sans-serif;
-            padding: 20px;
-            text-align: center;
-        }
-
-        #stats {
-            margin-bottom: 20px;
-            font-size: 18px;
-        }
-
-            #stats div {
-                margin: 5px 0;
-            }
-
-        button {
-            font-size: 20px;
-            padding: 10px 20px;
-            background-color: #9147ff;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-
-            button:hover {
-                background-color: #772ce8;
-            }
-    </style>
+    <link rel="stylesheet" href="config.css">
 </head>
 <body>
-
     <div id="stats">
-        <div id="clicks">Clicks: 0</div>
-        <div id="users">Users: 0</div>
-        <div id="blobs">Blobs: 0</div>
+        <span id="clicks">0 clicks</span>
+        <span id="users">0 users</span>
+        <span id="blobs">0 blobs</span>
+    </div>
+
+    <div id="preview">
+        <canvas id="mini" width="240" height="135"></canvas>
     </div>
 
     <button id="restart">Restart</button>
 
     <script type="module" src="config.js"></script>
-
 </body>
 </html>

@@ -2,39 +2,50 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Click Map Control</title>
-
-    <!-- ✅ Load the Twitch Extension Helper Library -->
+    <title>Smart Click Maps Config</title>
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
-
     <style>
         body {
             font-family: sans-serif;
-            margin: 10px;
+            padding: 20px;
+            text-align: center;
         }
+
+        #stats {
+            margin-bottom: 20px;
+            font-size: 18px;
+        }
+
+            #stats div {
+                margin: 5px 0;
+            }
 
         button {
-            margin: 4px 0;
-            padding: 8px 14px;
-            font-size: 16px;
-            width: 100%;
+            font-size: 20px;
+            padding: 10px 20px;
+            background-color: #9147ff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
         }
 
-        #status {
-            margin-top: 8px;
-            font-weight: bold;
-        }
+            button:hover {
+                background-color: #772ce8;
+            }
     </style>
 </head>
 <body>
 
-    <button id="start">Start Map</button>
-    <button id="stop">Stop Map</button>
-    <button id="reset">Reset Map</button>
-    <div id="status">Status: unknown</div>
+    <div id="stats">
+        <div id="clicks">Clicks: 0</div>
+        <div id="users">Users: 0</div>
+        <div id="blobs">Blobs: 0</div>
+    </div>
 
-    <!-- ✅ Load your external Config JS code -->
-    <script src="config.js" type="module"></script>
+    <button id="restart">Restart</button>
+
+    <script type="module" src="config.js"></script>
 
 </body>
 </html>

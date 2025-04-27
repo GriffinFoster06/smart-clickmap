@@ -1,23 +1,22 @@
 ﻿import { drawHeat } from './heatmap.js';
 
-let authToken = '', clicked = false, running = false;
+let authToken = '', running = false;
 const ctx = document.getElementById('heat').getContext('2d');
-const EBS = 'https://smart-clickmap-backend.onrender.com';    // ✅ Your backend
+const EBS = 'https://smart-clickmap-backend.onrender.com';
 
 function setOverlayVisible(v) {
     ctx.canvas.style.display = v ? 'block' : 'none';
 }
 
-// Every 1000 ms, fetch updated heatmap
 function startPolling() {
     setInterval(async () => {
         try {
             const res = await fetch(`${EBS}/heatmap`);
-            const { type, data, grid, running: r } = await res.json();
+            const { type, data, grid, running: r, maxIndex } = await res.json();
             if (type !== 'heatmap') return;
             running = r;
             setOverlayVisible(running);
-            drawHeat(ctx, data, grid);
+            drawHeat(ctx, data, grid, maxIndex);
         } catch (e) {
             console.error('Polling failed:', e);
         }
@@ -30,7 +29,7 @@ Twitch.ext.onAuthorized(auth => {
 });
 
 document.addEventListener('click', ev => {
-    if (!running || clicked || !authToken) return;
+    if (!running || !authToken) return;
     const rect = document.body.getBoundingClientRect();
     const x = (ev.clientX - rect.left) / rect.width;
     const y = (ev.clientY - rect.top) / rect.height;
@@ -41,5 +40,5 @@ document.addEventListener('click', ev => {
             'Authorization': `Bearer ${authToken}`
         },
         body: JSON.stringify({ x, y })
-    }).then(() => { clicked = true; });
+    });
 });

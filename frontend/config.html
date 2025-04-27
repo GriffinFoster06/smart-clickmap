@@ -27,18 +27,9 @@
     <button id="stop">Stop Map</button>
     <button id="reset">Reset Map</button>
     <div id="status">Status: unknown</div>
-    <script type="module">
-        const EBS = 'https://smart-clickmap-backend.onrender.com';   // ✅ Your backend
-        const s = document.getElementById('status');
-        function post(path) {
-            fetch(EBS + path, { method: 'POST' })
-                .then(r => r.text())
-                .then(t => s.textContent = 'Status: ' + t)
-                .catch(() => s.textContent = 'Status: error');
-        }
-        document.getElementById('start').onclick = () => post('/start');
-        document.getElementById('stop').onclick = () => post('/stop');
-        document.getElementById('reset').onclick = () => post('/reset');
-    </script>
+
+    <!-- Load external JS file -->
+    <script src="config.js" type="module"></script>
+
 </body>
 </html>

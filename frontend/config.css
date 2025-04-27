@@ -1,12 +1,12 @@
 body {
+    background: #262626;
+    color: #eee;
     font-family: sans-serif;
     margin: 0;
     padding: 10px;
-    color: #eee;
-    background: #262626;
     display: flex;
     flex-direction: column;
-    align-items: center
+    align-items: center;
 }
 
 #stats {
@@ -15,16 +15,16 @@ body {
     width: 100%;
     max-width: 240px;
     margin-bottom: 6px;
-    font-size: 14px
+    font-size: 14px;
 }
 
     #stats span {
-        white-space: nowrap
+        white-space: nowrap;
     }
 
 #preview {
     border: 2px solid #6441a5;
-    margin-bottom: 10px
+    margin-bottom: 10px;
 }
 
 #restart {
@@ -35,9 +35,9 @@ body {
     font-size: 16px;
     width: 100%;
     max-width: 240px;
-    cursor: pointer
+    cursor: pointer;
 }
 
     #restart:hover {
-        background: #7e5cf7
+        background: #7e5cf7;
     }

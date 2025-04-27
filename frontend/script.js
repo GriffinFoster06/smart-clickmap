@@ -1,36 +1,36 @@
-﻿import { drawHeat } from './heatmap.js';
+﻿import { drawBubbles } from './heatmap.js';
 
-let authToken = '', running = false;
-const ctx = document.getElementById('heat').getContext('2d');
 const EBS = 'https://smart-clickmap-backend.onrender.com';
+const canvas = document.getElementById('heat');
+const ctx = canvas.getContext('2d');
+let authToken = '', running = false;
 
-function setOverlayVisible(v) {
-    ctx.canvas.style.display = v ? 'block' : 'none';
+function setVisible(v) {
+    canvas.style.display = v ? 'block' : 'none';
 }
 
-function startPolling() {
-    setInterval(async () => {
-        try {
-            const res = await fetch(`${EBS}/heatmap`);
-            const { type, data, grid, running: r, maxIndex } = await res.json();
-            if (type !== 'heatmap') return;
-            running = r;
-            setOverlayVisible(running);
-            drawHeat(ctx, data, grid, maxIndex);
-        } catch (e) {
-            console.error('Polling failed:', e);
-        }
-    }, 1000);
+async function poll() {
+    try {
+        const res = await fetch(`${EBS}/heatmap`);
+        const { type, blobs, totalClicks, maxIndex, running: r } = await res.json();
+        if (type !== 'heatmap') return;
+        running = r;
+        setVisible(running);
+        drawBubbles(ctx, blobs, totalClicks, maxIndex);
+    } catch (e) {
+        console.error('Polling error', e);
+    }
 }
 
 Twitch.ext.onAuthorized(auth => {
     authToken = auth.token;
-    startPolling();
+    poll();
+    setInterval(poll, 1000);
 });
 
-document.addEventListener('click', ev => {
+canvas.addEventListener('click', ev => {
     if (!running || !authToken) return;
-    const rect = document.body.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     const x = (ev.clientX - rect.left) / rect.width;
     const y = (ev.clientY - rect.top) / rect.height;
     fetch(`${EBS}/click`, {
@@ -40,5 +40,5 @@ document.addEventListener('click', ev => {
             'Authorization': `Bearer ${authToken}`
         },
         body: JSON.stringify({ x, y })
-    });
+    }).catch(console.error);
 });

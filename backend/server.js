@@ -96,11 +96,6 @@ function clusterClicks(points, radius = 0.05) {
 }
 
 // Utility functions
-function distance(a, b) {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    return Math.hypot(dx, dy);
-}
 
 function getClusterRadius(clickCount) {
     if (clickCount < 50) return 0.05;    // 5% map dimension for small groups

@@ -1,13 +1,22 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>Smart Click Map</title>
+
+    <!-- ✅ Add this line to load Twitch Extension Helper Library -->
+    <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
+
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
+    <!-- The transparent heatmap canvas -->
     <canvas id="heat" width="1920" height="1080"></canvas>
+
+    <!-- Your viewer overlay scripts -->
     <script type="module" src="heatmap.js"></script>
     <script type="module" src="script.js"></script>
+
 </body>
 </html>

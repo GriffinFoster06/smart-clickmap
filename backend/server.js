@@ -86,8 +86,19 @@ function clearAll() {
 
 // ----- Web / WS -------------------------------------------------
 const app = express();
-app.use(cors({ origin: '*' }));      // ← Added CORS properly here
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
+
+// force no cache
+app.use((req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
+});
+
 
 // JWT verify JUST FOR VIEWER CLICK ENDPOINT (leave config routes open)
 app.post('/click', (req, res) => {

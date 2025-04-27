@@ -1,5 +1,6 @@
 ﻿import 'dotenv/config';
 import express from 'express';
+import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import jwt from 'jsonwebtoken';
 import Redis from 'redis';
@@ -30,7 +31,7 @@ const K = [
 function idx(x, y) { return y * GRID + x; }
 
 // ----- State flags ---------------------------------------------
-let isRunning = false;   // ⬅️ controlled by /start /stop
+let isRunning = false;   // controlled by /start /stop
 
 // ----- Helpers --------------------------------------------------
 async function acceptClick(userId, x, y) {
@@ -47,16 +48,18 @@ async function acceptClick(userId, x, y) {
 
     const cx = Math.floor(x * GRID);
     const cy = Math.floor(y * GRID);
-    for (let dy = -1; dy <= 1; dy++)
+    for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
             const gx = cx + dx;
             const gy = cy + dy;
             if (gx < 0 || gy < 0 || gx >= GRID || gy >= GRID) continue;
-            if (useRedis)
+            if (useRedis) {
                 await redis.incrByFloat(`g:${idx(gx, gy)}`, K[dy + 1][dx + 1]);
-            else
+            } else {
                 grid[idx(gx, gy)] += K[dy + 1][dx + 1];
+            }
         }
+    }
     return true;
 }
 
@@ -83,6 +86,7 @@ function clearAll() {
 
 // ----- Web / WS -------------------------------------------------
 const app = express();
+app.use(cors({ origin: '*' }));      // ← Added CORS properly here
 app.use(express.json());
 
 // JWT verify JUST FOR VIEWER CLICK ENDPOINT (leave config routes open)
@@ -91,8 +95,9 @@ app.post('/click', (req, res) => {
         const token = (req.headers.authorization || '').replace('Bearer ', '');
         const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
         const { x, y } = req.body;
-        if (typeof x !== 'number' || typeof y !== 'number')
+        if (typeof x !== 'number' || typeof y !== 'number') {
             return res.status(400).json({ error: 'coords' });
+        }
         acceptClick(payload.user_id, x, y);
         return res.sendStatus(200);
     } catch (e) {

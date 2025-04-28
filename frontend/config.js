@@ -18,7 +18,14 @@ async function poll() {
 
 setInterval(poll, 1000);
 
-document.getElementById('restart').onclick = async () => {
-    await fetch(`${EBS}/reset`, { method: 'POST' });
+document.getElementById('start').onclick = async () => {
     await fetch(`${EBS}/start`, { method: 'POST' });
+};
+
+document.getElementById('stop').onclick = async () => {
+    await fetch(`${EBS}/stop`, { method: 'POST' });
+};
+
+document.getElementById('reset').onclick = async () => {
+    await fetch(`${EBS}/reset`, { method: 'POST' });
 };

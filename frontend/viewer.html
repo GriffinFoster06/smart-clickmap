@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ClickMap Viewer</title>
+    <link rel="stylesheet" href="./style.css">
+    <script src="https://embed.twitch.tv/embed/v1.js"></script>
+</head>
+<body>
+    <div class="layout">
+        <div id="player"></div>
+        <canvas id="heat" width="1280" height="720"></canvas>
+    </div>
+    <script type="module">import { drawBlobs } from './heatmap.js';
+    const api = 'https://api.phummylw.com';
+    const chan = location.pathname.split('/').pop().toLowerCase();
+    new Twitch.Embed("player", { channel: chan, width: "100%", height: "100%", layout: "video" });
+    const canvas = document.getElementById('heat');
+    const ctx = canvas.getContext('2d');
+    async function refresh(){
+      const r = await fetch(`${api}/heatmap/${chan}`); const j = await r.json();
+      drawBlobs(ctx, j.blobs||[]);
+    }
+    setInterval(refresh,1000); refresh();
+    canvas.addEventListener('click', e => {
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left)/rect.width;
+      const y = (e.clientY - rect.top)/rect.height;
+      fetch(`${api}/click/${chan}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ x, y })
+      });
+    });</script>
+</body>
+</html>

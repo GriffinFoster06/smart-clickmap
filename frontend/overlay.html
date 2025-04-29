@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ClickMap Overlay</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+        }
+
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="heat" width="1920" height="1080"></canvas>
+    <script type="module">import { drawBlobs } from './heatmap.js';
+    const chan = location.pathname.split('/').pop().toLowerCase();
+    const ctx = document.getElementById('heat').getContext('2d');
+    const api = 'https://api.phummylw.com';
+    async function fetchAndDraw(){
+      const r = await fetch(`${api}/heatmap/${chan}`);
+      const j = await r.json();
+      drawBlobs(ctx, j.blobs||[]);
+    }
+    setInterval(fetchAndDraw,1000);
+    fetchAndDraw();</script>
+</body>
+</html>

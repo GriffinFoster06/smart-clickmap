@@ -13,7 +13,9 @@ app.use((_, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
 /* ───────────────────────────────────── in-memory store */
 const store = new Map(); // channel → Map(uid → {x, y})
+const activeChannels = new Map(); // channel → boolean indicating if tracking is active
 const clicksOf = ch => { if (!store.has(ch)) store.set(ch, new Map()); return store.get(ch); };
+const isActive = ch => activeChannels.get(ch) === true;
 
 /* ────────────────────────────────────────── whitelist */
 if (!process.env.WHITELIST) {
@@ -101,19 +103,29 @@ function cluster(pts, r) {
 
 /* ───────────────────────────────── viewer API */
 app.post('/api/:channel/click', (req, res) => {
+    const channel = req.params.channel;
+
+    // Only accept clicks if channel is active
+    if (!isActive(channel)) {
+        return res.status(403).json({ error: 'Heatmap not active' });
+    }
+
     const { x, y } = req.body;
     if (typeof x !== 'number' || typeof y !== 'number') {
         return res.status(400).json({ error: 'Invalid coordinates' });
     }
     const uid = req.headers['x-uid'] || req.ip;
-    clicksOf(req.params.channel).set(uid, { x, y });
+    clicksOf(channel).set(uid, { x, y });
     res.json({ status: 'OK' });
 });
 
 app.get('/api/:channel/heatmap', (req, res) => {
-    const points = Array.from(clicksOf(req.params.channel).values());
+    const channel = req.params.channel;
+    const points = Array.from(clicksOf(channel).values());
     const total = points.length;
-    if (!total) return res.json({ blobs: [], totalClicks: 0 });
+    const active = isActive(channel);
+
+    if (!total) return res.json({ blobs: [], totalClicks: 0, active });
 
     let avg = 0;
     for (let i = 0; i < total; i++)
@@ -127,7 +139,7 @@ app.get('/api/:channel/heatmap', (req, res) => {
         .sort((a, b) => b.pct - a.pct).reverse();
 
     if (blobs.length) blobs[0].isTop = true;
-    res.json({ blobs, totalClicks: total });
+    res.json({ blobs, totalClicks: total, active });
 });
 
 /* ───────────────────────────────── control (key auth) */
@@ -138,11 +150,22 @@ const auth = (req, res, next) => {
 };
 
 app.post('/api/:channel/reset', auth, (req, res) => {
-    clicksOf(req.params.channel).clear();
-    res.json({ status: 'OK' });
+    const channel = req.params.channel;
+    clicksOf(channel).clear();
+    res.json({ status: 'OK', active: isActive(channel) });
 });
-app.post('/api/:channel/start', auth, (req, res) => res.json({ status: 'OK' }));
-app.post('/api/:channel/stop', auth, (req, res) => res.json({ status: 'OK' }));
+
+app.post('/api/:channel/start', auth, (req, res) => {
+    const channel = req.params.channel;
+    activeChannels.set(channel, true);
+    res.json({ status: 'OK', active: true });
+});
+
+app.post('/api/:channel/stop', auth, (req, res) => {
+    const channel = req.params.channel;
+    activeChannels.set(channel, false);
+    res.json({ status: 'OK', active: false });
+});
 
 /* ───────────────────────────────── error handler */
 app.use((err, req, res, next) => {

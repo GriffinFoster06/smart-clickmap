@@ -81,10 +81,10 @@ function sanitizeChannel(raw) {
     return raw
         .toLowerCase()
         .trim()
-        .replace(/^\/?api\//, '')
-        .replace(/\/.*$/, '')     // remove anything after first slash
-        .replace(/\/$/, '');      // remove trailing slash
+        .replace(/^\/?api\//, '') // Remove the `/api/` prefix if present
+        .replace(/\/$/, '');      // Remove trailing slash only
 }
+
 
 // Whitelist middleware for API
 app.use('/api/:channel', (req, res, next) => {

@@ -11,14 +11,18 @@ async function callAPI(ep) {
 }
 
 start.onclick = async () => {
-    status.textContent = 'Status: ' + await callAPI('start');
+    const statusEl = document.getElementById('status');
+    statusEl.textContent = 'Status: ' + await callAPI('start');
 };
 stop.onclick = async () => {
-    status.textContent = 'Status: ' + await callAPI('stop');
+    const statusEl = document.getElementById('status');
+    statusEl.textContent = 'Status: ' + await callAPI('stop');
 };
 reset.onclick = async () => {
-    status.textContent = 'Status: ' + await callAPI('reset');
+    const statusEl = document.getElementById('status');
+    statusEl.textContent = 'Status: ' + await callAPI('reset');
 };
+
 
 // load config into UI
 async function loadCfg() {

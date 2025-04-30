@@ -1,3 +1,3 @@
-/overlay/*      /overlay.html   200
-/control/*      /control.html   200
-/*              /viewer.html    200
+/overlay/*   /overlay.html   200
+/control/*   /control.html   200
+/*           /viewer.html    200

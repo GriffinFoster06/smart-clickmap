@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>ClickMap Control</title>
+    <title>Click Map Control</title>
     <link rel="stylesheet" href="./style.css">
 </head>
 <body>
@@ -10,12 +10,13 @@
     <button id="start">Start</button>
     <button id="stop">Stop</button>
     <button id="reset">Reset</button>
-    <script>const api = 'https://api.phummylw.com';
-    const chan = location.pathname.split('/').pop().toLowerCase();
-    document.getElementById('title').textContent = `Control: ${chan}`;
-    ['start','stop','reset'].forEach(act => {
-      document.getElementById(act).onclick = ()=>
-        fetch(`${api}/${act}/${chan}`, { method:'POST' });
-    });</script>
+    <script>
+        const api = 'https://api.phummylw.com';
+        const chan = location.pathname.split('/').pop().toLowerCase();
+        document.getElementById('title').textContent = `Control • ${chan}`;
+        ['start', 'stop', 'reset'].forEach(a => {
+            document.getElementById(a).onclick = () => fetch(`${api}/${a}/${chan}`, { method: 'POST' });
+        });
+    </script>
 </body>
 </html>

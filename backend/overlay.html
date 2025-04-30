@@ -1,12 +1,20 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Overlay</title>
     <style>
         body, html {
             margin: 0;
-            background: transparent
+            background: transparent;
+            overflow: hidden; /* Prevent scrollbars if canvas overflows */
+        }
+
+        canvas {
+            display: block; /* Prevent extra space below canvas */
+            width: 100vw; /* Make canvas responsive */
+            height: 100vh;
         }
     </style>
 </head>

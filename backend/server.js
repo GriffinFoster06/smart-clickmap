@@ -12,44 +12,42 @@ app.use(express.json());
 app.use((_, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
 /* ───────────────────────────────────── in-memory store */
-const store = new Map();  // channel → Map(uid → {x, y})
+const store = new Map(); // channel → Map(uid → {x, y})
 const clicksOf = ch => { if (!store.has(ch)) store.set(ch, new Map()); return store.get(ch); };
 
 /* ────────────────────────────────────────── whitelist */
-const WL = (process.env.WHITELIST || 'phummylw')
-    .split(',')
-    .map(s => s.trim().toLowerCase());
+if (!process.env.WHITELIST) {
+    console.error('Error: WHITELIST environment variable is not defined.');
+    process.exit(1);
+}
+
+const WL = process.env.WHITELIST.split(',').map(s => s.trim().toLowerCase());
 console.log('WHITELIST:', WL);
 
 const checkWhitelist = (req, res, next) => {
-    // Clean up the channel name by removing api/ prefix, trailing slashes, and trimming
     const channel = req.params.channel?.toLowerCase()
         .trim()
         .replace(/^api\//, '')    // Remove api/ prefix
         .replace(/\/$/, '')       // Remove trailing slash
         .replace(/\/.*$/, '');    // Remove anything after a slash
 
-    console.log('Checking channel:', channel, 'against whitelist:', WL);
     if (!channel || !WL.includes(channel)) {
-        console.log('❌ Channel not in whitelist:', channel);
         return res.status(404).json({
             error: 'channel disabled',
             blobs: [],
             totalClicks: 0
         });
     }
-    console.log('✅ Channel authorized:', channel);
     next();
 };
-
-
 
 /* ─────────────────────────────────── static frontend */
 const pub = path.resolve(__dirname, './');
 app.use(express.static(pub, {
     setHeaders: (res, filepath) => {
         if (filepath.endsWith('.js')) res.set('Content-Type', 'application/javascript');
-        if (filepath.endsWith('.css')) res.set('Content-Type', 'text/css');
+        else if (filepath.endsWith('.css')) res.set('Content-Type', 'text/css');
+        else res.set('Content-Type', 'application/octet-stream');
     }
 }));
 
@@ -91,10 +89,12 @@ function cluster(pts, r) {
     const blobs = [];
     for (const p of pts) {
         let b = blobs.find(o => dist(o, p) < r);
-        if (!b) { b = { x: p.x, y: p.y, count: 0 }; blobs.push(b); }
-        b.x = (b.x * b.count + p.x) / (b.count + 1);
-        b.y = (b.y * b.count + p.y) / (b.count + 1);
-        b.count++;
+        if (!b) blobs.push({ x: p.x, y: p.y, count: 1 });
+        else {
+            b.x = (b.x * b.count + p.x) / (b.count + 1);
+            b.y = (b.y * b.count + p.y) / (b.count + 1);
+            b.count++;
+        }
     }
     return blobs;
 }
@@ -121,7 +121,7 @@ app.get('/api/:channel/heatmap', (req, res) => {
             avg += dist(points[i], points[j]);
     avg /= (total * (total - 1) / 2) || 1;
 
-    let blobs = cluster(points, radiusFor(total, avg))
+    const blobs = cluster(points, radiusFor(total, avg))
         .map(b => ({ ...b, pct: Math.round(b.count / total * 100) }))
         .filter((b, i) => b.pct >= 5 || i === 0)
         .sort((a, b) => b.pct - a.pct).reverse();
@@ -157,4 +157,4 @@ app.use((err, req, res, next) => {
 
 /* ───────────────────────────────────────────────────── */
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log('ClickMap backend on', PORT));
+app.listen(PORT, () => console.log(`ClickMap backend running on port ${PORT}`));

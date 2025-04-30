@@ -1,7 +1,8 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ClickMap Control</title>
     <style>
         body {
@@ -10,7 +11,7 @@
             color: #eee;
             text-align: center;
             margin: 0;
-            padding: 20px
+            padding: 20px;
         }
 
         button {
@@ -20,20 +21,36 @@
             font-size: 18px;
             padding: 10px 20px;
             margin: 6px;
-            cursor: pointer
+            cursor: pointer;
+            border-radius: 4px; /* Added rounded corners for better aesthetics */
         }
+
+            button:focus {
+                outline: 2px solid #fff; /* Added focus outline for accessibility */
+            }
 
         #stats {
             margin: 10px;
-            font-size: 16px
+            font-size: 16px;
+        }
+
+        @media (max-width: 600px) {
+            button {
+                font-size: 16px;
+                padding: 8px 16px;
+            }
+
+            #stats {
+                font-size: 14px;
+            }
         }
     </style>
 </head>
 <body>
-    <div id="stats">0 clicks | 0 blobs</div>
-    <button id="start">Start</button>
-    <button id="stop">Stop</button>
-    <button id="reset">Reset</button>
+    <p id="stats" aria-live="polite">0 clicks | 0 blobs</p>
+    <button id="start" aria-label="Start the heatmap">Start</button>
+    <button id="stop" aria-label="Stop the heatmap">Stop</button>
+    <button id="reset" aria-label="Reset the heatmap">Reset</button>
     <script type="module" src="/control.js"></script>
 </body>
 </html>

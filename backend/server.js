@@ -81,12 +81,14 @@ function sanitizeChannel(raw) {
     const sanitized = raw
         .toLowerCase()
         .trim()
-        .replace(/^\/?api\//, '') // Remove the `/api/` prefix if present
-        .replace(/\/$/, '');      // Remove trailing slash only
+        .replace(/^\/?api\//, '') // Remove `/api/` prefix
+        .replace(/[^a-z0-9_-]/g, '') // Allow only alphanumeric, dashes, and underscores
+        .replace(/\/$/, ''); // Remove trailing slash
 
     console.log(`[sanitizeChannel] Raw: "${raw}", Sanitized: "${sanitized}"`);
     return sanitized;
 }
+
 
 
 // Whitelist middleware for API
@@ -102,8 +104,9 @@ app.use('/api/:channel', (req, res, next) => {
     next();
 });
 
+
 // Whitelist middleware for page routes
-app.use('/:channel([^./]+)', (req, res, next) => {
+app.use('/:channel((?!api)[^./]+)', (req, res, next) => {
     const raw = req.params.channel;
     const ch = sanitizeChannel(raw);
     console.log(`[Page Middleware] Raw Channel: "${raw}", Sanitized Channel: "${ch}", Whitelist: ${JSON.stringify(WL)}`);
@@ -114,6 +117,8 @@ app.use('/:channel([^./]+)', (req, res, next) => {
     req.params.channel = ch;
     next();
 });
+
+
 
 
 // ─── Static & HTML Routes ─────────────────────────────────────────────────

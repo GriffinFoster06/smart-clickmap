@@ -16,7 +16,7 @@
         import { drawBlobs } from './heatmap.js';
         const chan = location.pathname.split('/').pop().toLowerCase();
         const ctx = document.getElementById('heat').getContext('2d');
-        const api = 'https://api.phummylw.com';
+        const api = '';
         async function poll() {
             const r = await fetch(`${api}/heatmap/${chan}`); const j = await r.json();
             drawBlobs(ctx, j.blobs || []);

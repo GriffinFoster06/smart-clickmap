@@ -16,11 +16,14 @@ const store = new Map();  // channel → Map(uid → {x, y})
 const clicksOf = ch => { if (!store.has(ch)) store.set(ch, new Map()); return store.get(ch); };
 
 /* ────────────────────────────────────────── whitelist */
-const WL = (process.env.WHITELIST || 'phummylw').split(',').map(s => s.trim().toLowerCase());
+const WL = (process.env.WHITELIST || 'phummylw')
+    .split(',')
+    .map(s => s.trim().toLowerCase());
 console.log('WHITELIST:', WL);
 
 const checkWhitelist = (req, res, next) => {
-    const channel = req.params.channel?.toLowerCase();
+    const channel = req.params.channel?.toLowerCase().trim();
+    console.log('Checking channel:', channel, 'against whitelist:', WL);
     if (!channel || !WL.includes(channel)) {
         console.log('❌ Channel not in whitelist:', channel);
         return res.status(404).json({
@@ -29,8 +32,10 @@ const checkWhitelist = (req, res, next) => {
             totalClicks: 0
         });
     }
+    console.log('✅ Channel authorized:', channel);
     next();
 };
+
 
 /* ─────────────────────────────────── static frontend */
 const pub = path.resolve(__dirname, './');

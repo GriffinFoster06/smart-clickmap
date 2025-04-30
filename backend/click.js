@@ -1,105 +1,80 @@
 import { drawBlobs } from './heatmap.js';
 
 const chan = location.pathname.split('/')[1];
-const backend = location.origin;
 const player = document.getElementById('player');
-const canvas = document.getElementById('heat');
-const ctx = canvas.getContext('2d');
-let running = true;
+const heat = document.getElementById('heat');
+const burst = document.getElementById('burst');
+const overlay = document.getElementById('overlay');
+const ctx = heat.getContext('2d');
+const bctx = burst.getContext('2d');
 
-// Create overlay element for click handling
-const overlay = document.createElement('div');
-overlay.id = 'click-overlay';
-overlay.style.position = 'absolute';
-overlay.style.top = '0';
-overlay.style.left = '0';
-overlay.style.width = '100%';
-overlay.style.height = '100%';
-overlay.style.zIndex = '10';
-overlay.style.cursor = running ? 'pointer' : 'default';
+let latestBlobs = [];
 
-// Ensure player element exists before setting its source and appending overlay
-if (player) {
-    player.src = `https://player.twitch.tv/?channel=${chan}&parent=${location.hostname}`;
-    player.parentNode.style.position = 'relative';
-    player.parentNode.appendChild(overlay);
-} else {
-    console.error('Player element not found.');
-}
-
-// Set canvas dimensions and account for high-DPI displays
-function setCanvasDimensions() {
-    const dpr = window.devicePixelRatio || 1;
-
-    // If player exists, match canvas dimensions to player
-    if (player) {
-        const rect = player.getBoundingClientRect();
-        canvas.style.width = `${rect.width}px`;
-        canvas.style.height = `${rect.height}px`;
-    }
-
-    canvas.width = canvas.clientWidth * dpr;
-    canvas.height = canvas.clientHeight * dpr;
-    ctx.scale(dpr, dpr);
-
-    // Update overlay dimensions to match player
-    if (player && overlay) {
-        const rect = player.getBoundingClientRect();
-        overlay.style.width = `${rect.width}px`;
-        overlay.style.height = `${rect.height}px`;
-    }
-}
-setCanvasDimensions();
-window.addEventListener('resize', setCanvasDimensions);
-
-// Polling function to fetch heatmap data
-function poll() {
-    fetch(`/api/${chan}/heatmap`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data && typeof data.running === 'boolean' && Array.isArray(data.blobs)) {
-                running = data.running;
-                overlay.style.cursor = running ? 'pointer' : 'default';
-                drawBlobs(ctx, data.blobs);
-            } else {
-                console.warn('Invalid data format received from API:', data);
-            }
-        })
-        .catch(error => {
-            console.error('Error fetching heatmap data:', error.message);
-        });
-}
-const intervalId = setInterval(poll, 1000);
-
-// Cleanup interval on page unload
-window.addEventListener('beforeunload', () => {
-    clearInterval(intervalId);
+// size elements
+[heat, burst, overlay].forEach(el => {
+    el.style.width = '100%';
+    el.style.height = '100%';
 });
 
-// Click event listener on overlay instead of document
-overlay.addEventListener('click', event => {
-    if (!running) return;
+// load player
+player.src = `https://player.twitch.tv/?channel=${chan}&parent=${location.hostname}`;
 
-    if (!player) {
-        console.error('Player element not found.');
-        return;
-    }
+// join to get token
+async function join() {
+    const res = await fetch(`/api/${chan}/join`);
+    const { token } = await res.json();
+    localStorage.setItem('clickmap_token', token);
+    return token;
+}
+const token = localStorage.getItem('clickmap_token') || await join();
 
-    const rect = player.getBoundingClientRect();
-    // Normalize coordinates relative to the player dimensions
-    const x = (event.clientX - rect.left) / rect.width;
-    const y = (event.clientY - rect.top) / rect.height;
+// burst animation
+overlay.addEventListener('click', async e => {
+    const rect = overlay.getBoundingClientRect();
+    const xNorm = (e.clientX - rect.left) / rect.width;
+    const yNorm = (e.clientY - rect.top) / rect.height;
 
-    fetch(`/api/${chan}/click`, {
+    // burst
+    let alpha = 1;
+    (function fade(cx, cy) {
+        bctx.clearRect(0, 0, burst.width, burst.height);
+        if (alpha <= 0) return;
+        bctx.globalAlpha = alpha;
+        bctx.beginPath();
+        bctx.arc(cx, cy, 20 + (1 - alpha) * 30, 0, 2 * Math.PI);
+        bctx.strokeStyle = 'yellow';
+        bctx.lineWidth = 3;
+        bctx.stroke();
+        alpha -= 0.05;
+        requestAnimationFrame(() => fade(cx, cy));
+    })(e.clientX - rect.left, e.clientY - rect.top);
+
+    // send click
+    await fetch(`/api/${chan}/click`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ x, y }),
-    }).catch(error => {
-        console.error('Error sending click data:', error.message);
+        headers: {
+            'Authorization': 'Bearer ' + token,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ x: xNorm, y: yNorm })
     });
 });
+
+// fetch heatmap
+async function fetchLoop() {
+    const res = await fetch(`/api/${chan}/heatmap`);
+    const data = await res.json();
+    latestBlobs = data.blobs || [];
+    setTimeout(fetchLoop, 1000);
+}
+
+// render
+async function renderLoop() {
+    ctx.clearRect(0, 0, heat.width, heat.height);
+    const cfg = await fetch(`/api/${chan}/config`).then(r => r.json());
+    drawBlobs(ctx, latestBlobs, cfg);
+    requestAnimationFrame(renderLoop);
+}
+
+fetchLoop();
+renderLoop();

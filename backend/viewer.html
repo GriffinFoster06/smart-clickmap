@@ -2,41 +2,55 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>ClickMap Viewer</title>
+    <title>Smart Click Map Viewer</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; frame-src https://player.twitch.tv;">
     <style>
-        body, html {
+        html, body {
             margin: 0;
             height: 100%;
             overflow: hidden;
-            background: #000;
+            background: #000
         }
 
-        #click-overlay {
+        #container {
+            position: relative;
+            width: 100%;
+            height: 100%
+        }
+
+        iframe {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            z-index: 10;
-            cursor: pointer;
-            /* Transparent but clickable */
-            background-color: transparent;
+            border: 0;
+            z-index: 0
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 2;
+            cursor: pointer
         }
     </style>
 </head>
 <body>
-    <iframe id="player"
-            style="width:100%; height:100%;"
-            frameborder="0"
-            allowfullscreen
-            sandbox="allow-scripts allow-same-origin"
-            scrolling="no"
-            title="Interactive ClickMap Viewer">
-    </iframe>
-    <canvas id="heat"
-            style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;">
-    </canvas>
-    <div id="click-overlay"></div>
-    <script type="module" src="/click.js" onerror="console.error('Failed to load /click.js');"></script>
+    <div id="container">
+        <iframe id="player" sandbox="allow-scripts allow-same-origin" scrolling="no"></iframe>
+        <canvas id="heat" width="1920" height="1080"></canvas>
+        <canvas id="burst" width="1920" height="1080" style="pointer-events:none;position:absolute;top:0;left:0;z-index:3"></canvas>
+        <div id="overlay"></div>
+    </div>
+    <script type="module" src="/click.js"></script>
 </body>
 </html>

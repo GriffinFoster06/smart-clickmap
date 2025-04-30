@@ -1,65 +1,35 @@
-export async function getHeatmapData(url) {
-    try {
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status} for URL: ${url}`);
-        }
-        const data = await response.json();
-        return data;
-    } catch (error) {
-        console.error('Error fetching heatmap data:', error.message);
-        return null; // Return null to indicate failure
-    }
-}
+export function drawBlobs(ctx, blobs, cfg) {
+    ctx.save();
+    blobs.forEach(b => {
+        const cx = b.x * ctx.canvas.width;
+        const cy = b.y * ctx.canvas.height;
+        const r = cfg.radiusBase + Math.sqrt(b.pct) * cfg.radiusScale;
+        if (b.pct < cfg.displayThreshold && !b.isTop) return;
 
-export function drawBlobs(ctx, blobs) {
-    if (!Array.isArray(blobs)) {
-        console.error('Invalid blobs data: Expected an array');
-        return;
-    }
+        // radial gradient fill
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        g.addColorStop(0, b.isTop ? cfg.topColor : cfg.blobColor);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.fill();
 
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        // outline circle
+        ctx.lineWidth = cfg.strokeWidth;
+        ctx.strokeStyle = cfg.strokeColor;
+        ctx.stroke();
 
-    blobs.forEach(blob => {
-        if (!isValidBlob(blob)) {
-            console.warn('Skipping invalid blob:', blob);
-            return;
-        }
+        // percentage text with outline
+        const fs = Math.max(cfg.minFontSize, r * cfg.fontScale);
+        ctx.font = `${fs}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
 
-        const { x, y, pct, isTop } = blob;
-        const cx = x * ctx.canvas.width;
-        const cy = y * ctx.canvas.height;
-        const r = 10 + Math.sqrt(pct) * 4;
+        ctx.lineWidth = cfg.textStrokeWidth;
+        ctx.strokeStyle = cfg.textStrokeColor;
+        ctx.strokeText(`${b.pct}%`, cx, cy);
 
-        drawBlob(ctx, cx, cy, r, isTop);
-        drawBlobText(ctx, cx, cy, r, pct);
+        ctx.fillStyle = cfg.textColor;
+        ctx.fillText(`${b.pct}%`, cx, cy);
     });
-}
-
-function isValidBlob(blob) {
-    return (
-        typeof blob.x === 'number' &&
-        typeof blob.y === 'number' &&
-        typeof blob.pct === 'number' &&
-        typeof blob.isTop === 'boolean'
-    );
-}
-
-function drawBlob(ctx, cx, cy, r, isTop) {
-    ctx.fillStyle = isTop ? 'rgba(0,255,0,.25)' : 'rgba(128,64,255,.25)';
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = isTop ? '#0f0' : '#fff';
-    ctx.stroke();
-}
-
-function drawBlobText(ctx, cx, cy, r, pct) {
-    ctx.font = `${Math.max(14, r * 0.6)}px sans-serif`;
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`${pct}%`, cx, cy);
+    ctx.restore();
 }

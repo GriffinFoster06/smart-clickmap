@@ -1,56 +1,47 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ClickMap Control</title>
+    <title>Smart Click Map Control</title>
     <style>
         body {
             font-family: sans-serif;
             background: #222;
             color: #eee;
-            text-align: center;
-            margin: 0;
             padding: 20px;
+            text-align: center
         }
 
-        button {
-            background: #6441a5;
-            color: #fff;
-            border: none;
-            font-size: 18px;
-            padding: 10px 20px;
+        button, input {
             margin: 6px;
-            cursor: pointer;
-            border-radius: 4px; /* Added rounded corners for better aesthetics */
+            padding: 8px;
+            font-size: 16px
         }
 
-            button:focus {
-                outline: 2px solid #fff; /* Added focus outline for accessibility */
-            }
-
-        #stats {
-            margin: 10px;
-            font-size: 16px;
-        }
-
-        @media (max-width: 600px) {
-            button {
-                font-size: 16px;
-                padding: 8px 16px;
-            }
-
-            #stats {
-                font-size: 14px;
-            }
+        .cfg {
+            margin-top: 20px;
+            text-align: left;
+            display: inline-block
         }
     </style>
 </head>
 <body>
-    <p id="stats" aria-live="polite">0 clicks | 0 blobs</p>
-    <button id="start" aria-label="Start the heatmap">Start</button>
-    <button id="stop" aria-label="Stop the heatmap">Stop</button>
-    <button id="reset" aria-label="Reset the heatmap">Reset</button>
+    <h2>Control Panel</h2>
+    <div>
+        <button id="start">Start</button>
+        <button id="stop">Stop</button>
+        <button id="reset">Reset</button>
+    </div>
+    <p id="status">Status: unknown</p>
+
+    <div class="cfg">
+        <h3>Appearance</h3>
+        <label>Blob Color: <input type="color" id="blobColor"></label><br>
+        <label>Top Color:  <input type="color" id="topColor"></label><br>
+        <label>Threshold:  <input type="number" id="displayThreshold" min="0" max="100"></label><br>
+        <button id="saveCfg">Save Settings</button>
+    </div>
+
     <script type="module" src="/control.js"></script>
 </body>
 </html>

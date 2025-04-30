@@ -1,183 +1,230 @@
 ﻿import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
+import { createClient as createRedisClient } from 'redis';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/* ───────────────────────────────────────────── basics */
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-app.use(cors({ origin: '*' }));
+
+// ─── Security ─────────────────────────────────────────────────────────────
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json());
-app.use((_, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
-/* ───────────────────────────────────── in-memory store */
-const store = new Map(); // channel → Map(uid → {x, y})
-const activeChannels = new Map(); // channel → boolean indicating if tracking is active
-const clicksOf = ch => { if (!store.has(ch)) store.set(ch, new Map()); return store.get(ch); };
-const isActive = ch => activeChannels.get(ch) === true;
+// rate-limit clicks: max 1 per second per token
+const clickLimiter = rateLimit({
+    windowMs: 1000,
+    max: 1,
+    keyGenerator: req => req.headers.authorization || req.ip,
+    message: { error: 'Too many clicks; slow down.' }
+});
 
-/* ────────────────────────────────────────── whitelist */
+// ─── Redis or Memory ──────────────────────────────────────────────────────
+let redis, useRedis = false;
+if (process.env.REDIS_URL) {
+    redis = createRedisClient({ url: process.env.REDIS_URL });
+    await redis.connect();
+    useRedis = true;
+} else {
+    global.memoryClicks = new Map(); // fallback store
+}
+
+// click TTL (seconds)
+const CLICK_TTL = parseInt(process.env.CLICK_TTL_SECONDS) || 900;
+
+// ─── Config Defaults ──────────────────────────────────────────────────────
+function defaultConfig() {
+    return {
+        blobColor: 'rgba(128,64,255,0.25)',
+        topColor: 'rgba(0,255,0,0.25)',
+        strokeColor: '#fff',
+        strokeWidth: 2,
+        textColor: '#fff',
+        textStrokeColor: '#000',
+        textStrokeWidth: 3,
+        radiusBase: 10,
+        radiusScale: 4,
+        minFontSize: 14,
+        fontScale: 0.6,
+        displayThreshold: 5
+    };
+}
+const configStore = new Map();
+
+// ─── Whitelist ────────────────────────────────────────────────────────────
 if (!process.env.WHITELIST) {
-    console.error('Error: WHITELIST environment variable is not defined.');
-    process.exit(1);
+    console.error('WHITELIST not defined'); process.exit(1);
 }
-
 const WL = process.env.WHITELIST.split(',').map(s => s.trim().toLowerCase());
-console.log('WHITELIST:', WL);
 
-const checkWhitelist = (req, res, next) => {
-    const channel = req.params.channel?.toLowerCase()
-        .trim()
-        .replace(/^api\//, '')    // Remove api/ prefix
-        .replace(/\/$/, '')       // Remove trailing slash
-        .replace(/\/.*$/, '');    // Remove anything after a slash
-
-    if (!channel || !WL.includes(channel)) {
-        return res.status(404).json({
-            error: 'channel disabled',
-            blobs: [],
-            totalClicks: 0
-        });
-    }
+// whitelist API routes
+app.use('/api/:channel', (req, res, next) => {
+    const ch = req.params.channel.toLowerCase();
+    if (!WL.includes(ch)) return res.status(404).json({ error: 'channel disabled' });
     next();
-};
+});
+// whitelist page routes
+app.use('/:channel([^./]+)', (req, res, next) => {
+    const ch = req.params.channel.toLowerCase();
+    if (!WL.includes(ch)) return res.status(404).send('channel disabled');
+    next();
+});
 
-/* ─────────────────────────────────── static frontend */
-const pub = path.resolve(__dirname, './');
-app.use(express.static(pub, {
-    setHeaders: (res, filepath) => {
-        if (filepath.endsWith('.js')) res.set('Content-Type', 'application/javascript');
-        else if (filepath.endsWith('.css')) res.set('Content-Type', 'text/css');
-        else res.set('Content-Type', 'application/octet-stream');
-    }
-}));
+// ─── Static & HTML ─────────────────────────────────────────────────────────
+app.use(express.static(path.join(__dirname, '../frontend')));
+app.get('/:channel', (r, s) => s.sendFile(path.join(__dirname, '../frontend/viewer.html')));
+app.get('/:channel/overlay', (r, s) => s.sendFile(path.join(__dirname, '../frontend/overlay.html')));
+app.get('/:channel/control', (r, s) => s.sendFile(path.join(__dirname, '../frontend/control.html')));
 
-/* ───────────────────────────────── apply whitelist middleware */
-app.use('/api/:channel', checkWhitelist);
-app.use('/:channel([^.]*)', checkWhitelist);
+// ─── Join: Issue Viewer Token ──────────────────────────────────────────────
+app.get('/api/:channel/join', (req, res) => {
+    const ch = req.params.channel.toLowerCase();
+    const token = jwt.sign({ channel: ch }, process.env.JWT_SECRET, { expiresIn: '2h' });
+    res.json({ token });
+});
 
-/* ─────────────────────────────────── HTML routes */
-app.get('/:channel', (req, res) =>
-    res.sendFile(path.join(pub, 'viewer.html'), err => {
-        if (err) res.status(404).json({ error: 'File not found' });
-    })
-);
+// ─── Config API ────────────────────────────────────────────────────────────
+app.get('/api/:channel/config', (req, res) => {
+    const ch = req.params.channel.toLowerCase();
+    if (!configStore.has(ch)) configStore.set(ch, defaultConfig());
+    res.json(configStore.get(ch));
+});
+app.post('/api/:channel/config', (req, res) => {
+    const ch = req.params.channel.toLowerCase();
+    if (req.query.key !== process.env[`${ch.toUpperCase()}_KEY`])
+        return res.status(403).json({ error: 'unauthorized' });
+    configStore.set(ch, { ...defaultConfig(), ...req.body });
+    res.json(configStore.get(ch));
+});
 
-app.get('/:channel/overlay', (req, res) =>
-    res.sendFile(path.join(pub, 'overlay.html'), err => {
-        if (err) res.status(404).json({ error: 'File not found' });
-    })
-);
+// ─── Smart Clustering Helpers ──────────────────────────────────────────────
+const GAUSS = [
+    [0.0625, 0.1250, 0.0625],
+    [0.1250, 0.2500, 0.1250],
+    [0.0625, 0.1250, 0.0625]
+];
+const GRID = 100;
+const gridIndex = (x, y) => y * GRID + x;
 
-app.get('/:channel/control', (req, res) =>
-    res.sendFile(path.join(pub, 'control.html'), err => {
-        if (err) res.status(404).json({ error: 'File not found' });
-    })
-);
-
-/* ────────────────────────────────── helper functions */
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-
-function radiusFor(total, avg) {
-    if (total < 50) return 0.05;
-    if (avg < 0.05) return 0.01;
-    if (avg < 0.10) return 0.02;
-    if (avg < 0.20) return 0.03;
-    return 0.05;
+function buildHeatGrid(points) {
+    const grid = new Float32Array(GRID * GRID);
+    points.forEach(p => {
+        const gx = Math.floor(p.x * GRID), gy = Math.floor(p.y * GRID);
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const ix = gx + dx, iy = gy + dy;
+                if (ix < 0 || iy < 0 || ix >= GRID || iy >= GRID) continue;
+                grid[gridIndex(ix, iy)] += GAUSS[dy + 1][dx + 1];
+            }
+        }
+    });
+    return grid;
 }
 
-function cluster(pts, r) {
-    const blobs = [];
-    for (const p of pts) {
-        let b = blobs.find(o => dist(o, p) < r);
-        if (!b) blobs.push({ x: p.x, y: p.y, count: 1 });
-        else {
-            b.x = (b.x * b.count + p.x) / (b.count + 1);
-            b.y = (b.y * b.count + p.y) / (b.count + 1);
-            b.count++;
+function extractBlobs(grid, cfg) {
+    const raw = [];
+    for (let y = 0; y < GRID; y++) {
+        for (let x = 0; x < GRID; x++) {
+            const v = grid[gridIndex(x, y)];
+            if (v > 0) raw.push({ x: (x + 0.5) / GRID, y: (y + 0.5) / GRID, v });
         }
     }
-    return blobs;
+    raw.sort((a, b) => b.v - a.v);
+    const topV = raw[0]?.v || 1;
+    return raw
+        .filter((b, i) => (b.v / topV * 100) >= cfg.displayThreshold || i === 0)
+        .map((b, i) => ({
+            x: b.x,
+            y: b.y,
+            pct: Math.round((b.v / topV) * 100),
+            isTop: i === 0
+        }));
 }
 
-/* ───────────────────────────────── viewer API */
-app.post('/api/:channel/click', (req, res) => {
-    const channel = req.params.channel;
-
-    // Only accept clicks if channel is active
-    if (!isActive(channel)) {
-        return res.status(403).json({ error: 'Heatmap not active' });
+// ─── Click Storage ─────────────────────────────────────────────────────────
+async function storeClick(ch, token, x, y) {
+    const key = `click:${ch}:${token}`;
+    const data = JSON.stringify({ x, y, t: Date.now() });
+    if (useRedis) {
+        await redis.set(key, data, { EX: CLICK_TTL });
+    } else {
+        global.memoryClicks.set(key, data);
+        setTimeout(() => global.memoryClicks.delete(key), CLICK_TTL * 1000);
     }
+}
 
+async function fetchPoints(ch) {
+    let entries = [];
+    if (useRedis) {
+        const keys = await redis.keys(`click:${ch}:*`);
+        entries = await Promise.all(keys.map(k => redis.get(k)));
+    } else {
+        entries = [...global.memoryClicks.entries()]
+            .filter(([k]) => k.startsWith(`click:${ch}:`))
+            .map(([, v]) => v);
+    }
+    const cutoff = Date.now() - CLICK_TTL * 1000;
+    return entries
+        .map(raw => JSON.parse(raw))
+        .filter(o => o.t >= cutoff)
+        .map(o => ({ x: o.x, y: o.y }));
+}
+
+// ─── Viewer Click API ─────────────────────────────────────────────────────
+app.post('/api/:channel/click', clickLimiter, async (req, res) => {
+    const ch = req.params.channel.toLowerCase();
+    const auth = req.headers.authorization || '';
+    const token = auth.replace('Bearer ', '');
+    try {
+        const payload = jwt.verify(token, process.env.JWT_SECRET);
+        if (payload.channel !== ch) throw new Error();
+    } catch {
+        return res.status(401).json({ error: 'invalid token' });
+    }
     const { x, y } = req.body;
-    if (typeof x !== 'number' || typeof y !== 'number') {
-        return res.status(400).json({ error: 'Invalid coordinates' });
-    }
-    const uid = req.headers['x-uid'] || req.ip;
-    clicksOf(channel).set(uid, { x, y });
+    if (typeof x !== 'number' || typeof y !== 'number')
+        return res.status(400).json({ error: 'coords' });
+    await storeClick(ch, token, x, y);
     res.json({ status: 'OK' });
 });
 
-app.get('/api/:channel/heatmap', (req, res) => {
-    const channel = req.params.channel;
-    const points = Array.from(clicksOf(channel).values());
-    const total = points.length;
-    const active = isActive(channel);
-
-    if (!total) return res.json({ blobs: [], totalClicks: 0, active });
-
-    let avg = 0;
-    for (let i = 0; i < total; i++)
-        for (let j = i + 1; j < total; j++)
-            avg += dist(points[i], points[j]);
-    avg /= (total * (total - 1) / 2) || 1;
-
-    const blobs = cluster(points, radiusFor(total, avg))
-        .map(b => ({ ...b, pct: Math.round(b.count / total * 100) }))
-        .filter((b, i) => b.pct >= 5 || i === 0)
-        .sort((a, b) => b.pct - a.pct).reverse();
-
-    if (blobs.length) blobs[0].isTop = true;
-    res.json({ blobs, totalClicks: total, active });
+// ─── Heatmap API ──────────────────────────────────────────────────────────
+app.get('/api/:channel/heatmap', async (req, res) => {
+    const ch = req.params.channel.toLowerCase();
+    const pts = await fetchPoints(ch);
+    const total = pts.length;
+    const cfg = configStore.get(ch) || defaultConfig();
+    if (!total) return res.json({ blobs: [], totalClicks: 0 });
+    const grid = buildHeatGrid(pts);
+    const blobs = extractBlobs(grid, cfg);
+    res.json({ blobs, totalClicks: total });
 });
 
-/* ───────────────────────────────── control (key auth) */
-const auth = (req, res, next) => {
-    const chan = req.params.channel.toUpperCase();
-    if ((req.query.key || '') === process.env[`${chan}_KEY`]) return next();
-    res.status(401).json({ error: 'Unauthorized' });
-};
-
-app.post('/api/:channel/reset', auth, (req, res) => {
-    const channel = req.params.channel;
-    clicksOf(channel).clear();
-    res.json({ status: 'OK', active: isActive(channel) });
+// ─── Control API ──────────────────────────────────────────────────────────
+['start', 'stop', 'reset'].forEach(act => {
+    app.post(`/api/:channel/${act}`, (req, res) => {
+        const ch = req.params.channel.toLowerCase();
+        if (req.query.key !== process.env[`${ch.toUpperCase()}_KEY`])
+            return res.status(403).json({ error: 'unauthorized' });
+        if (act === 'reset') {
+            // delete all clicks
+            if (useRedis) {
+                redis.keys(`click:${ch}:*`).then(keys => keys.forEach(k => redis.del(k)));
+            } else {
+                [...global.memoryClicks.keys()]
+                    .filter(k => k.startsWith(`click:${ch}:`))
+                    .forEach(k => global.memoryClicks.delete(k));
+            }
+        }
+        res.json({ status: 'OK' });
+    });
 });
 
-app.post('/api/:channel/start', auth, (req, res) => {
-    const channel = req.params.channel;
-    activeChannels.set(channel, true);
-    res.json({ status: 'OK', active: true });
-});
-
-app.post('/api/:channel/stop', auth, (req, res) => {
-    const channel = req.params.channel;
-    activeChannels.set(channel, false);
-    res.json({ status: 'OK', active: false });
-});
-
-/* ───────────────────────────────── error handler */
-app.use((err, req, res, next) => {
-    if (err.code === 'ENOENT') {
-        res.status(404).json({ error: 'File not found' });
-    } else if (req.path.startsWith('/api/')) {
-        res.status(500).json({ error: 'Internal server error' });
-    } else {
-        next(err);
-    }
-});
-
-/* ───────────────────────────────────────────────────── */
+// ─── Launch ────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`ClickMap backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`ClickMap backend on ${PORT}`));

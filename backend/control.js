@@ -1,45 +1,44 @@
-const chan = location.pathname.split('/')[1];
-const qs = new URLSearchParams(location.search);
-const key = qs.get('key') || '';
-const stats = document.getElementById('stats');
+﻿const chan = location.pathname.split('/')[1];
+const key = new URLSearchParams(location.search).get('key');
+const start = document.getElementById('start');
+const stop = document.getElementById('stop');
+const reset = document.getElementById('reset');
+const status = document.getElementById('status');
 
-// Helper function to make API calls
-function call(ep) {
-    return fetch(`/api/${chan}/${ep}?key=${key}`, { method: 'POST' })
-        .catch(error => console.error(`Error calling endpoint ${ep}:`, error));
+async function callAPI(ep) {
+    const res = await fetch(`/api/${chan}/${ep}?key=${key}`, { method: 'POST' });
+    return res.ok ? 'OK' : `Error ${res.status}`;
 }
 
-// Ensure buttons exist before attaching event listeners
-const startButton = document.getElementById('start');
-const stopButton = document.getElementById('stop');
-const resetButton = document.getElementById('reset');
+start.onclick = async () => {
+    status.textContent = 'Status: ' + await callAPI('start');
+};
+stop.onclick = async () => {
+    status.textContent = 'Status: ' + await callAPI('stop');
+};
+reset.onclick = async () => {
+    status.textContent = 'Status: ' + await callAPI('reset');
+};
 
-if (startButton) startButton.onclick = () => call('start');
-if (stopButton) stopButton.onclick = () => call('stop');
-if (resetButton) resetButton.onclick = () => call('reset');
+// load config into UI
+async function loadCfg() {
+    const cfg = await fetch(`/api/${chan}/config?key=${key}`).then(r => r.json());
+    document.getElementById('blobColor').value = cfg.blobColor;
+    document.getElementById('topColor').value = cfg.topColor;
+    document.getElementById('displayThreshold').value = cfg.displayThreshold;
+}
+loadCfg();
 
-// Update stats periodically
-const intervalId = setInterval(() => {
-    fetch(`/api/${chan}/heatmap`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (stats && data && typeof data.totalClicks === 'number' && Array.isArray(data.blobs)) {
-                stats.textContent = `${data.totalClicks} clicks | ${data.blobs.length} blobs`;
-            } else {
-                console.warn('Invalid data format received from API:', data);
-            }
-        })
-        .catch(error => {
-            console.error('Error fetching heatmap data:', error.message);
-        });
-}, 1000);
-
-// Cleanup interval on page unload
-window.addEventListener('beforeunload', () => {
-    clearInterval(intervalId);
-});
+document.getElementById('saveCfg').onclick = async () => {
+    const newCfg = {
+        blobColor: document.getElementById('blobColor').value,
+        topColor: document.getElementById('topColor').value,
+        displayThreshold: Number(document.getElementById('displayThreshold').value)
+    };
+    const res = await fetch(`/api/${chan}/config?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newCfg)
+    });
+    alert(res.ok ? 'Settings saved' : 'Save failed: ' + res.status);
+};

@@ -18,23 +18,58 @@ const clicksOf = ch => { if (!store.has(ch)) store.set(ch, new Map()); return st
 /* ────────────────────────────────────────── whitelist */
 const WL = (process.env.WHITELIST || 'phummylw').split(',').map(s => s.trim().toLowerCase());
 
-app.use('/:channel', (req, res, next) => {
-    if (!WL.includes(req.params.channel.toLowerCase())) return res.status(404).send('channel disabled');
-    next();
-});
-
-app.use('/api/:channel', (req, res, next) => {
-    if (!WL.includes(req.params.channel.toLowerCase())) return res.status(404).send('channel disabled');
-    next();
-});
-
 /* ─────────────────────────────────── static frontend */
 const pub = path.resolve(__dirname, './');
-app.use(express.static(pub));
+// Updated static file serving with proper MIME types
+app.use(express.static(pub, {
+    setHeaders: (res, filepath) => {
+        if (filepath.endsWith('.js')) {
+            res.set('Content-Type', 'application/javascript');
+        } else if (filepath.endsWith('.css')) {
+            res.set('Content-Type', 'text/css');
+        }
+    }
+}));
 
-app.get('/:channel', (r, s) => s.sendFile(path.join(pub, 'viewer.html')));
-app.get('/:channel/overlay', (r, s) => s.sendFile(path.join(pub, 'overlay.html')));
-app.get('/:channel/control', (r, s) => s.sendFile(path.join(pub, 'control.html')));
+// Error handler for static files
+app.use((err, req, res, next) => {
+    if (err.code === 'ENOENT') {
+        res.status(404).send('File not found');
+    } else {
+        next(err);
+    }
+});
+
+/* ────────────────────────────────────────── routes */
+// Whitelist middleware
+const checkWhitelist = (req, res, next) => {
+    if (!WL.includes(req.params.channel.toLowerCase())) {
+        return res.status(404).send('channel disabled');
+    }
+    next();
+};
+
+app.use('/:channel', checkWhitelist);
+app.use('/api/:channel', checkWhitelist);
+
+// HTML routes
+app.get('/:channel', (req, res) => {
+    res.sendFile(path.join(pub, 'viewer.html'), err => {
+        if (err) res.status(404).send('File not found');
+    });
+});
+
+app.get('/:channel/overlay', (req, res) => {
+    res.sendFile(path.join(pub, 'overlay.html'), err => {
+        if (err) res.status(404).send('File not found');
+    });
+});
+
+app.get('/:channel/control', (req, res) => {
+    res.sendFile(path.join(pub, 'control.html'), err => {
+        if (err) res.status(404).send('File not found');
+    });
+});
 
 /* ────────────────────────────────── helper functions */
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -71,7 +106,7 @@ app.post('/api/:channel/click', (req, res) => {
 app.get('/api/:channel/heatmap', (req, res) => {
     const points = Array.from(clicksOf(req.params.channel).values());
     const total = points.length;
-    if (!total) return res.json({ blobs: [], total: 0 });
+    if (!total) return res.json({ blobs: [], totalClicks: 0 });
 
     let avg = 0;
     for (let i = 0; i < total; i++)
@@ -82,7 +117,7 @@ app.get('/api/:channel/heatmap', (req, res) => {
     let blobs = cluster(points, radiusFor(total, avg))
         .map(b => ({ ...b, pct: Math.round(b.count / total * 100) }))
         .filter((b, i) => b.pct >= 5 || i === 0)
-        .sort((a, b) => b.pct - a.pct).reverse();
+        .sort((a, b) => b.pct - a.pct);
 
     if (blobs.length) blobs[0].isTop = true;
     res.json({ blobs, totalClicks: total });

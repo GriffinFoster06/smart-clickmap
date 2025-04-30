@@ -162,7 +162,7 @@ app.use('/api/:channel', (req, res, next) => {
 });
 
 // Whitelist middleware for page routes with detailed debugging
-app.use('/:channel((?!api)[^./]+)', (req, res, next) => {
+app.use('/:channel([^/]+)', (req, res, next) => {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('[Page Middleware Debug]');
     console.log('Original URL:', req.originalUrl);
@@ -197,6 +197,8 @@ app.use('/:channel((?!api)[^./]+)', (req, res, next) => {
     req.params.channel = ch;
     next();
 });
+
+
 
 
 

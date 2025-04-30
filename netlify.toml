@@ -3,14 +3,16 @@ publish = "frontend"
 command = ""
 
 [[redirects]]
-from = "/overlay/*"
+from = "/*"
 to = "/overlay.html"
 status = 200
+conditions = { Host = "overlay.phummylw.com" }
 
 [[redirects]]
-from = "/control/*"
+from = "/*"
 to = "/control.html"
 status = 200
+conditions = { Host = "control.phummylw.com" }
 
 [[redirects]]
 from = "/*"

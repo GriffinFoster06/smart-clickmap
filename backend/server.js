@@ -29,7 +29,7 @@ app.use('/api/:channel', (req, res, next) => {
 });
 
 /* ─────────────────────────────────── static frontend */
-const pub = path.resolve(__dirname, '../frontend');
+const pub = path.resolve(__dirname, './');
 app.use(express.static(pub));
 
 app.get('/:channel', (r, s) => s.sendFile(path.join(pub, 'viewer.html')));

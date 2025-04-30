@@ -67,7 +67,7 @@ app.get('/heatmap/:chan', (req, res) => {
 });
 
 // --- STATIC SITE SERVING by host header ---
-const frontendDir = path.resolve(process.cwd(), '../frontend');
+const frontendDir = process.cwd();
 app.use(express.static(frontendDir));
 
 app.get('*', (req, res) => {

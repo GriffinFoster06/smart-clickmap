@@ -1,4 +1,23 @@
+export async function getHeatmapData(url) {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('Error fetching heatmap data:', error);
+        return [];
+    }
+}
+
 export function drawBlobs(ctx, blobs) {
+    if (!Array.isArray(blobs)) {
+        console.error('Invalid blobs data');
+        return;
+    }
+
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
     blobs.forEach(b => {
         const cx = b.x * ctx.canvas.width, cy = b.y * ctx.canvas.height;

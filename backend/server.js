@@ -18,9 +18,23 @@ const clicksOf = ch => { if (!store.has(ch)) store.set(ch, new Map()); return st
 /* ────────────────────────────────────────── whitelist */
 const WL = (process.env.WHITELIST || 'phummylw').split(',').map(s => s.trim().toLowerCase());
 
+/* ────────────────────────────────────────── routes */
+// Whitelist middleware
+const checkWhitelist = (req, res, next) => {
+    const channel = req.params.channel?.toLowerCase();
+    if (!channel || !WL.includes(channel)) {
+        return res.status(404).json({
+            error: 'channel disabled',
+            blobs: [],
+            totalClicks: 0
+        });
+    }
+    next();
+};
+
 /* ─────────────────────────────────── static frontend */
+// Must be before the channel routes to serve static files properly
 const pub = path.resolve(__dirname, './');
-// Updated static file serving with proper MIME types
 app.use(express.static(pub, {
     setHeaders: (res, filepath) => {
         if (filepath.endsWith('.js')) {
@@ -31,43 +45,26 @@ app.use(express.static(pub, {
     }
 }));
 
-// Error handler for static files
-app.use((err, req, res, next) => {
-    if (err.code === 'ENOENT') {
-        res.status(404).send('File not found');
-    } else {
-        next(err);
-    }
-});
-
-/* ────────────────────────────────────────── routes */
-// Whitelist middleware
-const checkWhitelist = (req, res, next) => {
-    if (!WL.includes(req.params.channel.toLowerCase())) {
-        return res.status(404).send('channel disabled');
-    }
-    next();
-};
-
-app.use('/:channel', checkWhitelist);
+// Apply whitelist check to channel routes
+app.use('/:channel([^.]*)', checkWhitelist);
 app.use('/api/:channel', checkWhitelist);
 
 // HTML routes
 app.get('/:channel', (req, res) => {
     res.sendFile(path.join(pub, 'viewer.html'), err => {
-        if (err) res.status(404).send('File not found');
+        if (err) res.status(404).json({ error: 'File not found' });
     });
 });
 
 app.get('/:channel/overlay', (req, res) => {
     res.sendFile(path.join(pub, 'overlay.html'), err => {
-        if (err) res.status(404).send('File not found');
+        if (err) res.status(404).json({ error: 'File not found' });
     });
 });
 
 app.get('/:channel/control', (req, res) => {
     res.sendFile(path.join(pub, 'control.html'), err => {
-        if (err) res.status(404).send('File not found');
+        if (err) res.status(404).json({ error: 'File not found' });
     });
 });
 
@@ -97,10 +94,12 @@ function cluster(pts, r) {
 /* ───────────────────────────────── viewer API */
 app.post('/api/:channel/click', (req, res) => {
     const { x, y } = req.body;
-    if (typeof x !== 'number' || typeof y !== 'number') return res.status(400).end();
+    if (typeof x !== 'number' || typeof y !== 'number') {
+        return res.status(400).json({ error: 'Invalid coordinates' });
+    }
     const uid = req.headers['x-uid'] || req.ip;
     clicksOf(req.params.channel).set(uid, { x, y });
-    res.sendStatus(200);
+    res.json({ status: 'OK' });
 });
 
 app.get('/api/:channel/heatmap', (req, res) => {
@@ -127,15 +126,27 @@ app.get('/api/:channel/heatmap', (req, res) => {
 const auth = (req, res, next) => {
     const chan = req.params.channel.toUpperCase();
     if ((req.query.key || '') === process.env[`${chan}_KEY`]) return next();
-    res.status(401).end();
+    res.status(401).json({ error: 'Unauthorized' });
 };
 
 app.post('/api/:channel/reset', auth, (req, res) => {
     clicksOf(req.params.channel).clear();
-    res.send('OK');
+    res.json({ status: 'OK' });
 });
-app.post('/api/:channel/start', auth, (req, res) => res.send('OK'));
-app.post('/api/:channel/stop', auth, (req, res) => res.send('OK'));
+
+app.post('/api/:channel/start', auth, (req, res) => res.json({ status: 'OK' }));
+app.post('/api/:channel/stop', auth, (req, res) => res.json({ status: 'OK' }));
+
+// Error handler for static files - must be last
+app.use((err, req, res, next) => {
+    if (err.code === 'ENOENT') {
+        res.status(404).json({ error: 'File not found' });
+    } else if (req.path.startsWith('/api/')) {
+        res.status(500).json({ error: 'Internal server error' });
+    } else {
+        next(err);
+    }
+});
 
 /* ───────────────────────────────────────────────────── */
 const PORT = process.env.PORT || 8080;

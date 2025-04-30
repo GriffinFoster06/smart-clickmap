@@ -100,12 +100,14 @@ app.use('/api/:channel', (req, res, next) => {
     const ch = sanitizeChannel(raw);
     console.log(`[API Middleware] Raw Channel: "${raw}", Sanitized Channel: "${ch}", Whitelist: ${JSON.stringify(WL)}`);
     if (!WL.includes(ch)) {
-        console.error(`[API Middleware] Channel "${ch}" not in whitelist.`);
+        console.error(`[API Middleware] Channel "${ch}" not in whitelist. Whitelist: ${JSON.stringify(WL)}`);
+        console.error(`[API Middleware] Comparison Failed: WL.includes("${ch}")`);
         return res.status(404).json({ error: 'channel disabled' });
     }
     req.params.channel = ch;
     next();
 });
+
 
 
 // Whitelist middleware for page routes

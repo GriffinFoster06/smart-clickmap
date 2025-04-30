@@ -96,3 +96,27 @@ document.getElementById('saveCfg').onclick = async () => {
         statusEl.textContent = `Status: Error saving settings`;
     }
 };
+// Ensure the server is correctly serving JavaScript files with the proper MIME type.
+// Add this middleware to your server configuration if using Node.js with Express.
+
+const express = require('express');
+const path = require('path');
+const app = express();
+
+// Serve static files with correct MIME types
+app.use('/js', express.static(path.join(__dirname, 'js'), { setHeaders: (res, path) => {
+    if (path.endsWith('.js')) {
+        res.setHeader('Content-Type', 'application/javascript');
+    }
+}}));
+
+// Example route
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+});

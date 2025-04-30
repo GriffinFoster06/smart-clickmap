@@ -132,3 +132,25 @@ async function renderLoop() {
 
 fetchLoop();
 renderLoop();
+// Ensure the server serves JavaScript files with the correct MIME type
+// Add the following configuration to your server setup to fix the MIME type issue:
+
+// Example for an Express.js server
+const express = require('express');
+const path = require('path');
+const app = express();
+
+// Serve static files with correct MIME types
+app.use('/backend', express.static(path.join(__dirname, 'backend'), {
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.js')) {
+            res.setHeader('Content-Type', 'application/javascript');
+        }
+    }
+}));
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+});

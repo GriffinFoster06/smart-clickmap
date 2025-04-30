@@ -204,13 +204,10 @@ app.use('/:channel((?!api)[^./]+)', (req, res, next) => {
 
 
 // ─── Static & HTML Routes ─────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname))); // Serve static files from the backend directory
+// Serve static files from the backend directory
+app.use(express.static(path.join(__dirname)));
 
-app.get('/:channel', (req, res) => {
-    console.log(`[Static Route] Serving viewer.html for channel: ${req.params.channel}`);
-    res.sendFile(path.join(__dirname, 'viewer.html'));
-});
-
+// Specific routes for overlay and control
 app.get('/:channel/overlay', (req, res) => {
     console.log(`[Static Route] Serving overlay.html for channel: ${req.params.channel}`);
     res.sendFile(path.join(__dirname, 'overlay.html'));
@@ -220,6 +217,13 @@ app.get('/:channel/control', (req, res) => {
     console.log(`[Static Route] Serving control.html for channel: ${req.params.channel}`);
     res.sendFile(path.join(__dirname, 'control.html'));
 });
+
+// General route for viewer
+app.get('/:channel', (req, res) => {
+    console.log(`[Static Route] Serving viewer.html for channel: ${req.params.channel}`);
+    res.sendFile(path.join(__dirname, 'viewer.html'));
+});
+
 
 
 // ─── Join: Issue Viewer JWT ────────────────────────────────────────────────

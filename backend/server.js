@@ -204,10 +204,23 @@ app.use('/:channel((?!api)[^./]+)', (req, res, next) => {
 
 
 // ─── Static & HTML Routes ─────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname, '../frontend')));
-app.get('/:channel', (r, s) => s.sendFile(path.join(__dirname, '../frontend/viewer.html')));
-app.get('/:channel/overlay', (r, s) => s.sendFile(path.join(__dirname, '../frontend/overlay.html')));
-app.get('/:channel/control', (r, s) => s.sendFile(path.join(__dirname, '../frontend/control.html')));
+app.use(express.static(path.join(__dirname))); // Serve static files from the backend directory
+
+app.get('/:channel', (req, res) => {
+    console.log(`[Static Route] Serving viewer.html for channel: ${req.params.channel}`);
+    res.sendFile(path.join(__dirname, 'viewer.html'));
+});
+
+app.get('/:channel/overlay', (req, res) => {
+    console.log(`[Static Route] Serving overlay.html for channel: ${req.params.channel}`);
+    res.sendFile(path.join(__dirname, 'overlay.html'));
+});
+
+app.get('/:channel/control', (req, res) => {
+    console.log(`[Static Route] Serving control.html for channel: ${req.params.channel}`);
+    res.sendFile(path.join(__dirname, 'control.html'));
+});
+
 
 // ─── Join: Issue Viewer JWT ────────────────────────────────────────────────
 app.get('/api/:channel/join', (req, res) => {

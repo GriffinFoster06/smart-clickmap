@@ -22,8 +22,13 @@ const WL = (process.env.WHITELIST || 'phummylw')
 console.log('WHITELIST:', WL);
 
 const checkWhitelist = (req, res, next) => {
-    // Remove any trailing slashes and clean up the channel name
-    const channel = req.params.channel?.toLowerCase().trim().replace(/\/$/, '');
+    // Clean up the channel name by removing api/ prefix, trailing slashes, and trimming
+    const channel = req.params.channel?.toLowerCase()
+        .trim()
+        .replace(/^api\//, '')    // Remove api/ prefix
+        .replace(/\/$/, '')       // Remove trailing slash
+        .replace(/\/.*$/, '');    // Remove anything after a slash
+
     console.log('Checking channel:', channel, 'against whitelist:', WL);
     if (!channel || !WL.includes(channel)) {
         console.log('❌ Channel not in whitelist:', channel);

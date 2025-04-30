@@ -2,101 +2,109 @@
 import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
-import path from 'path';
-import { createServer } from 'http';
-import { WebSocketServer } from 'ws';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const PORT = process.env.PORT || 8080;
-const JWT_SECRET = process.env.JWT_SECRET || 'devsecret';
+/* ---------- basic setup ---------- */
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+app.use(cors({ origin: '*' }));
+app.use(express.json());
+app.use((_, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
-// In-memory per-channel state
-const clicks = new Map();      // chan → Map<uid,{x,y}>
-const running = new Map();     // chan → boolean
+/* ---------- in-memory click store ---------- */
+const store = new Map();              // channel → Map(userId → {x,y})
 
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-function cluster(pts, r) {
+function getClicks(channel) {
+    if (!store.has(channel)) store.set(channel, new Map());
+    return store.get(channel);
+}
+
+/* ---------- helpers ---------- */
+function distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+function clusterRadius(total, avgDist) {
+    if (total < 50) return 0.05;
+    if (avgDist < 0.05) return 0.01;
+    if (avgDist < 0.10) return 0.02;
+    if (avgDist < 0.20) return 0.03;
+    return 0.05;
+}
+
+function cluster(points, radius) {
     const blobs = [];
-    pts.forEach(p => {
-        let b = blobs.find(x => dist(x, p) < r);
+    for (const p of points) {
+        let b = blobs.find(o => distance(o, p) < radius);
         if (!b) { b = { x: p.x, y: p.y, count: 0 }; blobs.push(b); }
         b.x = (b.x * b.count + p.x) / (b.count + 1);
         b.y = (b.y * b.count + p.y) / (b.count + 1);
-        b.count++;
-    });
+        b.count += 1;
+    }
     return blobs;
 }
 
-const app = express();
-app.use(cors({ origin: /\.phummylw\.com$/ }));
-app.use(express.json());
+/* ---------- static pages ---------- */
+const pub = path.resolve(__dirname, '../frontend');
+app.use(express.static(pub));
 
-// API routes (exactly as before)
-app.get('/health', (_, r) => r.send('ok'));
+/* ---------- middleware: whitelist ---------- */
+const WHITELIST = (process.env.WHITELIST || 'phummylw,dougdoug')
+    .split(',').map(s => s.trim().toLowerCase());
+app.use('/:channel', (req, res, next) => {
+    if (!WHITELIST.includes(req.params.channel.toLowerCase())) {
+        return res.status(404).send('Channel not enabled');
+    }
+    next();
+});
 
-app.post('/click/:chan', (req, res) => {
-    const chan = req.params.chan.toLowerCase();
-    if (!running.get(chan)) return res.sendStatus(409);
+/* ---------- HTML routes ---------- */
+app.get('/:channel', (req, res) => res.sendFile(path.join(pub, 'viewer.html')));
+app.get('/:channel/overlay', (req, res) => res.sendFile(path.join(pub, 'overlay.html')));
+app.get('/:channel/control', (req, res) => res.sendFile(path.join(pub, 'control.html')));
+
+/* ---------- API ---------- */
+const SECRET = process.env.JWT_SECRET || 'dummy';   // used *only* to tokenise user clicks if needed
+
+app.post('/api/:channel/click', (req, res) => {
     const { x, y } = req.body;
-    if (typeof x !== 'number' || typeof y !== 'number') return res.sendStatus(400);
-    const uid = req.ip;
-    if (!clicks.has(chan)) clicks.set(chan, new Map());
-    clicks.get(chan).set(uid, { x, y });
+    const uid = req.headers['x-uid'] || req.ip;       // simple anon identity
+    const map = getClicks(req.params.channel);
+    map.set(uid, { x, y });
     res.sendStatus(200);
 });
 
-['start', 'stop', 'reset'].forEach(act => {
-    app.post(`/${act}/:chan`, (req, res) => {
-        const chan = req.params.chan.toLowerCase();
-        if (act === 'reset') clicks.set(chan, new Map());
-        if (act === 'start') running.set(chan, true);
-        if (act === 'stop') running.set(chan, false);
-        res.send('ok');
-    });
+app.get('/api/:channel/heatmap', (req, res) => {
+    const map = getClicks(req.params.channel);
+    const points = Array.from(map.values());
+    const total = points.length;
+    if (!total) return res.json({ blobs: [], total });
+
+    /* adaptive radius */
+    let avg = 0;
+    for (let i = 0; i < total; i++)
+        for (let j = i + 1; j < total; j++)
+            avg += distance(points[i], points[j]);
+    avg /= (total * (total - 1) / 2) || 1;
+
+    const blobs = cluster(points, clusterRadius(total, avg))
+        .map(b => ({ ...b, pct: Math.round((b.count / total) * 100) }))
+        .filter((b, i, arr) => b.pct >= 5 || i === 0)      // ≥5 % or top blob
+        .sort((a, b) => b.pct - a.pct);
+    if (blobs.length) blobs[0].isTop = true;
+    res.json({ blobs, total });
 });
 
-app.get('/heatmap/:chan', (req, res) => {
-    const chan = req.params.chan.toLowerCase();
-    const pts = [...(clicks.get(chan) || new Map()).values()];
-    const total = pts.length;
-    if (total === 0) return res.json({ blobs: [], total, running: !!running.get(chan) });
-    const radius = Math.max(0.01, 0.05 / Math.sqrt(total));
-    let blobs = cluster(pts, radius).sort((a, b) => b.count - a.count)
-        .map((b, i) => ({ x: b.x, y: b.y, pct: Math.round(b.count / total * 100), isTop: i === 0 }))
-        .filter(b => b.pct >= 5 || b.isTop);
-    res.json({ blobs, total, running: !!running.get(chan) });
-});
+/* ---------- control endpoints (key in query) ---------- */
+function chkKey(req, res, next) {
+    const chan = req.params.channel;
+    if ((req.query.key || '') === (process.env[chan.toUpperCase() + '_KEY'] || '')) return next();
+    res.status(401).send('Bad key');
+}
 
-// --- STATIC SITE SERVING by host header ---
-const frontendDir = process.cwd();
-app.use(express.static(frontendDir));
+app.post('/api/:channel/reset', chkKey, (r, s) => { getClicks(r.params.channel).clear(); s.send('OK'); });
+app.post('/api/:channel/start', chkKey, (r, s) => s.send('OK'));   // no-op (clicks already enabled)
+app.post('/api/:channel/stop', chkKey, (r, s) => s.send('OK'));   // viewer JS honours stop
 
-app.get('*', (req, res) => {
-    const host = req.hostname.split(':')[0];
-    if (host === 'overlay.phummylw.com') {
-        return res.sendFile(path.join(frontendDir, 'overlay.html'));
-    }
-    if (host === 'control.phummylw.com') {
-        return res.sendFile(path.join(frontendDir, 'control.html'));
-    }
-    // default = viewer
-    return res.sendFile(path.join(frontendDir, 'viewer.html'));
-});
-
-// optional WebSocket broadcasting
-const server = createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
-setInterval(() => {
-    for (const [chan, map] of clicks) {
-        const pts = [...map.values()];
-        if (!pts.length) continue;
-        const total = pts.length;
-        const radius = Math.max(0.01, 0.05 / Math.sqrt(total));
-        let blobs = cluster(pts, radius).sort((a, b) => b.count - a.count)
-            .map((b, i) => ({ x: b.x, y: b.y, pct: Math.round(b.count / total * 100), isTop: i === 0 }))
-            .filter(b => b.pct >= 5 || b.isTop);
-        const msg = JSON.stringify({ chan, blobs, running: !!running.get(chan) });
-        wss.clients.forEach(c => c.readyState === 1 && c.send(msg));
-    }
-}, 1000);
-
-server.listen(PORT, () => console.log(`API+Static on ${PORT}`));
+/* ---------- listen ---------- */
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log('ClickMap backend on', PORT));

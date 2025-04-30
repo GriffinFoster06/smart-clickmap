@@ -12,17 +12,17 @@ app.use(express.json());
 app.use((_, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
 /* ───────────────────────────────────── in-memory store */
-const store = new Map();                     // channel → Map(uid → {x,y})
+const store = new Map();  // channel → Map(uid → {x, y})
 const clicksOf = ch => { if (!store.has(ch)) store.set(ch, new Map()); return store.get(ch); };
 
 /* ────────────────────────────────────────── whitelist */
 const WL = (process.env.WHITELIST || 'phummylw').split(',').map(s => s.trim().toLowerCase());
+console.log('WHITELIST:', WL);
 
-/* ────────────────────────────────────────── routes */
-// Whitelist middleware
 const checkWhitelist = (req, res, next) => {
     const channel = req.params.channel?.toLowerCase();
     if (!channel || !WL.includes(channel)) {
+        console.log('❌ Channel not in whitelist:', channel);
         return res.status(404).json({
             error: 'channel disabled',
             blobs: [],
@@ -33,40 +33,36 @@ const checkWhitelist = (req, res, next) => {
 };
 
 /* ─────────────────────────────────── static frontend */
-// Must be before the channel routes to serve static files properly
 const pub = path.resolve(__dirname, './');
 app.use(express.static(pub, {
     setHeaders: (res, filepath) => {
-        if (filepath.endsWith('.js')) {
-            res.set('Content-Type', 'application/javascript');
-        } else if (filepath.endsWith('.css')) {
-            res.set('Content-Type', 'text/css');
-        }
+        if (filepath.endsWith('.js')) res.set('Content-Type', 'application/javascript');
+        if (filepath.endsWith('.css')) res.set('Content-Type', 'text/css');
     }
 }));
 
-// Apply whitelist check to channel routes
-app.use('/:channel([^.]*)', checkWhitelist);
+/* ───────────────────────────────── apply whitelist middleware */
 app.use('/api/:channel', checkWhitelist);
+app.use('/:channel([^.]*)', checkWhitelist);
 
-// HTML routes
-app.get('/:channel', (req, res) => {
+/* ─────────────────────────────────── HTML routes */
+app.get('/:channel', (req, res) =>
     res.sendFile(path.join(pub, 'viewer.html'), err => {
         if (err) res.status(404).json({ error: 'File not found' });
-    });
-});
+    })
+);
 
-app.get('/:channel/overlay', (req, res) => {
+app.get('/:channel/overlay', (req, res) =>
     res.sendFile(path.join(pub, 'overlay.html'), err => {
         if (err) res.status(404).json({ error: 'File not found' });
-    });
-});
+    })
+);
 
-app.get('/:channel/control', (req, res) => {
+app.get('/:channel/control', (req, res) =>
     res.sendFile(path.join(pub, 'control.html'), err => {
         if (err) res.status(404).json({ error: 'File not found' });
-    });
-});
+    })
+);
 
 /* ────────────────────────────────── helper functions */
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -116,7 +112,7 @@ app.get('/api/:channel/heatmap', (req, res) => {
     let blobs = cluster(points, radiusFor(total, avg))
         .map(b => ({ ...b, pct: Math.round(b.count / total * 100) }))
         .filter((b, i) => b.pct >= 5 || i === 0)
-        .sort((a, b) => b.pct - a.pct);
+        .sort((a, b) => b.pct - a.pct).reverse();
 
     if (blobs.length) blobs[0].isTop = true;
     res.json({ blobs, totalClicks: total });
@@ -133,11 +129,10 @@ app.post('/api/:channel/reset', auth, (req, res) => {
     clicksOf(req.params.channel).clear();
     res.json({ status: 'OK' });
 });
-
 app.post('/api/:channel/start', auth, (req, res) => res.json({ status: 'OK' }));
 app.post('/api/:channel/stop', auth, (req, res) => res.json({ status: 'OK' }));
 
-// Error handler for static files - must be last
+/* ───────────────────────────────── error handler */
 app.use((err, req, res, next) => {
     if (err.code === 'ENOENT') {
         res.status(404).json({ error: 'File not found' });

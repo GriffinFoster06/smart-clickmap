@@ -26,6 +26,17 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json());
 
+// Add this right after the Security & Parsing section
+// ─── Request Logger ────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`[Request] ${req.method} ${req.originalUrl}`);
+    console.log(`[Headers] ${JSON.stringify(req.headers, null, 2)}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    next();
+});
+
+
 // ─── Rate Limiter for Clicks ─────────────────────────────────────────────
 const clickLimiter = rateLimit({
     windowMs: 1000,
@@ -73,55 +84,121 @@ const configStore = new Map();
 
 // ─── Whitelist Setup ──────────────────────────────────────────────────────
 const WL = process.env.WHITELIST.split(',')
-    .map(s => s.trim().toLowerCase());
-console.log('Whitelist:', WL);
-console.log(`[Whitelist Setup] Loaded WHITELIST: "${process.env.WHITELIST}"`);
-console.log(`[Whitelist Array] Parsed Whitelist: ${JSON.stringify(WL)}`);
+    .map(s => s.trim().toLowerCase())
+    .filter(s => s.length > 0); // Remove empty entries
 
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('[Whitelist Debug]');
+console.log('Raw ENV:', process.env.WHITELIST);
+console.log('Split Result:', process.env.WHITELIST.split(','));
+console.log('Processed WL:', WL);
+console.log('WL Length:', WL.length);
+console.log('WL Contents:', WL.map(w => `"${w}"`).join(', '));
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-// Sanitization helper
+// Sanitization helper with debug output
 function sanitizeChannel(raw) {
-    const sanitized = raw
-        .toLowerCase()
-        .trim()
-        .replace(/^\/?api\//, '') // Remove `/api/` prefix
-        .replace(/[^a-z0-9_-]/g, '') // Allow only alphanumeric, dashes, and underscores
-        .replace(/\/$/, ''); // Remove trailing slash
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('[sanitizeChannel Debug]');
+    console.log('Input:', JSON.stringify(raw));
 
-    console.log(`[sanitizeChannel] Raw: "${raw}", Sanitized: "${sanitized}"`);
-    return sanitized;
+    const steps = {
+        lowercase: raw.toLowerCase(),
+        trimmed: raw.toLowerCase().trim(),
+        noApiPrefix: raw.toLowerCase().trim().replace(/^\/?api\//, ''),
+        alphanumeric: raw.toLowerCase().trim()
+            .replace(/^\/?api\//, '')
+            .replace(/[^a-z0-9_-]/g, ''),
+        final: raw.toLowerCase().trim()
+            .replace(/^\/?api\//, '')
+            .replace(/[^a-z0-9_-]/g, '')
+            .replace(/\/$/, '')
+    };
+
+    console.log('Processing Steps:');
+    Object.entries(steps).forEach(([step, result]) => {
+        console.log(`${step}: ${JSON.stringify(result)}`);
+    });
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    return steps.final;
 }
 
-
-
-// Whitelist middleware for API
+// Whitelist middleware for API with detailed debugging
 app.use('/api/:channel', (req, res, next) => {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('[API Middleware Debug]');
+    console.log('Original URL:', req.originalUrl);
+    console.log('Method:', req.method);
+    console.log('Raw Channel Param:', JSON.stringify(req.params.channel));
+
     const raw = req.params.channel;
     const ch = sanitizeChannel(raw);
-    console.log(`[API Middleware] Raw Channel: "${raw}", Sanitized Channel: "${ch}", Whitelist: ${JSON.stringify(WL)}`);
+
+    console.log('Sanitized Channel:', JSON.stringify(ch));
+    console.log('Current Whitelist:', WL);
+    console.log('Includes Check:', WL.includes(ch));
+
+    // Check each whitelist entry
+    WL.forEach((entry, i) => {
+        console.log(`WL[${i}] "${entry}" === "${ch}":`, entry === ch);
+        if (entry !== ch) {
+            console.log('Character codes:');
+            console.log('Entry:', Array.from(entry).map(c => c.charCodeAt(0)));
+            console.log('Ch:', Array.from(ch).map(c => c.charCodeAt(0)));
+        }
+    });
+
     if (!WL.includes(ch)) {
-        console.error(`[API Middleware] Channel "${ch}" not in whitelist. Whitelist: ${JSON.stringify(WL)}`);
-        console.error(`[API Middleware] Comparison Failed: WL.includes("${ch}")`);
+        console.error('Channel Access Denied:', ch);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         return res.status(404).json({ error: 'channel disabled' });
     }
+
+    console.log('Channel Access Granted:', ch);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     req.params.channel = ch;
     next();
 });
 
-
-
-// Whitelist middleware for page routes
+// Whitelist middleware for page routes with detailed debugging
 app.use('/:channel((?!api)[^./]+)', (req, res, next) => {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('[Page Middleware Debug]');
+    console.log('Original URL:', req.originalUrl);
+    console.log('Method:', req.method);
+    console.log('Raw Channel Param:', JSON.stringify(req.params.channel));
+
     const raw = req.params.channel;
     const ch = sanitizeChannel(raw);
-    console.log(`[Page Middleware] Raw Channel: "${raw}", Sanitized Channel: "${ch}", Whitelist: ${JSON.stringify(WL)}`);
+
+    console.log('Sanitized Channel:', JSON.stringify(ch));
+    console.log('Current Whitelist:', WL);
+    console.log('Includes Check:', WL.includes(ch));
+
+    // Check each whitelist entry
+    WL.forEach((entry, i) => {
+        console.log(`WL[${i}] "${entry}" === "${ch}":`, entry === ch);
+        if (entry !== ch) {
+            console.log('Character codes:');
+            console.log('Entry:', Array.from(entry).map(c => c.charCodeAt(0)));
+            console.log('Ch:', Array.from(ch).map(c => c.charCodeAt(0)));
+        }
+    });
+
     if (!WL.includes(ch)) {
-        console.error(`[Page Middleware] Channel "${ch}" not in whitelist.`);
+        console.error('Channel Access Denied:', ch);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         return res.status(404).send('channel disabled');
     }
+
+    console.log('Channel Access Granted:', ch);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     req.params.channel = ch;
     next();
 });
+
+
 
 
 

@@ -22,7 +22,8 @@ const WL = (process.env.WHITELIST || 'phummylw')
 console.log('WHITELIST:', WL);
 
 const checkWhitelist = (req, res, next) => {
-    const channel = req.params.channel?.toLowerCase().trim();
+    // Remove any trailing slashes and clean up the channel name
+    const channel = req.params.channel?.toLowerCase().trim().replace(/\/$/, '');
     console.log('Checking channel:', channel, 'against whitelist:', WL);
     if (!channel || !WL.includes(channel)) {
         console.log('❌ Channel not in whitelist:', channel);
@@ -35,6 +36,7 @@ const checkWhitelist = (req, res, next) => {
     console.log('✅ Channel authorized:', channel);
     next();
 };
+
 
 
 /* ─────────────────────────────────── static frontend */

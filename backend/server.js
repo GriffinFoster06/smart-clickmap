@@ -75,6 +75,9 @@ const configStore = new Map();
 const WL = process.env.WHITELIST.split(',')
     .map(s => s.trim().toLowerCase());
 console.log('Whitelist:', WL);
+console.log(`[Whitelist Setup] Loaded WHITELIST: "${process.env.WHITELIST}"`);
+console.log(`[Whitelist Array] Parsed Whitelist: ${JSON.stringify(WL)}`);
+
 
 // Sanitization helper
 function sanitizeChannel(raw) {

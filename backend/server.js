@@ -78,11 +78,14 @@ console.log('Whitelist:', WL);
 
 // Sanitization helper
 function sanitizeChannel(raw) {
-    return raw
+    const sanitized = raw
         .toLowerCase()
         .trim()
         .replace(/^\/?api\//, '') // Remove the `/api/` prefix if present
         .replace(/\/$/, '');      // Remove trailing slash only
+
+    console.log(`[sanitizeChannel] Raw: "${raw}", Sanitized: "${sanitized}"`);
+    return sanitized;
 }
 
 
@@ -90,8 +93,9 @@ function sanitizeChannel(raw) {
 app.use('/api/:channel', (req, res, next) => {
     const raw = req.params.channel;
     const ch = sanitizeChannel(raw);
-    console.log('API request channel param:', raw, '→', ch);
+    console.log(`[API Middleware] Raw Channel: "${raw}", Sanitized Channel: "${ch}", Whitelist: ${JSON.stringify(WL)}`);
     if (!WL.includes(ch)) {
+        console.error(`[API Middleware] Channel "${ch}" not in whitelist.`);
         return res.status(404).json({ error: 'channel disabled' });
     }
     req.params.channel = ch;
@@ -102,13 +106,15 @@ app.use('/api/:channel', (req, res, next) => {
 app.use('/:channel([^./]+)', (req, res, next) => {
     const raw = req.params.channel;
     const ch = sanitizeChannel(raw);
-    console.log('Page request channel param:', raw, '→', ch);
+    console.log(`[Page Middleware] Raw Channel: "${raw}", Sanitized Channel: "${ch}", Whitelist: ${JSON.stringify(WL)}`);
     if (!WL.includes(ch)) {
+        console.error(`[Page Middleware] Channel "${ch}" not in whitelist.`);
         return res.status(404).send('channel disabled');
     }
     req.params.channel = ch;
     next();
 });
+
 
 // ─── Static & HTML Routes ─────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, '../frontend')));

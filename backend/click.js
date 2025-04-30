@@ -1,4 +1,4 @@
-import { drawBlobs } from './heatmap.js';
+import { drawBlobs } from '/heatmap.js';
 
 const chan = location.pathname.split('/')[1];
 const player = document.getElementById('player');
@@ -21,58 +21,112 @@ player.src = `https://player.twitch.tv/?channel=${chan}&parent=${location.hostna
 
 // join to get token
 async function join() {
-    const res = await fetch(`/api/${chan}/join`);
-    const { token } = await res.json();
-    localStorage.setItem('clickmap_token', token);
-    return token;
+    try {
+        const res = await fetch(`/api/${chan}/join`);
+        if (!res.ok) {
+            console.error('Failed to join:', res.status);
+            return null;
+        }
+        const { token } = await res.json();
+        localStorage.setItem('clickmap_token', token);
+        return token;
+    } catch (error) {
+        console.error('Error joining:', error);
+        return null;
+    }
 }
-const token = localStorage.getItem('clickmap_token') || await join();
+
+async function getToken() {
+    const storedToken = localStorage.getItem('clickmap_token');
+    if (storedToken) return storedToken;
+
+    return await join();
+}
+
+const tokenPromise = getToken();
 
 // burst animation
 overlay.addEventListener('click', async e => {
-    const rect = overlay.getBoundingClientRect();
-    const xNorm = (e.clientX - rect.left) / rect.width;
-    const yNorm = (e.clientY - rect.top) / rect.height;
+    try {
+        const token = await tokenPromise;
+        if (!token) {
+            console.error('No authentication token available');
+            return;
+        }
 
-    // burst
-    let alpha = 1;
-    (function fade(cx, cy) {
-        bctx.clearRect(0, 0, burst.width, burst.height);
-        if (alpha <= 0) return;
-        bctx.globalAlpha = alpha;
-        bctx.beginPath();
-        bctx.arc(cx, cy, 20 + (1 - alpha) * 30, 0, 2 * Math.PI);
-        bctx.strokeStyle = 'yellow';
-        bctx.lineWidth = 3;
-        bctx.stroke();
-        alpha -= 0.05;
-        requestAnimationFrame(() => fade(cx, cy));
-    })(e.clientX - rect.left, e.clientY - rect.top);
+        const rect = overlay.getBoundingClientRect();
+        const xNorm = (e.clientX - rect.left) / rect.width;
+        const yNorm = (e.clientY - rect.top) / rect.height;
 
-    // send click
-    await fetch(`/api/${chan}/click`, {
-        method: 'POST',
-        headers: {
-            'Authorization': 'Bearer ' + token,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ x: xNorm, y: yNorm })
-    });
+        // burst
+        let alpha = 1;
+        (function fade(cx, cy) {
+            bctx.clearRect(0, 0, burst.width, burst.height);
+            if (alpha <= 0) return;
+            bctx.globalAlpha = alpha;
+            bctx.beginPath();
+            bctx.arc(cx, cy, 20 + (1 - alpha) * 30, 0, 2 * Math.PI);
+            bctx.strokeStyle = 'yellow';
+            bctx.lineWidth = 3;
+            bctx.stroke();
+            alpha -= 0.05;
+            requestAnimationFrame(() => fade(cx, cy));
+        })(e.clientX - rect.left, e.clientY - rect.top);
+
+        // send click
+        const res = await fetch(`/api/${chan}/click`, {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + token,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ x: xNorm, y: yNorm })
+        });
+
+        if (!res.ok) {
+            console.error('Click failed:', await res.text());
+        }
+    } catch (error) {
+        console.error('Error sending click:', error);
+    }
 });
 
 // fetch heatmap
 async function fetchLoop() {
-    const res = await fetch(`/api/${chan}/heatmap`);
-    const data = await res.json();
-    latestBlobs = data.blobs || [];
-    setTimeout(fetchLoop, 1000);
+    try {
+        const res = await fetch(`/api/${chan}/heatmap`);
+        if (!res.ok) {
+            console.error('Failed to fetch heatmap:', res.status);
+            setTimeout(fetchLoop, 1000);
+            return;
+        }
+
+        const data = await res.json();
+        latestBlobs = data.blobs || [];
+        setTimeout(fetchLoop, 1000);
+    } catch (error) {
+        console.error('Error fetching heatmap:', error);
+        setTimeout(fetchLoop, 1000);
+    }
 }
 
 // render
 async function renderLoop() {
-    ctx.clearRect(0, 0, heat.width, heat.height);
-    const cfg = await fetch(`/api/${chan}/config`).then(r => r.json());
-    drawBlobs(ctx, latestBlobs, cfg);
+    try {
+        ctx.clearRect(0, 0, heat.width, heat.height);
+        const res = await fetch(`/api/${chan}/config`);
+        if (!res.ok) {
+            console.error('Failed to fetch config:', res.status);
+            requestAnimationFrame(renderLoop);
+            return;
+        }
+
+        const cfg = await res.json();
+        drawBlobs(ctx, latestBlobs, cfg);
+    } catch (error) {
+        console.error('Error rendering heatmap:', error);
+    }
+
     requestAnimationFrame(renderLoop);
 }
 

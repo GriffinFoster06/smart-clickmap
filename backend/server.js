@@ -11,12 +11,22 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-// ─── Security ─────────────────────────────────────────────────────────────
+// ─── Validate Required Environment Variables ──────────────────────────────
+if (!process.env.WHITELIST) {
+    console.error('WHITELIST not defined');
+    process.exit(1);
+}
+if (!process.env.JWT_SECRET) {
+    console.error('JWT_SECRET not defined');
+    process.exit(1);
+}
+
+// ─── Security & Parsing ────────────────────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json());
 
-// rate-limit clicks: max 1 per second per token
+// ─── Rate Limiter for Clicks ─────────────────────────────────────────────
 const clickLimiter = rateLimit({
     windowMs: 1000,
     max: 1,
@@ -24,17 +34,22 @@ const clickLimiter = rateLimit({
     message: { error: 'Too many clicks; slow down.' }
 });
 
-// ─── Redis or Memory ──────────────────────────────────────────────────────
+// ─── Redis or In-Memory Setup ──────────────────────────────────────────────
 let redis, useRedis = false;
 if (process.env.REDIS_URL) {
-    redis = createRedisClient({ url: process.env.REDIS_URL });
-    await redis.connect();
-    useRedis = true;
+    try {
+        redis = createRedisClient({ url: process.env.REDIS_URL });
+        await redis.connect();
+        useRedis = true;
+        console.log('✅ Connected to Redis');
+    } catch (err) {
+        console.error('❌ Redis connect failed, using memory store:', err);
+        global.memoryClicks = new Map();
+    }
 } else {
-    global.memoryClicks = new Map(); // fallback store
+    global.memoryClicks = new Map();
+    console.log('ℹ️  Using in-memory store');
 }
-
-// click TTL (seconds)
 const CLICK_TTL = parseInt(process.env.CLICK_TTL_SECONDS) || 900;
 
 // ─── Config Defaults ──────────────────────────────────────────────────────
@@ -56,57 +71,83 @@ function defaultConfig() {
 }
 const configStore = new Map();
 
-// ─── Whitelist ────────────────────────────────────────────────────────────
-if (!process.env.WHITELIST) {
-    console.error('WHITELIST not defined'); process.exit(1);
+// ─── Whitelist Setup ──────────────────────────────────────────────────────
+const WL = process.env.WHITELIST.split(',')
+    .map(s => s.trim().toLowerCase());
+console.log('Whitelist:', WL);
+
+// Sanitization helper
+function sanitizeChannel(raw) {
+    return raw
+        .toLowerCase()
+        .trim()
+        .replace(/^\/?api\//, '')
+        .replace(/\/.*$/, '')     // remove anything after first slash
+        .replace(/\/$/, '');      // remove trailing slash
 }
-const WL = process.env.WHITELIST.split(',').map(s => s.trim().toLowerCase());
 
-// whitelist API routes
+// Whitelist middleware for API
 app.use('/api/:channel', (req, res, next) => {
-    const ch = req.params.channel.toLowerCase();
-    if (!WL.includes(ch)) return res.status(404).json({ error: 'channel disabled' });
-    next();
-});
-// whitelist page routes
-app.use('/:channel([^./]+)', (req, res, next) => {
-    const ch = req.params.channel.toLowerCase();
-    if (!WL.includes(ch)) return res.status(404).send('channel disabled');
+    const raw = req.params.channel;
+    const ch = sanitizeChannel(raw);
+    console.log('API request channel param:', raw, '→', ch);
+    if (!WL.includes(ch)) {
+        return res.status(404).json({ error: 'channel disabled' });
+    }
+    req.params.channel = ch;
     next();
 });
 
-// ─── Static & HTML ─────────────────────────────────────────────────────────
+// Whitelist middleware for page routes
+app.use('/:channel([^./]+)', (req, res, next) => {
+    const raw = req.params.channel;
+    const ch = sanitizeChannel(raw);
+    console.log('Page request channel param:', raw, '→', ch);
+    if (!WL.includes(ch)) {
+        return res.status(404).send('channel disabled');
+    }
+    req.params.channel = ch;
+    next();
+});
+
+// ─── Static & HTML Routes ─────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, '../frontend')));
 app.get('/:channel', (r, s) => s.sendFile(path.join(__dirname, '../frontend/viewer.html')));
 app.get('/:channel/overlay', (r, s) => s.sendFile(path.join(__dirname, '../frontend/overlay.html')));
 app.get('/:channel/control', (r, s) => s.sendFile(path.join(__dirname, '../frontend/control.html')));
 
-// ─── Join: Issue Viewer Token ──────────────────────────────────────────────
+// ─── Join: Issue Viewer JWT ────────────────────────────────────────────────
 app.get('/api/:channel/join', (req, res) => {
-    const ch = req.params.channel.toLowerCase();
-    const token = jwt.sign({ channel: ch }, process.env.JWT_SECRET, { expiresIn: '2h' });
-    res.json({ token });
+    const ch = req.params.channel;
+    try {
+        const token = jwt.sign({ channel: ch }, process.env.JWT_SECRET, { expiresIn: '2h' });
+        res.json({ token });
+    } catch (err) {
+        console.error('Token gen error:', err);
+        res.status(500).json({ error: 'failed to generate token' });
+    }
 });
 
 // ─── Config API ────────────────────────────────────────────────────────────
 app.get('/api/:channel/config', (req, res) => {
-    const ch = req.params.channel.toLowerCase();
+    const ch = req.params.channel;
     if (!configStore.has(ch)) configStore.set(ch, defaultConfig());
     res.json(configStore.get(ch));
 });
 app.post('/api/:channel/config', (req, res) => {
-    const ch = req.params.channel.toLowerCase();
-    if (req.query.key !== process.env[`${ch.toUpperCase()}_KEY`])
+    const ch = req.params.channel;
+    if (req.query.key !== process.env[`${ch.toUpperCase()}_KEY`]) {
         return res.status(403).json({ error: 'unauthorized' });
+    }
     configStore.set(ch, { ...defaultConfig(), ...req.body });
     res.json(configStore.get(ch));
 });
 
-// ─── Smart Clustering Helpers ──────────────────────────────────────────────
+// ─── Smart Gaussian Clustering ─────────────────────────────────────────────
 const GAUSS = [
-    [0.0625, 0.1250, 0.0625],
-    [0.1250, 0.2500, 0.1250],
-    [0.0625, 0.1250, 0.0625]
+    [0.0625, 0.125, 0.0625],
+    [0.125, 0.25, 0.125],
+    [0.0625, 0.125, 0.0625]
 ];
 const GRID = 100;
 const gridIndex = (x, y) => y * GRID + x;
@@ -114,7 +155,8 @@ const gridIndex = (x, y) => y * GRID + x;
 function buildHeatGrid(points) {
     const grid = new Float32Array(GRID * GRID);
     points.forEach(p => {
-        const gx = Math.floor(p.x * GRID), gy = Math.floor(p.y * GRID);
+        const gx = Math.floor(p.x * GRID),
+            gy = Math.floor(p.y * GRID);
         for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
                 const ix = gx + dx, iy = gy + dy;
@@ -146,7 +188,7 @@ function extractBlobs(grid, cfg) {
         }));
 }
 
-// ─── Click Storage ─────────────────────────────────────────────────────────
+// ─── Click Storage Helpers ────────────────────────────────────────────────
 async function storeClick(ch, token, x, y) {
     const key = `click:${ch}:${token}`;
     const data = JSON.stringify({ x, y, t: Date.now() });
@@ -170,32 +212,37 @@ async function fetchPoints(ch) {
     }
     const cutoff = Date.now() - CLICK_TTL * 1000;
     return entries
-        .map(raw => JSON.parse(raw))
+        .map(r => JSON.parse(r))
         .filter(o => o.t >= cutoff)
         .map(o => ({ x: o.x, y: o.y }));
 }
 
 // ─── Viewer Click API ─────────────────────────────────────────────────────
 app.post('/api/:channel/click', clickLimiter, async (req, res) => {
-    const ch = req.params.channel.toLowerCase();
-    const auth = req.headers.authorization || '';
-    const token = auth.replace('Bearer ', '');
+    const ch = req.params.channel;
+    const token = (req.headers.authorization || '').replace('Bearer ', '');
     try {
         const payload = jwt.verify(token, process.env.JWT_SECRET);
-        if (payload.channel !== ch) throw new Error();
+        if (payload.channel !== ch) throw new Error('channel mismatch');
     } catch {
         return res.status(401).json({ error: 'invalid token' });
     }
     const { x, y } = req.body;
-    if (typeof x !== 'number' || typeof y !== 'number')
-        return res.status(400).json({ error: 'coords' });
-    await storeClick(ch, token, x, y);
-    res.json({ status: 'OK' });
+    if (typeof x !== 'number' || typeof y !== 'number') {
+        return res.status(400).json({ error: 'invalid coords' });
+    }
+    try {
+        await storeClick(ch, token, x, y);
+        res.json({ status: 'OK' });
+    } catch (e) {
+        console.error('storeClick error', e);
+        res.status(500).json({ error: 'storage failure' });
+    }
 });
 
 // ─── Heatmap API ──────────────────────────────────────────────────────────
 app.get('/api/:channel/heatmap', async (req, res) => {
-    const ch = req.params.channel.toLowerCase();
+    const ch = req.params.channel;
     const pts = await fetchPoints(ch);
     const total = pts.length;
     const cfg = configStore.get(ch) || defaultConfig();
@@ -207,14 +254,15 @@ app.get('/api/:channel/heatmap', async (req, res) => {
 
 // ─── Control API ──────────────────────────────────────────────────────────
 ['start', 'stop', 'reset'].forEach(act => {
-    app.post(`/api/:channel/${act}`, (req, res) => {
-        const ch = req.params.channel.toLowerCase();
-        if (req.query.key !== process.env[`${ch.toUpperCase()}_KEY`])
+    app.post(`/api/:channel/${act}`, async (req, res) => {
+        const ch = req.params.channel;
+        if (req.query.key !== process.env[`${ch.toUpperCase()}_KEY`]) {
             return res.status(403).json({ error: 'unauthorized' });
+        }
         if (act === 'reset') {
-            // delete all clicks
             if (useRedis) {
-                redis.keys(`click:${ch}:*`).then(keys => keys.forEach(k => redis.del(k)));
+                const keys = await redis.keys(`click:${ch}:*`);
+                await Promise.all(keys.map(k => redis.del(k)));
             } else {
                 [...global.memoryClicks.keys()]
                     .filter(k => k.startsWith(`click:${ch}:`))
@@ -227,4 +275,4 @@ app.get('/api/:channel/heatmap', async (req, res) => {
 
 // ─── Launch ────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`ClickMap backend on ${PORT}`));
+app.listen(PORT, () => console.log(`ClickMap backend listening on ${PORT}`));

@@ -1,22 +1,18 @@
-﻿/* overlay.js – transparent OBS overlay with live clusters only */
-import { getRoomId, socketFor } from './util.js';
+﻿import { getRoomId, socketFor } from './util.js';
 import { boot, render, clear } from './heatmap.js';
 import { clusterize } from './cluster.js';
 
 boot();
 const room = getRoomId();
 const qp = new URLSearchParams(location.search);
+
 const cfg = {
-    topColor: 'lime',
-    clusterColor: 'white',
-    topStroke: 3,
-    otherStroke: 2,
-    fontScale: 0.55,
-    eps: +qp.get('mergeRadius') || 0.03,
     minPct: +qp.get('minPct') || 5,
     maxN: +qp.get('maxClusters') || 10,
-    minR: 12,
-    k: 8
+    minR: +qp.get('minR') || 12,
+    k: +qp.get('scaleFactor') || 8,
+    maxR: 64,
+    topColor: 'lime', clusterColor: 'white', topStroke: 3, otherStroke: 2, fontScale: .55
 };
 
 let active = true; const clicks = [];

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Click on Stream</title>
+    <style>
+        html, body {
+            margin: 0;
+            height: 100%;
+            overflow: hidden
+        }
+
+        #wrapper {
+            position: relative;
+            width: 100%;
+            height: 100%
+        }
+
+        iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="wrapper">
+        <iframe id="stream"></iframe>
+        <canvas id="heat" width="1920" height="1080"></canvas>
+    </div>
+
+    <script type="module" src="/js/heatmap.js"></script>
+    <script type="module">import { getRoomId, socketFor } from '/js/util.js';
+    import { drawDot, clearHeat }   from '/js/heatmap.js';
+
+    const room = getRoomId();
+    const username = room.replace(/^room-/, '');
+    document.getElementById('stream').src =
+      `https://player.twitch.tv/?channel=${username}&parent=${location.hostname}&muted=true`;
+
+    (async () => {
+      // load saved clicks
+      const saved = await fetch(`/api/clicks/${room}`).then(r=>r.json());
+      saved.forEach(({x,y}) => drawDot(x,y));
+
+      const ws = socketFor(room, room);
+      const canvas = document.getElementById('heat');
+
+      canvas.addEventListener('click', e => {
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+        ws.send(JSON.stringify({ type:'click', x, y }));
+        drawDot(x, y);
+      });
+
+      ws.onmessage = e => {
+        const m = JSON.parse(e.data);
+        if (m.type === 'click') drawDot(m.x, m.y);
+        if (m.type === 'reset') clearHeat();
+      };
+    })();</script>
+</body>
+</html>

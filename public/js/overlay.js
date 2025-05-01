@@ -1,32 +1,19 @@
 ﻿import { getRoomId, socketFor } from './util.js';
 import { drawDot, clearHeat } from './heatmap.js';
 
-export function connect() {
-    const ws = socketFor(getRoomId());
-    ws.onmessage = e => {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'click') drawDot(msg.x, msg.y);
-        if (msg.type === 'reset') clearHeat();
-    };
-}
-
-export function viewerInit() {
+export async function connect() {
     const room = getRoomId();
-    const ws = socketFor(room);
-    const canvas = document.getElementById('heat');
 
-    canvas.addEventListener('click', e => {
-        const rect = canvas.getBoundingClientRect();
-        const x = (e.clientX - rect.left) / rect.width;
-        const y = (e.clientY - rect.top) / rect.height;
-        const payload = JSON.stringify({ type: 'click', x, y });
-        ws.send(payload);
-        drawDot(x, y);
-    });
+    // 1. Load saved clicks
+    const saved = await fetch(`/api/clicks/${room}`).then(r => r.json());
+    saved.forEach(({ x, y }) => drawDot(x, y));
+
+    // 2. Connect WebSocket (protocol = roomId)
+    const ws = socketFor(room, room);
 
     ws.onmessage = e => {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'click') drawDot(msg.x, msg.y);
-        if (msg.type === 'reset') clearHeat();
+        const m = JSON.parse(e.data);
+        if (m.type === 'click') drawDot(m.x, m.y);
+        if (m.type === 'reset') clearHeat();
     };
 }

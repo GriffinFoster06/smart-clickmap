@@ -42,34 +42,36 @@ for (const page of ['overlay', 'admin', 'room']) {
 const rooms = new Map(); // roomId ⇒ Set<ws>
 
 wss.on('connection', (ws, req) => {
-    // path = /ws/<roomId>
     const parts = req.url.split('/');
     const roomId = parts.at(-1);
-    // validate room
-    if (!roomId || !(await redis.sIsMember('rooms', roomId))) {
-        ws.close(1008, 'Invalid room');
-        return;
-    }
-    // join room
-    if (!rooms.has(roomId)) rooms.set(roomId, new Set());
-    rooms.get(roomId).add(ws);
 
-    ws.on('message', async raw => {
-        const msg = JSON.parse(raw);
-        // persist stats
-        if (msg.type === 'click')
-            await redis.hIncrBy(`stats:${roomId}`, 'clicks', 1);
-
-        // broadcast to others in same room
-        for (const client of rooms.get(roomId)) {
-            if (client !== ws && client.readyState === client.OPEN)
-                client.send(raw);
+    (async () => {
+        const valid = await redis.sIsMember('rooms', roomId);
+        if (!roomId || !valid) {
+            ws.close(1008, 'Invalid room');
+            return;
         }
-    });
 
-    ws.on('close', () => {
-        rooms.get(roomId)?.delete(ws);
-    });
+        if (!rooms.has(roomId)) rooms.set(roomId, new Set());
+        rooms.get(roomId).add(ws);
+
+        ws.on('message', async raw => {
+            const msg = JSON.parse(raw);
+            if (msg.type === 'click') {
+                await redis.hIncrBy(`stats:${roomId}`, 'clicks', 1);
+            }
+
+            for (const client of rooms.get(roomId)) {
+                if (client !== ws && client.readyState === ws.OPEN) {
+                    client.send(raw);
+                }
+            }
+        });
+
+        ws.on('close', () => {
+            rooms.get(roomId)?.delete(ws);
+        });
+    })();
 });
 
 const PORT = process.env.PORT || 3000;

@@ -19,7 +19,6 @@ const streamers = JSON.parse(await fs.readFile('streamers.json', 'utf8'));
 console.log("✅ Loaded streamers.json:");
 console.log(Object.entries(streamers).map(([name, s]) => `${name} → ${s.roomId}`));
 
-
 function roomExists(roomId) {
     return Object.values(streamers).some(s => s.roomId === roomId);
 }
@@ -34,7 +33,6 @@ const app = express();
 const http = createServer(app);
 const wss = new WebSocketServer({ server: http, path: '/ws' });
 
-app.use(express.static('public'));
 app.use(express.urlencoded({ extended: true }));
 app.use(session({
     secret: process.env.SESSION_SECRET,
@@ -123,6 +121,11 @@ wss.on('connection', ws => {
 
     ws.on('close', () => sockets.get(roomId)?.delete(ws));
 });
+
+// ───────────────────────────────────────────────────
+// 6. Static files – placed LAST
+
+app.use(express.static('public'));
 
 // ───────────────────────────────────────────────────
 

@@ -1,15 +1,14 @@
-﻿/* cluster.js – robust, overlap‐free, smoothed clustering */
+﻿/* cluster.js – clean spatial merge: combine only if circles touch */
 export function clusterize(points, cfg) {
-    const { eps, minPct, maxN, minR, k } = cfg;
+    const { eps, minPct, maxN, minR, maxR, k } = cfg;
     if (!points.length) return [];
 
-    // 1️⃣ Seed clusters by proximity (eps)
+    // 1. Seed: group nearby points (distance < eps)
     const seeds = [];
     for (const p of points) {
         let best = null, bestD2 = eps * eps;
         for (const c of seeds) {
-            const dx = p.x - c.x, dy = p.y - c.y;
-            const d2 = dx * dx + dy * dy;
+            const dx = p.x - c.x, dy = p.y - c.y, d2 = dx * dx + dy * dy;
             if (d2 < bestD2) {
                 bestD2 = d2;
                 best = c;
@@ -24,46 +23,59 @@ export function clusterize(points, cfg) {
         }
     }
 
-    // radius function
-    const radiusFor = w => Math.min(cfg.maxR, minR + Math.log2(w + 1) * k);
+    // 2. Compute radius
+    const radius = w => Math.min(maxR, minR + Math.log2(w + 1) * k);
+    seeds.forEach(c => c.r = radius(c.w));
 
-    // 2️⃣ Iterative merge until no overlaps
-    let list = seeds;
-    let merged, again = true;
-    while (again) {
-        again = false;
-        merged = [];
-        while (list.length) {
-            let base = list.pop();
-            let bx = base.x, by = base.y, bw = base.w;
-            for (let i = list.length - 1; i >= 0; i--) {
-                const other = list[i];
-                const dx = bx - other.x, dy = by - other.y;
-                const dist = Math.hypot(dx, dy);
-                const sumR = radiusFor(bw) + radiusFor(other.w);
-                if (dist < sumR * 0.6) {  // only merge if circles truly overlap
-                    // merge other into base
-                    bw += other.w;
-                    bx += (other.x - bx) * (other.w / bw);
-                    by += (other.y - by) * (other.w / bw);
-                    list.splice(i, 1);
-                    again = true;
+    // 3. Merge clusters only if circles touch
+    let merged = [...seeds];
+    let changed = true;
+
+    while (changed) {
+        changed = false;
+        const result = [];
+
+        while (merged.length) {
+            const a = merged.pop();
+            let mergedA = false;
+
+            for (let i = merged.length - 1; i >= 0; i--) {
+                const b = merged[i];
+                const dx = a.x - b.x;
+                const dy = a.y - b.y;
+                const d = Math.hypot(dx, dy);
+
+                if (d < a.r + b.r) {
+                    // Merge a and b
+                    const total = a.w + b.w;
+                    const nx = (a.x * a.w + b.x * b.w) / total;
+                    const ny = (a.y * a.w + b.y * b.w) / total;
+                    const nw = total;
+                    merged.push({ x: nx, y: ny, w: nw, r: radius(nw) });
+                    merged.splice(i, 1);
+                    mergedA = true;
+                    changed = true;
+                    break;
                 }
             }
-            merged.push({ x: bx, y: by, w: bw });
+
+            if (!mergedA) {
+                result.push(a);
+            }
         }
-        list = merged;
+
+        merged = result;
     }
 
-    // 3️⃣ Finalize stats, filter, sort, limit
+    // 4. Final format
     const total = points.length;
-    return list
+    return merged
         .map(c => ({
             x: c.x,
             y: c.y,
             w: c.w,
             pct: (c.w / total) * 100,
-            r: radiusFor(c.w)
+            r: radius(c.w)
         }))
         .filter(c => c.pct >= minPct && c.r >= 8)
         .sort((a, b) => b.w - a.w)

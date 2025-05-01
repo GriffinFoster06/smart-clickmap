@@ -75,9 +75,10 @@ setInterval(() => { if (active) render(clusterize(clicks, cfg), cfg); }, 300);
 
 // Fixed Apply & Reload
 document.getElementById('applyCfg').onclick = () => {
-    const pct = document.getElementById('cfgPct').value || cfg.minPct;
-    const mx = document.getElementById('cfgMax').value || cfg.maxN;
-    const mr = document.getElementById('cfgMerge').value || cfg.eps;
-    // Reload current admin page with new query params
-    window.location.href = `${location.pathname}?minPct=${pct}&maxClusters=${mx}&mergeRadius=${mr}`;
+    const params = new URLSearchParams(window.location.search);
+    params.set('minPct', document.getElementById('cfgPct').value);
+    params.set('maxClusters', document.getElementById('cfgMax').value);
+    params.set('mergeRadius', document.getElementById('cfgMerge').value);
+    window.location.search = params.toString();  // reloads, preserves path
 };
+

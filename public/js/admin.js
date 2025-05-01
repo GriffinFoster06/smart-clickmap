@@ -60,7 +60,7 @@ setInterval(() => {
         if (!active) return;
 
         if (m.type === 'click') {
-            clicks.push({ x: m.x, y: m.y });
+            clicks.push({ x: m.x, y: m.y });d
             clickEl.textContent = `${clicks.length} clicks`;
         }
 

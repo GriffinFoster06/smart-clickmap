@@ -1,66 +1,64 @@
-﻿/* cluster.js – Smart clustering with visual overlap merging
- *
- * Turns raw clicks into clusters:
- * 1. DBSCAN-style point grouping
- * 2. Merge visually overlapping clusters
- * 3. Compute radius and percentages
- */
+﻿/* cluster.js – Accurate visual cluster merging with radius tracking */
 
 export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
     if (!points.length) return [];
 
     const total = points.length;
-    const rawClusters = [];
+    const clusters = [];
 
-    // 1️⃣ First-pass point-to-cluster grouping
-    points.forEach(point => {
+    // Step 1: Group nearby points into initial clusters
+    points.forEach(p => {
         let nearest = null;
         let bestDist2 = eps * eps;
 
-        for (const c of rawClusters) {
-            const dx = point.x - c.x;
-            const dy = point.y - c.y;
-            const dist2 = dx * dx + dy * dy;
-
-            if (dist2 < bestDist2) {
-                bestDist2 = dist2;
+        for (const c of clusters) {
+            const dx = p.x - c.x;
+            const dy = p.y - c.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < bestDist2) {
+                bestDist2 = d2;
                 nearest = c;
             }
         }
 
         if (nearest) {
             nearest.w += 1;
-            nearest.x += (point.x - nearest.x) / nearest.w;
-            nearest.y += (point.y - nearest.y) / nearest.w;
+            nearest.x += (p.x - nearest.x) / nearest.w;
+            nearest.y += (p.y - nearest.y) / nearest.w;
+            nearest.r = radiusForWeight(nearest.w); // update radius
         } else {
-            rawClusters.push({ x: point.x, y: point.y, w: 1 });
+            clusters.push({
+                x: p.x,
+                y: p.y,
+                w: 1,
+                r: radiusForWeight(1)
+            });
         }
     });
 
-    // 2️⃣ Second-pass: merge overlapping clusters (based on visual radius)
+    // Step 2: Merge overlapping clusters (distance < ra + rb)
     let changed = true;
     while (changed) {
         changed = false;
 
-        outer: for (let i = 0; i < rawClusters.length; i++) {
-            for (let j = i + 1; j < rawClusters.length; j++) {
-                const a = rawClusters[i];
-                const b = rawClusters[j];
+        outer: for (let i = 0; i < clusters.length; i++) {
+            for (let j = i + 1; j < clusters.length; j++) {
+                const a = clusters[i];
+                const b = clusters[j];
 
                 const dx = a.x - b.x;
                 const dy = a.y - b.y;
                 const distance = Math.sqrt(dx * dx + dy * dy);
 
-                const ra = radiusForWeight(a.w);
-                const rb = radiusForWeight(b.w);
+                if (distance < a.r + b.r) {
+                    // Merge b into a
+                    const totalW = a.w + b.w;
+                    a.x = (a.x * a.w + b.x * b.w) / totalW;
+                    a.y = (a.y * a.w + b.y * b.w) / totalW;
+                    a.w = totalW;
+                    a.r = radiusForWeight(a.w); // update radius
 
-                if (distance < ra + rb) {
-                    const totalWeight = a.w + b.w;
-                    a.x = (a.x * a.w + b.x * b.w) / totalWeight;
-                    a.y = (a.y * a.w + b.y * b.w) / totalWeight;
-                    a.w = totalWeight;
-
-                    rawClusters.splice(j, 1);
+                    clusters.splice(j, 1); // remove b
                     changed = true;
                     break outer;
                 }
@@ -68,22 +66,22 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
         }
     }
 
-    // 3️⃣ Finalize: add radius and % info
-    const clusters = rawClusters.map(c => ({
+    // Step 3: Finalize clusters with pct and clean structure
+    const result = clusters.map(c => ({
         x: c.x,
         y: c.y,
         w: c.w,
-        pct: (c.w / total) * 100,
-        r: radiusForWeight(c.w)
+        r: c.r,
+        pct: (c.w / total) * 100
     }));
 
-    // 4️⃣ Filter and return sorted top-N clusters
-    return clusters
+    return result
         .filter(c => c.pct >= minPct && c.r >= 8)
         .sort((a, b) => b.w - a.w)
         .slice(0, maxN);
 }
 
+/** Convert weight (click count) to visual radius */
 function radiusForWeight(w) {
     const MIN_RADIUS = 12;
     const MAX_RADIUS = 64;

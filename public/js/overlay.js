@@ -1,19 +1,35 @@
 ﻿import { getRoomId, socketFor } from './util.js';
-import { drawDot, clearHeat } from './heatmap.js';
+import { initCanvas, drawClusters, clearHeat } from './heatmap.js';
+import { clusterize } from './cluster.js';
 
-export async function connect() {
-    const room = getRoomId();
+initCanvas();
+const room = getRoomId();
+let active = true;
+const allClicks = [];    // local cache
 
-    // 1. Load saved clicks
-    const saved = await fetch(`/api/clicks/${room}`).then(r => r.json());
-    saved.forEach(({ x, y }) => drawDot(x, y));
+(async () => {
+    const [saved, act] = await Promise.all([
+        fetch(`/api/clicks/${room}`).then(r => r.json()),
+        fetch(`/api/active/${room}`).then(r => r.json())
+    ]);
+    allClicks.push(...saved);
+    active = act.active;
+    drawClusters(clusterize(allClicks));
 
-    // 2. Connect WebSocket (protocol = roomId)
     const ws = socketFor(room, room);
-
     ws.onmessage = e => {
         const m = JSON.parse(e.data);
-        if (m.type === 'click') drawDot(m.x, m.y);
-        if (m.type === 'reset') clearHeat();
+
+        if (m.type === 'active') { active = m.active; if (!active) clearHeat(); return; }
+        if (!active) return;
+
+        if (m.type === 'click') {
+            allClicks.push({ x: m.x, y: m.y });
+            drawClusters(clusterize(allClicks));
+        }
+        if (m.type === 'reset') {
+            allClicks.length = 0;
+            clearHeat();
+        }
     };
-}
+})();

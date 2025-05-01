@@ -1,24 +1,25 @@
 ﻿<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
+    <meta charset="UTF-8">
     <title>Heat-Map Admin</title>
-    <link rel="stylesheet" href="/css/admin.css" />
+    <link rel="stylesheet" href="/css/admin.css">
 </head>
 <body>
     <div id="stats">
         <span id="clicks">0 clicks</span>
-        <span id="users">0 users</span>
     </div>
-    <canvas id="mini" width="240" height="135"></canvas>
+
+    <canvas id="heat" width="240" height="135"></canvas>
+
     <div id="controls">
         <button id="start">Start</button>
         <button id="stop">Stop</button>
         <button id="reset">Reset</button>
+        <span id="state" style="margin-left:8px;font-weight:bold;color:#0f0;">RUNNING</span>
     </div>
-    <script type="module">
-        import { adminInit } from '/js/admin.js';
-        adminInit();
-    </script>
+
+    <script type="module" src="/js/heatmap.js"></script>
+    <script type="module" src="/js/admin.js"></script>
 </body>
 </html>

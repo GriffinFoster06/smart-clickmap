@@ -1,12 +1,10 @@
-﻿/* cluster.js – Accurate visual cluster merging with radius tracking */
-
-export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
+﻿export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
     if (!points.length) return [];
 
     const total = points.length;
     const clusters = [];
 
-    // Step 1: Group nearby points into initial clusters
+    // Step 1: Group nearby points
     points.forEach(p => {
         let nearest = null;
         let bestDist2 = eps * eps;
@@ -14,29 +12,24 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
         for (const c of clusters) {
             const dx = p.x - c.x;
             const dy = p.y - c.y;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < bestDist2) {
-                bestDist2 = d2;
+            const dist2 = dx * dx + dy * dy;
+            if (dist2 < bestDist2) {
+                bestDist2 = dist2;
                 nearest = c;
             }
         }
 
         if (nearest) {
-            nearest.w += 1;
+            nearest.w++;
             nearest.x += (p.x - nearest.x) / nearest.w;
             nearest.y += (p.y - nearest.y) / nearest.w;
-            nearest.r = radiusForWeight(nearest.w); // update radius
+            nearest.r = radiusForWeight(nearest.w);
         } else {
-            clusters.push({
-                x: p.x,
-                y: p.y,
-                w: 1,
-                r: radiusForWeight(1)
-            });
+            clusters.push({ x: p.x, y: p.y, w: 1, r: radiusForWeight(1) });
         }
     });
 
-    // Step 2: Merge overlapping clusters (distance < ra + rb)
+    // Step 2: Merge overlapping clusters
     let changed = true;
     while (changed) {
         changed = false;
@@ -48,17 +41,20 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
 
                 const dx = a.x - b.x;
                 const dy = a.y - b.y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
+                const dist = Math.sqrt(dx * dx + dy * dy);
 
-                if (distance < a.r + b.r) {
-                    // Merge b into a
+                if (dist < a.r + b.r) {
+                    console.log(`🔁 Merging clusters #${i} + #${j}`);
+                    console.log(`  A: (${a.x.toFixed(2)},${a.y.toFixed(2)}) w=${a.w}`);
+                    console.log(`  B: (${b.x.toFixed(2)},${b.y.toFixed(2)}) w=${b.w}`);
+
                     const totalW = a.w + b.w;
                     a.x = (a.x * a.w + b.x * b.w) / totalW;
                     a.y = (a.y * a.w + b.y * b.w) / totalW;
                     a.w = totalW;
-                    a.r = radiusForWeight(a.w); // update radius
+                    a.r = radiusForWeight(a.w);
 
-                    clusters.splice(j, 1); // remove b
+                    clusters.splice(j, 1);
                     changed = true;
                     break outer;
                 }
@@ -66,7 +62,6 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
         }
     }
 
-    // Step 3: Finalize clusters with pct and clean structure
     const result = clusters.map(c => ({
         x: c.x,
         y: c.y,
@@ -81,10 +76,7 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
         .slice(0, maxN);
 }
 
-/** Convert weight (click count) to visual radius */
 function radiusForWeight(w) {
-    const MIN_RADIUS = 12;
-    const MAX_RADIUS = 64;
-    const SCALE = 8;
-    return Math.min(MAX_RADIUS, MIN_RADIUS + Math.log2(w + 1) * SCALE);
+    const MIN = 12, MAX = 64, K = 8;
+    return Math.min(MAX, MIN + Math.log2(w + 1) * K);
 }

@@ -1,7 +1,26 @@
-﻿// drawBlobs(ctx, blobs)
-// blobs = [{ x, y, pct, isTop }]
+﻿const canvas = document.getElementById('heat');
+const ctx = canvas.getContext('2d');
 
-export function drawBlobs(ctx, blobs) {
+function drawDot(x, y, size = 20) {
+    const cx = canvas.width * x;
+    const cy = canvas.height * y;
+
+    const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, size);
+    gradient.addColorStop(0, 'rgba(255,0,0,0.5)');
+    gradient.addColorStop(1, 'rgba(255,0,0,0)');
+
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(cx, cy, size, 0, 2 * Math.PI);
+    ctx.fill();
+}
+
+function clearHeat() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+// Optional advanced blobs renderer
+function drawBlobs(ctx, blobs) {
     const W = ctx.canvas.width;
     const H = ctx.canvas.height;
     ctx.clearRect(0, 0, W, H);
@@ -31,5 +50,5 @@ export function drawBlobs(ctx, blobs) {
     });
 }
 
-// expose these to overlay.js/admin.js
-export { drawDot, clearHeat };
+// Export all 3
+export { drawDot, clearHeat, drawBlobs };

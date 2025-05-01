@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Click on Stream</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         html, body {
             margin: 0;
@@ -18,19 +19,17 @@
 
         iframe {
             position: absolute;
-            top: 0;
-            left: 0;
+            inset: 0;
             width: 100%;
             height: 100%;
-            pointer-events: none;
             border: none;
+            pointer-events: none;
             z-index: 0
         }
 
         canvas {
             position: absolute;
-            top: 0;
-            left: 0;
+            inset: 0;
             width: 100%;
             height: 100%;
             pointer-events: auto;
@@ -44,14 +43,17 @@
         <canvas id="heat" width="1920" height="1080"></canvas>
     </div>
 
+    <!-- auto-embed correct Twitch channel -->
     <script type="module">
         import { getRoomId } from '/js/util.js';
         const user = getRoomId().replace(/^room-/, '');
         document.getElementById('stream').src =
             `https://player.twitch.tv/?channel=${user}&parent=${location.hostname}&muted=true`;
     </script>
-    <script type="module" src="/js/heatmap.js"></script>
+
+    <script type="module" src="/js/util.js"></script>
     <script type="module" src="/js/cluster.js"></script>
+    <script type="module" src="/js/heatmap.js"></script>
     <script type="module" src="/js/room.js"></script>
 </body>
 </html>

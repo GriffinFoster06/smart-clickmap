@@ -1,65 +1,85 @@
-import { getRoomId, socketFor } from './util.js';
-import { boot, render, clear } from './heatmap.js';
-import { clusterize } from './cluster.js';
+/* room.js – Interactive viewer page
+ *
+ * - Shows embedded stream with a canvas overlay
+ * - Viewers click directly on the canvas
+ * - Clicks are sent to the server via WebSocket
+ * - Recomputes & displays clusters every 300ms
+ */
 
-boot();
+import { getRoomId, socketFor } from '/js/util.js';
+import { initCanvas, drawClusters, clearHeat } from '/js/heatmap.js';
+import { clusterize } from '/js/cluster.js';
+
+// Initialize canvas context
+initCanvas();
+
+// Get roomId from URL
 const room = getRoomId();
-const qp = new URLSearchParams(location.search);
 
-const cfg = {
-    minPct: +qp.get('minPct') || 5,
-    maxN: +qp.get('maxClusters') || 10,
-    minR: +qp.get('minR') || 12,
-    k: +qp.get('scaleFactor') || 8,
-    maxR: 64,
-    topColor: 'lime',
-    clusterColor: 'white',
-    topStroke: 3,
-    otherStroke: 2,
-    fontScale: 0.55
-};
+// Allow config overrides via query params
+const params = new URLSearchParams(window.location.search);
+const minPct = Number(params.get('minPct')) || 5;
+const maxClusters = Number(params.get('maxClusters')) || 10;
 
+// Track state
 let active = true;
 const clicks = [];
 
+// Redraw clusters periodically
 setInterval(() => {
-    if (active) render(clusterize(clicks, cfg), cfg);
+    if (active) {
+        const clusters = clusterize(clicks, 0.03, minPct, maxClusters);
+        drawClusters(clusters);
+    }
 }, 300);
 
 (async () => {
-    const [saved, act] = await Promise.all([
-        fetch(`/api/clicks/${room}`).then(r => r.json()),
-        fetch(`/api/active/${room}`).then(r => r.json())
+    // Load stored clicks + active status
+    const [saved, status] = await Promise.all([
+        fetch(`/api/clicks/${room}`).then(res => res.json()),
+        fetch(`/api/active/${room}`).then(res => res.json())
     ]);
 
     clicks.push(...saved);
-    active = act.active;
-    render(clusterize(clicks, cfg), cfg);
+    active = status.active;
 
+    // Connect to WebSocket
     const ws = socketFor(room, room);
-    ws.onmessage = e => {
-        let m; try { m = JSON.parse(e.data); } catch { return; }
+    ws.onmessage = (e) => {
+        let msg;
+        try {
+            msg = JSON.parse(e.data);
+        } catch {
+            return;
+        }
 
-        if (m.type === 'active') {
-            active = m.active;
-            if (!active) clear();
+        if (msg.type === 'active') {
+            active = msg.active;
+            if (!active) clearHeat();
             return;
         }
 
         if (!active) return;
 
-        if (m.type === 'click') clicks.push({ x: m.x, y: m.y });
-        if (m.type === 'reset') {
+        if (msg.type === 'click') {
+            clicks.push({ x: msg.x, y: msg.y });
+        }
+
+        if (msg.type === 'reset') {
             clicks.length = 0;
-            clear();
+            clearHeat();
         }
     };
 
-    document.getElementById('heat').addEventListener('click', ev => {
+    // Handle viewer clicks
+    const canvas = document.getElementById('heat');
+    canvas.addEventListener('click', (e) => {
         if (!active) return;
-        const r = ev.currentTarget.getBoundingClientRect();
-        const x = (ev.clientX - r.left) / r.width;
-        const y = (ev.clientY - r.top) / r.height;
+
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+
         ws.send(JSON.stringify({ type: 'click', x, y }));
         clicks.push({ x, y });
     });

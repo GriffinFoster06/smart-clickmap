@@ -1,48 +1,65 @@
-﻿/* cluster.js – cluster-by-points then merge overlapping clusters */
+﻿/* cluster.js – Smart clustering with visual overlap merging
+ *
+ * Turns raw clicks into clusters:
+ * 1. DBSCAN-style point grouping
+ * 2. Merge visually overlapping clusters
+ * 3. Compute radius and percentages
+ */
 
 export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
     if (!points.length) return [];
+
     const total = points.length;
     const rawClusters = [];
 
-    // 1️⃣ First-pass point clustering
-    points.forEach(p => {
-        let nearest = null, bestD2 = eps * eps;
+    // 1️⃣ First-pass point-to-cluster grouping
+    points.forEach(point => {
+        let nearest = null;
+        let bestDist2 = eps * eps;
+
         for (const c of rawClusters) {
-            const dx = p.x - c.x, dy = p.y - c.y;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < bestD2) {
-                bestD2 = d2;
+            const dx = point.x - c.x;
+            const dy = point.y - c.y;
+            const dist2 = dx * dx + dy * dy;
+
+            if (dist2 < bestDist2) {
+                bestDist2 = dist2;
                 nearest = c;
             }
         }
+
         if (nearest) {
-            nearest.w++;
-            nearest.x += (p.x - nearest.x) / nearest.w;
-            nearest.y += (p.y - nearest.y) / nearest.w;
+            nearest.w += 1;
+            nearest.x += (point.x - nearest.x) / nearest.w;
+            nearest.y += (point.y - nearest.y) / nearest.w;
         } else {
-            rawClusters.push({ x: p.x, y: p.y, w: 1 });
+            rawClusters.push({ x: point.x, y: point.y, w: 1 });
         }
     });
 
-    // 2️⃣ Merge overlapping clusters (distance < sum of radii)
+    // 2️⃣ Second-pass: merge overlapping clusters (based on visual radius)
     let changed = true;
     while (changed) {
         changed = false;
+
         outer: for (let i = 0; i < rawClusters.length; i++) {
             for (let j = i + 1; j < rawClusters.length; j++) {
-                const a = rawClusters[i], b = rawClusters[j];
-                const dx = a.x - b.x, dy = a.y - b.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
+                const a = rawClusters[i];
+                const b = rawClusters[j];
+
+                const dx = a.x - b.x;
+                const dy = a.y - b.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
 
                 const ra = radiusForWeight(a.w);
                 const rb = radiusForWeight(b.w);
 
-                if (dist < (ra + rb)) {
-                    const totalW = a.w + b.w;
-                    a.x = (a.x * a.w + b.x * b.w) / totalW;
-                    a.y = (a.y * a.w + b.y * b.w) / totalW;
-                    a.w = totalW;
+                if (distance < ra + rb) {
+                    const totalWeight = a.w + b.w;
+                    a.x = (a.x * a.w + b.x * b.w) / totalWeight;
+                    a.y = (a.y * a.w + b.y * b.w) / totalWeight;
+                    a.w = totalWeight;
+
                     rawClusters.splice(j, 1);
                     changed = true;
                     break outer;
@@ -51,7 +68,7 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
         }
     }
 
-    // 3️⃣ Finalize clusters
+    // 3️⃣ Finalize: add radius and % info
     const clusters = rawClusters.map(c => ({
         x: c.x,
         y: c.y,
@@ -60,6 +77,7 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
         r: radiusForWeight(c.w)
     }));
 
+    // 4️⃣ Filter and return sorted top-N clusters
     return clusters
         .filter(c => c.pct >= minPct && c.r >= 8)
         .sort((a, b) => b.w - a.w)
@@ -67,6 +85,8 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
 }
 
 function radiusForWeight(w) {
-    const MIN_R = 12, MAX_R = 64, K = 8;
-    return Math.min(MAX_R, MIN_R + Math.log2(w + 1) * K);
+    const MIN_RADIUS = 12;
+    const MAX_RADIUS = 64;
+    const SCALE = 8;
+    return Math.min(MAX_RADIUS, MIN_RADIUS + Math.log2(w + 1) * SCALE);
 }

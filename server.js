@@ -139,11 +139,15 @@ wss.on('connection', ws => {
         // Handle reset
         if (msg.type === 'reset') {
             await redis.del(`clicks:${roomId}`);
+            await redis.set(ACTIVE_KEY(roomId), '0');    // pause after reset
+            active.set(roomId, false);
             for (const c of sockets.get(roomId)) {
-                if (c.readyState === c.OPEN) c.send(buf);
+                if (c.readyState === c.OPEN) c.send(JSON.stringify({ type: 'reset' }));
+                if (c.readyState === c.OPEN) c.send(JSON.stringify({ type: 'active', active: false }));
             }
             return;
         }
+
 
         // Handle clicks
         if (msg.type === 'click') {

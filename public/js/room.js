@@ -4,38 +4,41 @@ import { clusterize } from '/js/cluster.js';
 
 initCanvas();
 const room = getRoomId();
-let active = true;
-const allClicks = [];
+const params = new URLSearchParams(location.search);
+const minPct = Number(params.get('minPct')) || 5;
+const maxClusters = Number(params.get('maxClusters')) || 10;
 
-const toScreenClusters = () => drawClusters(clusterize(allClicks));
+let active = true;
+const clicks = [];
+
+const recompute = () => drawClusters(clusterize(clicks, minPct, maxClusters));
+setInterval(() => { if (active) recompute(); }, 300);
 
 (async () => {
     const [saved, act] = await Promise.all([
         fetch(`/api/clicks/${room}`).then(r => r.json()),
         fetch(`/api/active/${room}`).then(r => r.json())
     ]);
-    allClicks.push(...saved);
+    clicks.push(...saved);
     active = act.active;
-    toScreenClusters();
+    recompute();
 
     const ws = socketFor(room, room);
     ws.onmessage = e => {
-        const m = JSON.parse(e.data);
-        if (m.type === 'active') { active = m.active; if (!active) clearHeat(); return; }
+        try { var m = JSON.parse(e.data); } catch { return; }
+        if (m.type === 'active') { active = m.active; return; }
         if (!active) return;
 
-        if (m.type === 'click') { allClicks.push({ x: m.x, y: m.y }); toScreenClusters(); }
-        if (m.type === 'reset') { allClicks.length = 0; clearHeat(); }
+        if (m.type === 'click') { clicks.push({ x: m.x, y: m.y }); }
+        if (m.type === 'reset') { clicks.length = 0; clearHeat(); }
     };
 
-    // click capture
-    const canvas = document.getElementById('heat');
-    canvas.addEventListener('click', e => {
+    document.getElementById('heat').addEventListener('click', e => {
         if (!active) return;
-        const r = canvas.getBoundingClientRect();
+        const r = e.currentTarget.getBoundingClientRect();
         const x = (e.clientX - r.left) / r.width;
         const y = (e.clientY - r.top) / r.height;
         ws.send(JSON.stringify({ type: 'click', x, y }));
-        allClicks.push({ x, y }); toScreenClusters();
+        clicks.push({ x, y });
     });
 })();

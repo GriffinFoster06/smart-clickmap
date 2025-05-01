@@ -26,7 +26,7 @@ const render = () => drawClusters(clusterize(allClicks));
     const ws = socketFor(room, room);
     ws.onmessage = e => {
         const m = JSON.parse(e.data);
-        if (m.type === 'active') { active = m.active; stateEl.textContent = active ? 'RUNNING' : 'PAUSED'; if (!active) clearHeat(); return; }
+        if (m.type === 'active') { active = m.active; stateEl.textContent = active ? 'RUNNING' : 'PAUSED'; return; }
         if (!active) return;
 
         if (m.type === 'click') { allClicks.push({ x: m.x, y: m.y }); clickEl.textContent = `${allClicks.length} clicks`; render(); }

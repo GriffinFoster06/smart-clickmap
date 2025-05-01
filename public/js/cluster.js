@@ -1,44 +1,41 @@
-/* cluster.js  � organic, grid-less click clustering */
-export function clusterize(clicks, mergeRadius = 0.03) {
+﻿/* cluster.js – smart, dynamic, grid-less clustering */
+
+export function clusterize(clicks, minPct = 5, maxClusters = 10) {
+    if (!clicks.length) return [];
+
+    /* 1️⃣  distance-based clustering */
+    const MERGE_R = 0.03;                 // 3 % of screen diag
     const clusters = [];
 
-    clicks.forEach(({ x, y }) => {
-        // find nearest cluster within mergeRadius
-        let nearest = null;
-        let minD2 = mergeRadius * mergeRadius;
-
+    clicks.forEach(pt => {
+        let best = null; let bestD2 = MERGE_R * MERGE_R;
         for (const c of clusters) {
-            const dx = x - c.x;
-            const dy = y - c.y;
+            const dx = pt.x - c.x;
+            const dy = pt.y - c.y;
             const d2 = dx * dx + dy * dy;
-            if (d2 < minD2) { minD2 = d2; nearest = c; }
+            if (d2 < bestD2) { bestD2 = d2; best = c; }
         }
-
-        if (nearest) {
-            // merge: incremental centroid update
-            nearest.count += 1;
-            nearest.x += (x - nearest.x) / nearest.count;
-            nearest.y += (y - nearest.y) / nearest.count;
+        if (best) {
+            best.count += 1;
+            best.x += (pt.x - best.x) / best.count;
+            best.y += (pt.y - best.y) / best.count;
         } else {
-            clusters.push({ x, y, count: 1 });
+            clusters.push({ ...pt, count: 1 });
         }
     });
 
-    // total for %
-    const total = clicks.length || 1;
+    /* 2️⃣  compute stats */
+    const total = clicks.length;
+    const MIN_R = 12, MAX_R = 60, K = 7;
 
-    // radius scaling constants
-    const MIN_R = 12;
-    const MAX_R = 60;
-    const K = 7;          // scaling factor for log
+    clusters.forEach(c => {
+        c.pct = (c.count / total) * 100;
+        c.radius = Math.min(MAX_R, MIN_R + Math.log2(c.count + 1) * K);
+    });
 
-    // finalize props & prune small blobs
+    /* 3️⃣  filter + sort */
     return clusters
-        .map(c => ({
-            ...c,
-            pct: (c.count / total) * 100,
-            radius: Math.min(MAX_R, MIN_R + Math.log2(c.count + 1) * K)
-        }))
-        .filter(c => c.radius >= 8)          // prune invisibles
-        .sort((a, b) => b.count - a.count);  // top first
+        .filter(c => c.pct >= minPct && c.radius >= 8)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, maxClusters);
 }

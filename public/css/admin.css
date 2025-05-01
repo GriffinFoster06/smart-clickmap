@@ -41,3 +41,10 @@
     #restart:hover {
         background: #7e5cf7;
     }
+
+#heat {
+    width: 240px;
+    height: 135px;
+    border: 1px solid #555;
+    image-rendering: pixelated; /* keeps blobs sharp */
+}

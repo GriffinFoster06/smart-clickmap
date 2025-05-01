@@ -4,13 +4,12 @@ import { clusterize } from './cluster.js';
 
 boot();
 const room = getRoomId();
-const qp = new URLSearchParams(location.search);
 
-const cfg = {
-    minPct: +qp.get('minPct') || 5,
-    maxN: +qp.get('maxClusters') || 10,
-    minR: +qp.get('minR') || 12,
-    k: +qp.get('scaleFactor') || 8,
+let cfg = {
+    minPct: 5,
+    maxN: 10,
+    minR: 12,
+    k: 8,
     maxR: 64,
     topColor: 'lime',
     clusterColor: 'white',
@@ -19,14 +18,18 @@ const cfg = {
     fontScale: 0.55
 };
 
-let active = true;
 const clicks = [];
+let active = true;
 
 const clickEl = document.getElementById('clicks');
 const stateEl = document.getElementById('state');
 
+function updateAndRender() {
+    render(clusterize(clicks, cfg), cfg);
+}
+
 setInterval(() => {
-    if (active) render(clusterize(clicks, cfg), cfg);
+    if (active) updateAndRender();
 }, 300);
 
 (async () => {
@@ -37,13 +40,15 @@ setInterval(() => {
 
     clicks.push(...saved);
     active = act.active;
+
     clickEl.textContent = `${clicks.length} clicks`;
     stateEl.textContent = active ? 'RUNNING' : 'PAUSED';
-    render(clusterize(clicks, cfg), cfg);
+    updateAndRender();
 
     const ws = socketFor(room, room);
     ws.onmessage = e => {
-        let m; try { m = JSON.parse(e.data); } catch { return; }
+        let m;
+        try { m = JSON.parse(e.data); } catch { return; }
 
         if (m.type === 'active') {
             active = m.active;
@@ -71,11 +76,19 @@ setInterval(() => {
     document.getElementById('reset').onclick = () => ws.send('{"type":"reset"}');
 })();
 
+// 🚀 Apply without reload
 document.getElementById('applyCfg').onclick = () => {
+    cfg.minPct = parseFloat(document.getElementById('cfgPct').value) || cfg.minPct;
+    cfg.maxN = parseInt(document.getElementById('cfgMax').value) || cfg.maxN;
+    cfg.minR = parseFloat(document.getElementById('cfgMinR').value) || cfg.minR;
+    cfg.k = parseFloat(document.getElementById('cfgK').value) || cfg.k;
+    updateAndRender();
+
+    // Optional: reflect new config in URL for sharing/debugging
     const url = new URL(window.location.href);
-    url.searchParams.set('minPct', document.getElementById('cfgPct').value);
-    url.searchParams.set('maxClusters', document.getElementById('cfgMax').value);
-    url.searchParams.set('minR', document.getElementById('cfgMinR').value);
-    url.searchParams.set('scaleFactor', document.getElementById('cfgK').value);
-    window.location = url;
+    url.searchParams.set('minPct', cfg.minPct);
+    url.searchParams.set('maxClusters', cfg.maxN);
+    url.searchParams.set('minR', cfg.minR);
+    url.searchParams.set('scaleFactor', cfg.k);
+    window.history.replaceState({}, '', url);
 };

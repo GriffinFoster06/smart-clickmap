@@ -1,38 +1,43 @@
 ﻿/* cluster.js – smart, dynamic, grid-less clustering */
-export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
-    if (!points.length) return [];
-    const total = points.length;
+
+export function clusterize(clicks, minPct = 5, maxClusters = 10) {
+    if (!clicks.length) return [];
+
+    /* 1️⃣  distance-based clustering */
+    const MERGE_R = 0.03;                 // 3 % of screen diag
     const clusters = [];
 
-    // 1️⃣  Merge by proximity (DBSCAN-lite)
-    points.forEach(p => {
-        let best = null, bestD2 = eps * eps;
+    clicks.forEach(pt => {
+        let best = null; let bestD2 = MERGE_R * MERGE_R;
         for (const c of clusters) {
-            const dx = p.x - c.x, dy = p.y - c.y;
+            const dx = pt.x - c.x;
+            const dy = pt.y - c.y;
             const d2 = dx * dx + dy * dy;
             if (d2 < bestD2) { bestD2 = d2; best = c; }
         }
         if (best) {
-            best.w++;
-            best.x += (p.x - best.x) / best.w;
-            best.y += (p.y - best.y) / best.w;
+            best.count += 1;
+            best.x += (pt.x - best.x) / best.count;
+            best.y += (pt.y - best.y) / best.count;
         } else {
-            clusters.push({ ...p, w: 1 }); // Fixed typo: changed `pt` to `p` and corrected property name to `w`
+            clusters.push({ ...pt, count: 1 });
         }
     });
 
-    // 2️⃣  Compute stats & radius
-    const MIN_R = 12, MAX_R = 64, K = 8;
+    /* 2️⃣  compute stats */
+    const total = clicks.length;
+    const MIN_R = 12, MAX_R = 60, K = 7;
+
     clusters.forEach(c => {
-        c.pct = (c.w / total) * 100;
-        c.r = Math.min(MAX_R, MIN_R + Math.log2(c.w + 1) * K);
+        c.pct = (c.count / total) * 100;
+        c.radius = Math.min(MAX_R, MIN_R + Math.log2(c.count + 1) * K);
     });
 
-    // 3️⃣  Filter, sort, limit
+    /* 3️⃣  filter + sort */
     return clusters
-        .filter(c => c.pct >= minPct && c.r >= 8)
-        .sort((a, b) => b.w - a.w)
-        .slice(0, maxN);
+        .filter(c => c.pct >= minPct && c.radius >= 8)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, maxClusters);
 }
 
 /** Maps click count to visual radius */

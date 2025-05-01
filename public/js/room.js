@@ -1,4 +1,3 @@
-/* room.js – viewer page logic with dynamic clustering */
 import { getRoomId, socketFor } from '/js/util.js';
 import { initCanvas, drawClusters, clearHeat } from '/js/heatmap.js';
 import { clusterize } from '/js/cluster.js';
@@ -18,7 +17,8 @@ const maxClusters = Number(params.get('maxClusters')) || 10;
 let active = true;
 const clicks = [];
 
-setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, maxClusters)); }, 300);
+const recompute = () => drawClusters(clusterize(clicks, minPct, maxClusters));
+setInterval(() => { if (active) recompute(); }, 300);
 
 (async () => {
     // Load stored clicks + active status
@@ -28,31 +28,23 @@ setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, ma
     ]);
 
     clicks.push(...saved);
-    active = status.active; // Fixed incorrect variable reference from 'act.active' to 'status.active'
-    drawClusters(clusterize(clicks, 0.03, minPct, maxClusters));
+    active = act.active;
+    recompute();
 
     // Connect to WebSocket
     const ws = socketFor(room, room);
     ws.onmessage = e => {
-        let msg;
-        try { msg = JSON.parse(e.data); } catch { return; }
-
-        if (msg.type === 'active') {
-            active = msg.active;
-            if (!active) clearHeat();
-            return;
-        }
+        try { var m = JSON.parse(e.data); } catch { return; }
+        if (m.type === 'active') { active = m.active; return; }
         if (!active) return;
 
-        if (msg.type === 'click') clicks.push({ x: msg.x, y: msg.y });
-        if (msg.type === 'reset') clicks.length = 0, clearHeat();
+        if (m.type === 'click') { clicks.push({ x: m.x, y: m.y }); }
+        if (m.type === 'reset') { clicks.length = 0; clearHeat(); }
     };
 
-    // capture clicks
-    const canvas = document.getElementById('heat');
-    canvas.addEventListener('click', e => {
+    document.getElementById('heat').addEventListener('click', e => {
         if (!active) return;
-        const r = canvas.getBoundingClientRect();
+        const r = e.currentTarget.getBoundingClientRect();
         const x = (e.clientX - r.left) / r.width;
         const y = (e.clientY - r.top) / r.height;
         ws.send(JSON.stringify({ type: 'click', x, y }));

@@ -8,6 +8,8 @@
 <body>
     <div id="stats">
         <span id="clicks">0 clicks</span>
+        &nbsp;|&nbsp;
+        <span id="state" style="font-weight:bold;color:#0f0;">RUNNING</span>
     </div>
 
     <canvas id="heat" width="240" height="135"></canvas>
@@ -16,9 +18,16 @@
         <button id="start">Start</button>
         <button id="stop">Stop</button>
         <button id="reset">Reset</button>
-        <span id="state" style="margin-left:8px;font-weight:bold;color:#0f0;">RUNNING</span>
     </div>
 
+    <details style="margin-top:1rem">
+        <summary>Advanced Config</summary>
+        <label>Min % shown: <input id="cfgPct" type="number" min="1" max="50" value="5"></label><br>
+        <label>Max clusters: <input id="cfgMax" type="number" min="1" max="50" value="10"></label><br>
+        <button id="applyCfg">Apply</button>
+    </details>
+
+    <script type="module" src="/js/cluster.js"></script>
     <script type="module" src="/js/heatmap.js"></script>
     <script type="module" src="/js/admin.js"></script>
 </body>

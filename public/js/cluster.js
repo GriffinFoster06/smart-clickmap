@@ -1,41 +1,36 @@
 ﻿/* cluster.js – smart, dynamic, grid-less clustering */
-
-export function clusterize(clicks, minPct = 5, maxClusters = 10) {
-    if (!clicks.length) return [];
-
-    /* 1️⃣  distance-based clustering */
-    const MERGE_R = 0.03;                 // 3 % of screen diag
+export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
+    if (!points.length) return [];
+    const total = points.length;
     const clusters = [];
 
-    clicks.forEach(pt => {
-        let best = null; let bestD2 = MERGE_R * MERGE_R;
+    // 1️⃣  Merge by proximity (DBSCAN-lite)
+    points.forEach(p => {
+        let best = null, bestD2 = eps * eps;
         for (const c of clusters) {
-            const dx = pt.x - c.x;
-            const dy = pt.y - c.y;
+            const dx = p.x - c.x, dy = p.y - c.y;
             const d2 = dx * dx + dy * dy;
             if (d2 < bestD2) { bestD2 = d2; best = c; }
         }
         if (best) {
-            best.count += 1;
-            best.x += (pt.x - best.x) / best.count;
-            best.y += (pt.y - best.y) / best.count;
+            best.w++;
+            best.x += (p.x - best.x) / best.w;
+            best.y += (p.y - best.y) / best.w;
         } else {
-            clusters.push({ ...pt, count: 1 });
+            clusters.push({ x: p.x, y: p.y, w: 1 });
         }
     });
 
-    /* 2️⃣  compute stats */
-    const total = clicks.length;
-    const MIN_R = 12, MAX_R = 60, K = 7;
-
+    // 2️⃣  Compute stats & radius
+    const MIN_R = 12, MAX_R = 64, K = 8;
     clusters.forEach(c => {
-        c.pct = (c.count / total) * 100;
-        c.radius = Math.min(MAX_R, MIN_R + Math.log2(c.count + 1) * K);
+        c.pct = (c.w / total) * 100;
+        c.r = Math.min(MAX_R, MIN_R + Math.log2(c.w + 1) * K);
     });
 
-    /* 3️⃣  filter + sort */
+    // 3️⃣  Filter, sort, limit
     return clusters
-        .filter(c => c.pct >= minPct && c.radius >= 8)
-        .sort((a, b) => b.count - a.count)
-        .slice(0, maxClusters);
+        .filter(c => c.pct >= minPct && c.r >= 8)
+        .sort((a, b) => b.w - a.w)
+        .slice(0, maxN);
 }

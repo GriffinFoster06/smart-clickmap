@@ -2,13 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Heat-Map Admin</title>
+    <title>Click-Map Admin</title>
     <link rel="stylesheet" href="/css/admin.css">
 </head>
 <body>
     <div id="stats">
-        <span id="clicks">0 clicks</span>
-        &nbsp;|&nbsp;
+        <span id="clicks">0 clicks</span> |
         <span id="state" style="font-weight:bold;color:#0f0;">RUNNING</span>
     </div>
 
@@ -20,11 +19,13 @@
         <button id="reset">Reset</button>
     </div>
 
+    <!-- Advanced Config -->
     <details style="margin-top:1rem">
         <summary>Advanced Config</summary>
-        <label>Min % shown: <input id="cfgPct" type="number" min="1" max="50" value="5"></label><br>
-        <label>Max clusters: <input id="cfgMax" type="number" min="1" max="50" value="10"></label><br>
-        <button id="applyCfg">Apply</button>
+        <label>Min % : <input id="cfgPct" type="number" min="1" max="50" value="5"></label><br>
+        <label>Max clusters : <input id="cfgMax" type="number" min="1" max="50" value="10"></label><br>
+        <label>Merge radius : <input id="cfgMerge" type="number" step="0.005" value="0.03"></label><br>
+        <button id="applyCfg">Apply &amp; Reload</button>
     </details>
 
     <script type="module" src="/js/cluster.js"></script>

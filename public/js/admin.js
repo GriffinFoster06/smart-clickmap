@@ -1,73 +1,51 @@
-﻿/* admin.js – admin panel with configs & dynamic clustering */
+﻿/* admin.js – power panel with live stats + config redirect */
 import { getRoomId, socketFor } from './util.js';
-import { initCanvas, drawClusters, clearHeat } from './heatmap.js';
+import { boot, render, clear } from './heatmap.js';
 import { clusterize } from './cluster.js';
 
-initCanvas();
+boot();
 const room = getRoomId();
-const params = new URLSearchParams(location.search);
-const minPct = Number(params.get('minPct')) || 5;
-const maxClusters = Number(params.get('maxClusters')) || 10;
+const qp = new URLSearchParams(location.search);
+const cfg = {
+    eps: +qp.get('mergeRadius') || 0.03,
+    minPct: +qp.get('minPct') || 5,
+    maxN: +qp.get('maxClusters') || 10,
+    minR: 12, k: 8, topColor: 'lime', clusterColor: 'white', topStroke: 3, otherStroke: 2, fontScale: .55
+};
+let active = true; const clicks = [];
 
-let active = true;
-const clicks = [];
-
-const clickEl = document.getElementById('clicks');
-const stateEl = document.getElementById('state');
-
-// Recompute every 300ms
-function recompute() {
-    drawClusters(clusterize(clicks, 0.03, minPct, maxClusters));
-}
-setInterval(() => { if (active) recompute(); }, 300);
+const clickEl = document.getElementById('clicks'), stateEl = document.getElementById('state');
+const draw = () => render(clusterize(clicks, cfg), cfg);
+setInterval(() => { if (active) draw(); }, 300);
 
 (async () => {
     const [saved, act] = await Promise.all([
         fetch(`/api/clicks/${room}`).then(r => r.json()),
         fetch(`/api/active/${room}`).then(r => r.json())
     ]);
-    clicks.push(...saved);
-    active = act.active;
+    clicks.push(...saved); active = act.active;
     clickEl.textContent = `${clicks.length} clicks`;
     stateEl.textContent = active ? 'RUNNING' : 'PAUSED';
-    recompute();
+    draw();
 
     const ws = socketFor(room, room);
     ws.onmessage = e => {
-        let msg;
-        try { msg = JSON.parse(e.data); } catch { return; }
-
-        if (msg.type === 'active') {
-            active = msg.active;
-            stateEl.textContent = active ? 'RUNNING' : 'PAUSED';
-            if (!active) clearHeat();
-            return;
-        }
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        if (m.type === 'active') { active = m.active; stateEl.textContent = active ? 'RUNNING' : 'PAUSED'; if (!active) clear(); return; }
         if (!active) return;
-
-        if (msg.type === 'click') {
-            clicks.push({ x: msg.x, y: msg.y });
-            clickEl.textContent = `${clicks.length} clicks`;
-            recompute();
-        }
-        if (msg.type === 'reset') {
-            clicks.length = 0;
-            clickEl.textContent = '0 clicks';
-            clearHeat();
-        }
+        if (m.type === 'click') { clicks.push({ x: m.x, y: m.y }); clickEl.textContent = `${clicks.length} clicks`; }
+        if (m.type === 'reset') { clicks.length = 0; clickEl.textContent = '0 clicks'; clear(); }
     };
 
-    document.getElementById('start').onclick = () => ws.send(JSON.stringify({ type: 'start' }));
-    document.getElementById('stop').onclick = () => ws.send(JSON.stringify({ type: 'stop' }));
-    document.getElementById('reset').onclick = () => ws.send(JSON.stringify({ type: 'reset' }));
+    document.getElementById('start').onclick = () => ws.send('{"type":"start"}');
+    document.getElementById('stop').onclick = () => ws.send('{"type":"stop"}');
+    document.getElementById('reset').onclick = () => ws.send('{"type":"reset"}');
 })();
 
-// Advanced config panel toggles via query params
 document.getElementById('applyCfg').onclick = () => {
-    const pct = document.getElementById('cfgPct').value || minPct;
-    const mx = document.getElementById('cfgMax').value || maxClusters;
     const q = new URLSearchParams();
-    q.set('minPct', pct);
-    q.set('maxClusters', mx);
+    q.set('minPct', document.getElementById('cfgPct').value || cfg.minPct);
+    q.set('maxClusters', document.getElementById('cfgMax').value || cfg.maxN);
+    q.set('mergeRadius', document.getElementById('cfgMerge').value || cfg.eps);
     location.search = q.toString();
 };

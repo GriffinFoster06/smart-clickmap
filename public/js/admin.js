@@ -1,19 +1,17 @@
-﻿/* admin.js – power panel with fixed “Apply & Reload” */
+﻿/* admin.js – cleaned admin panel with working Apply */
 import { getRoomId, socketFor } from './util.js';
 import { boot, render, clear } from './heatmap.js';
 import { clusterize } from './cluster.js';
 
 boot();
 const room = getRoomId();
-
-// Read config from URL
 const qp = new URLSearchParams(location.search);
+
 const cfg = {
-    eps: parseFloat(qp.get('mergeRadius')) || 0.03,
     minPct: parseFloat(qp.get('minPct')) || 5,
     maxN: parseInt(qp.get('maxClusters')) || 10,
-    minR: 12,    // visual minimum radius
-    k: 8,     // scaling factor for radius
+    minR: parseFloat(qp.get('minR')) || 12,
+    k: parseFloat(qp.get('scaleFactor')) || 8,
     maxR: 64,
     topColor: 'lime',
     clusterColor: 'white',
@@ -28,10 +26,10 @@ const clicks = [];
 const clickEl = document.getElementById('clicks');
 const stateEl = document.getElementById('state');
 
-// Periodic redraw
-setInterval(() => { if (active) render(clusterize(clicks, cfg), cfg); }, 300);
+setInterval(() => {
+    if (active) render(clusterize(clicks, cfg), cfg);
+}, 300);
 
-// Initial load
 (async () => {
     const [saved, act] = await Promise.all([
         fetch(`/api/clicks/${room}`).then(r => r.json()),
@@ -61,6 +59,7 @@ setInterval(() => { if (active) render(clusterize(clicks, cfg), cfg); }, 300);
             clicks.push({ x: m.x, y: m.y });
             clickEl.textContent = `${clicks.length} clicks`;
         }
+
         if (m.type === 'reset') {
             clicks.length = 0;
             clickEl.textContent = '0 clicks';
@@ -73,12 +72,12 @@ setInterval(() => { if (active) render(clusterize(clicks, cfg), cfg); }, 300);
     document.getElementById('reset').onclick = () => ws.send(JSON.stringify({ type: 'reset' }));
 })();
 
-// Fixed Apply & Reload
+// Apply button → updates query string, reloads admin page
 document.getElementById('applyCfg').onclick = () => {
-    const params = new URLSearchParams(window.location.search);
-    params.set('minPct', document.getElementById('cfgPct').value);
-    params.set('maxClusters', document.getElementById('cfgMax').value);
-    params.set('mergeRadius', document.getElementById('cfgMerge').value);
-    window.location.search = params.toString();  // reloads, preserves path
+    const q = new URLSearchParams();
+    q.set('minPct', document.getElementById('cfgPct').value);
+    q.set('maxClusters', document.getElementById('cfgMax').value);
+    q.set('minR', document.getElementById('cfgMinR').value);
+    q.set('scaleFactor', document.getElementById('cfgK').value);
+    window.location.search = '?' + q.toString();
 };
-

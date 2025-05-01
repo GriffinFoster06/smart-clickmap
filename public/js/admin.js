@@ -1,5 +1,4 @@
-﻿/* admin.js – fixed config handling */
-import { getRoomId, socketFor } from './util.js';
+﻿import { getRoomId, socketFor } from './util.js';
 import { boot, render, clear } from './heatmap.js';
 import { clusterize } from './cluster.js';
 
@@ -13,18 +12,23 @@ const cfg = {
     minR: +qp.get('minR') || 12,
     k: +qp.get('scaleFactor') || 8,
     maxR: 64,
-    topColor: 'lime', clusterColor: 'white', topStroke: 3, otherStroke: 2, fontScale: .55
+    topColor: 'lime',
+    clusterColor: 'white',
+    topStroke: 3,
+    otherStroke: 2,
+    fontScale: 0.55
 };
 
 let active = true;
 const clicks = [];
+
 const clickEl = document.getElementById('clicks');
 const stateEl = document.getElementById('state');
 
-/* periodic redraw */
-setInterval(() => { if (active) render(clusterize(clicks, cfg), cfg); }, 300);
+setInterval(() => {
+    if (active) render(clusterize(clicks, cfg), cfg);
+}, 300);
 
-/* initial load */
 (async () => {
     const [saved, act] = await Promise.all([
         fetch(`/api/clicks/${room}`).then(r => r.json()),
@@ -47,12 +51,14 @@ setInterval(() => { if (active) render(clusterize(clicks, cfg), cfg); }, 300);
             if (!active) clear();
             return;
         }
+
         if (!active) return;
 
         if (m.type === 'click') {
             clicks.push({ x: m.x, y: m.y });
             clickEl.textContent = `${clicks.length} clicks`;
         }
+
         if (m.type === 'reset') {
             clicks.length = 0;
             clickEl.textContent = '0 clicks';
@@ -65,12 +71,11 @@ setInterval(() => { if (active) render(clusterize(clicks, cfg), cfg); }, 300);
     document.getElementById('reset').onclick = () => ws.send('{"type":"reset"}');
 })();
 
-/* apply button – only updates query part, keeps session */
 document.getElementById('applyCfg').onclick = () => {
     const url = new URL(window.location.href);
     url.searchParams.set('minPct', document.getElementById('cfgPct').value);
     url.searchParams.set('maxClusters', document.getElementById('cfgMax').value);
     url.searchParams.set('minR', document.getElementById('cfgMinR').value);
     url.searchParams.set('scaleFactor', document.getElementById('cfgK').value);
-    window.location = url;   // reload page with new params (session intact)
+    window.location = url;
 };

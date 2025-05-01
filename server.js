@@ -14,10 +14,17 @@ dotenv.config();
 // 0. Config & helpers
 
 const MAX_STORED_CLICKS = 5_000;
-const streamers = JSON.parse(await fs.readFile('streamers.json', 'utf8'));
+let streamers;
 
-console.log("✅ Loaded streamers.json:");
-console.log(Object.entries(streamers).map(([name, s]) => `${name} → ${s.roomId}`));
+try {
+    const streamersData = await fs.readFile('streamers.json', 'utf8');
+    streamers = JSON.parse(streamersData);
+    console.log("✅ Loaded streamers.json:");
+    console.log(Object.entries(streamers).map(([name, s]) => `${name} → ${s.roomId}`));
+} catch (error) {
+    console.error("❌ Failed to load streamers.json:", error);
+    process.exit(1); // Exit if streamers.json cannot be loaded
+}
 
 function roomExists(roomId) {
     return Object.values(streamers).some(s => s.roomId === roomId);
@@ -28,7 +35,14 @@ const ACTIVE_KEY = roomId => `active:${roomId}`;
 // 1. Redis & Express
 
 const redis = Redis.createClient({ url: process.env.REDIS_URL });
-await redis.connect();
+
+try {
+    await redis.connect();
+    console.log("✅ Connected to Redis");
+} catch (error) {
+    console.error("❌ Failed to connect to Redis:", error);
+    process.exit(1); // Exit if Redis connection fails
+}
 
 const app = express();
 const http = createServer(app);
@@ -36,7 +50,7 @@ const wss = new WebSocketServer({ server: http, path: '/ws' });
 
 app.use(express.urlencoded({ extended: true }));
 app.use(session({
-    secret: process.env.SESSION_SECRET,
+    secret: process.env.SESSION_SECRET || 'default_secret', // Fallback for missing SESSION_SECRET
     resave: false,
     saveUninitialized: false
 }));
@@ -88,15 +102,25 @@ app.post('/logout', (req, res) => {
 app.get('/api/clicks/:roomId', async (req, res) => {
     const { roomId } = req.params;
     if (!roomExists(roomId)) return res.status(404).json([]);
-    const raw = await redis.lRange(`clicks:${roomId}`, 0, -1);
-    res.json(raw.map(JSON.parse));
+    try {
+        const raw = await redis.lRange(`clicks:${roomId}`, 0, -1);
+        res.json(raw.map(JSON.parse));
+    } catch (error) {
+        console.error("❌ Failed to fetch clicks:", error);
+        res.status(500).json([]);
+    }
 });
 
 app.get('/api/active/:roomId', async (req, res) => {
     const { roomId } = req.params;
     if (!roomExists(roomId)) return res.status(404).json({ active: false });
-    const val = await redis.get(ACTIVE_KEY(roomId));
-    res.json({ active: val !== '0' });
+    try {
+        const val = await redis.get(ACTIVE_KEY(roomId));
+        res.json({ active: val !== '0' });
+    } catch (error) {
+        console.error("❌ Failed to fetch active state:", error);
+        res.status(500).json({ active: false });
+    }
 });
 
 // ───────────────────────────────────────────────────
@@ -112,9 +136,14 @@ wss.on('connection', ws => {
 
     // load active state
     (async () => {
-        const a = (await redis.get(ACTIVE_KEY(roomId))) !== '0';
-        active.set(roomId, a);
-        ws.send(JSON.stringify({ type: 'active', active: a }));
+        try {
+            const a = (await redis.get(ACTIVE_KEY(roomId))) !== '0';
+            active.set(roomId, a);
+            ws.send(JSON.stringify({ type: 'active', active: a }));
+        } catch (error) {
+            console.error("❌ Failed to load active state:", error);
+            ws.close(1011, 'Internal server error');
+        }
     })();
 
     if (!sockets.has(roomId)) sockets.set(roomId, new Set());
@@ -123,42 +152,45 @@ wss.on('connection', ws => {
     ws.on('message', async buf => {
         const msg = JSON.parse(buf);
 
-        // Handle admin start/stop
-        if (msg.type === 'start' || msg.type === 'stop') {
-            const a = msg.type === 'start';
-            await redis.set(ACTIVE_KEY(roomId), a ? '1' : '0');
-            active.set(roomId, a);
-            for (const c of sockets.get(roomId)) {
-                if (c.readyState === c.OPEN) {
-                    c.send(JSON.stringify({ type: 'active', active: a }));
+        try {
+            // Handle admin start/stop
+            if (msg.type === 'start' || msg.type === 'stop') {
+                const a = msg.type === 'start';
+                await redis.set(ACTIVE_KEY(roomId), a ? '1' : '0');
+                active.set(roomId, a);
+                for (const c of sockets.get(roomId)) {
+                    if (c.readyState === c.OPEN) {
+                        c.send(JSON.stringify({ type: 'active', active: a }));
+                    }
                 }
+                return;
             }
-            return;
-        }
 
-        // Handle reset
-        if (msg.type === 'reset') {
-            await redis.del(`clicks:${roomId}`);
-            await redis.set(ACTIVE_KEY(roomId), '0');    // pause after reset
-            active.set(roomId, false);
+            // Handle reset
+            if (msg.type === 'reset') {
+                await redis.del(`clicks:${roomId}`);
+                await redis.set(ACTIVE_KEY(roomId), '0');    // pause after reset
+                active.set(roomId, false);
+                for (const c of sockets.get(roomId)) {
+                    if (c.readyState === c.OPEN) c.send(JSON.stringify({ type: 'reset' }));
+                    if (c.readyState === c.OPEN) c.send(JSON.stringify({ type: 'active', active: false }));
+                }
+                return;
+            }
+
+            // Handle clicks
+            if (msg.type === 'click') {
+                if (!active.get(roomId)) return; // ignore if stopped
+                await redis.rPush(`clicks:${roomId}`, JSON.stringify(msg));
+                await redis.lTrim(`clicks:${roomId}`, -MAX_STORED_CLICKS, -1);
+            }
+
+            // Broadcast everything else (clicks)
             for (const c of sockets.get(roomId)) {
-                if (c.readyState === c.OPEN) c.send(JSON.stringify({ type: 'reset' }));
-                if (c.readyState === c.OPEN) c.send(JSON.stringify({ type: 'active', active: false }));
+                if (c.readyState === c.OPEN) c.send(buf);
             }
-            return;
-        }
-
-
-        // Handle clicks
-        if (msg.type === 'click') {
-            if (!active.get(roomId)) return; // ignore if stopped
-            await redis.rPush(`clicks:${roomId}`, JSON.stringify(msg));
-            await redis.lTrim(`clicks:${roomId}`, -MAX_STORED_CLICKS, -1);
-        }
-
-        // Broadcast everything else (clicks)
-        for (const c of sockets.get(roomId)) {
-            if (c.readyState === c.OPEN) c.send(buf);
+        } catch (error) {
+            console.error("❌ WebSocket message handling error:", error);
         }
     });
 

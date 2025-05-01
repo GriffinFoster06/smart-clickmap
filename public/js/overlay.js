@@ -20,7 +20,7 @@ const clicks = [];
 setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, maxClusters)); }, 300);
 
 /* periodic recompute – keeps clusters fresh */
-setInterval(() => { if (active) recompute(); }, 300);
+setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, maxClusters)); }, 300);
 
 (async () => {
     // Load initial state
@@ -30,7 +30,7 @@ setInterval(() => { if (active) recompute(); }, 300);
     ]);
 
     clicks.push(...saved);
-    active = act.active;
+    active = status.active; // Fixed incorrect variable 'act.active'
     drawClusters(clusterize(clicks, 0.03, minPct, maxClusters));
 
     // WebSocket: live updates
@@ -47,6 +47,9 @@ setInterval(() => { if (active) recompute(); }, 300);
         if (!active) return;
 
         if (msg.type === 'click') clicks.push({ x: msg.x, y: msg.y });
-        if (msg.type === 'reset') clicks.length = 0, clearHeat();
+        if (msg.type === 'reset') {
+            clicks.length = 0;
+            clearHeat();
+        }
     };
 })();

@@ -6,8 +6,8 @@
 
 /** Extract the roomId from the current URL path */
 export function getRoomId() {
-    const segments = window.location.pathname.split('/');
-    return segments[segments.length - 1];
+    const segments = window.location.pathname.split('/').filter(Boolean);
+    return segments[segments.length - 1] || null; // Ensure a valid roomId or return null
 }
 
 /**
@@ -17,6 +17,9 @@ export function getRoomId() {
  * @param {string} protocol - Optional custom subprotocol (usually same as roomId)
  */
 export function socketFor(roomId, protocol = undefined) {
+    if (!roomId) {
+        throw new Error('roomId is required to establish a WebSocket connection.');
+    }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const wsURL = `${proto}://${location.host}/ws`;
     return new WebSocket(wsURL, protocol || roomId);

@@ -31,7 +31,7 @@ setInterval(() => { if (active) recompute(); }, 300);
         fetch(`/api/active/${room}`).then(res => res.json())
     ]);
     clicks.push(...saved);
-    active = act.active;
+    active = status.active; // Fixed incorrect variable 'act' to 'status'
     clickEl.textContent = `${clicks.length} clicks`;
     stateEl.textContent = active ? 'RUNNING' : 'PAUSED';
     render();

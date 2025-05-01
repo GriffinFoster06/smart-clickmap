@@ -36,7 +36,7 @@ function drawOne(c, isTop) {
     ctx.textBaseline = 'middle';
     ctx.shadowColor = 'black';
     ctx.shadowBlur = 4;
-    ctx.fillText(`${cluster.pct.toFixed(0)}%`, cx, cy);
+    ctx.fillText(`${c.pct.toFixed(0)}%`, cx, cy); // Fixed incorrect reference to 'cluster'
 }
 
 /*  PUBLIC API  */

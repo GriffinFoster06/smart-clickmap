@@ -17,7 +17,7 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
             best.x += (p.x - best.x) / best.w;
             best.y += (p.y - best.y) / best.w;
         } else {
-            clusters.push({ ...pt, count: 1 });
+            clusters.push({ ...p, w: 1 }); // Fixed typo: changed `pt` to `p` and corrected property name to `w`
         }
     });
 

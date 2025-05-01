@@ -25,6 +25,7 @@
 #preview {
     border: 2px solid #6441a5;
     margin-bottom: 10px;
+    box-sizing: border-box; /* Fix added to ensure consistent box model */
 }
 
 #restart {
@@ -36,6 +37,7 @@
     width: 100%;
     max-width: 240px;
     cursor: pointer;
+    transition: background 0.3s ease; /* Fix added for smoother hover effect */
 }
 
     #restart:hover {
@@ -47,4 +49,5 @@
     height: 135px;
     border: 1px solid #555;
     image-rendering: pixelated; /* keeps blobs sharp */
+    box-sizing: border-box; /* Fix added to ensure consistent box model */
 }

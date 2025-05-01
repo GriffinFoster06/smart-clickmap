@@ -28,7 +28,7 @@ setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, ma
     ]);
 
     clicks.push(...saved);
-    active = act.active;
+    active = status.active; // Fixed incorrect variable reference from 'act.active' to 'status.active'
     drawClusters(clusterize(clicks, 0.03, minPct, maxClusters));
 
     // Connect to WebSocket

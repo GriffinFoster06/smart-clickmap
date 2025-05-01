@@ -1,44 +1,41 @@
-﻿<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Heat-Map Admin</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="/css/admin.css">
-</head>
-<body>
-    <div id="stats">
-        <span id="clicks">0 clicks</span>
-    </div>
+﻿<!DOCTYPE html>  
+<html lang="en">  
+<head>  
+   <meta charset="UTF-8">  
+   <title>Heat-Map Admin</title>  
+   <meta name="viewport" content="width=device-width, initial-scale=1">  
+   <link rel="stylesheet" href="/css/admin.css">  
+</head>  
+<body>  
+   <div id="stats">  
+       <span id="clicks">0 clicks</span>  
+   </div>  
 
-    <canvas id="heat" width="240" height="135"></canvas>
+   <canvas id="heat" width="240" height="135"></canvas>  
 
-    <div id="controls">
-        <button id="start">Start</button>
-        <button id="stop">Stop</button>
-        <button id="reset">Reset</button>
-        <span id="state" style="margin-left:8px;font-weight:bold;color:#0f0;">RUNNING</span>
-    </div>
+   <div id="controls">  
+       <button id="start">Start</button>  
+       <button id="stop">Stop</button>  
+       <button id="reset">Reset</button>  
+       <span id="state" style="margin-left:8px;font-weight:bold;color:#0f0;">RUNNING</span>  
+   </div>  
 
-<<<<<<< HEAD
-    <!-- advanced config -->
-    <details style="margin-top:1rem">
-        <summary>Advanced Config</summary>
-        <label>
-            Min % shown:
-            <input id="cfgPct" type="number" min="1" max="50" value="5">
-        </label><br>
-        <label>
-            Max clusters:
-            <input id="cfgMax" type="number" min="1" max="50" value="10">
-        </label><br>
-        <button id="applyCfg">Apply</button>
-    </details>
+   <!-- advanced config -->  
+   <details style="margin-top:1rem">  
+       <summary>Advanced Config</summary>  
+       <label>  
+           Min % shown:  
+           <input id="cfgPct" type="number" min="1" max="50" value="5">  
+       </label><br>  
+       <label>  
+           Max clusters:  
+           <input id="cfgMax" type="number" min="1" max="50" value="10">  
+       </label><br>  
+       <button id="applyCfg">Apply</button>  
+   </details>  
 
-    <script type="module" src="/js/cluster.js"></script>
-=======
->>>>>>> parent of 163a9b1 (full overhaul)
-    <script type="module" src="/js/heatmap.js"></script>
-    <script type="module" src="/js/admin.js"></script>
-</body>
+   <script type="module" src="/js/cluster.js"></script>  
+   <script type="module" src="/js/heatmap.js"></script>  
+   <script type="module" src="/js/admin.js"></script>  
+</body>  
 </html>

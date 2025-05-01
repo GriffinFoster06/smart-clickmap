@@ -16,6 +16,10 @@ dotenv.config();
 const MAX_STORED_CLICKS = 5_000;
 const streamers = JSON.parse(await fs.readFile('streamers.json', 'utf8'));
 
+console.log("✅ Loaded streamers.json:");
+console.log(Object.entries(streamers).map(([name, s]) => `${name} → ${s.roomId}`));
+
+
 function roomExists(roomId) {
     return Object.values(streamers).some(s => s.roomId === roomId);
 }

@@ -1,0 +1,24 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Heat-Map Admin</title>
+    <link rel="stylesheet" href="/css/admin.css" />
+</head>
+<body>
+    <div id="stats">
+        <span id="clicks">0 clicks</span>
+        <span id="users">0 users</span>
+    </div>
+    <canvas id="mini" width="240" height="135"></canvas>
+    <div id="controls">
+        <button id="start">Start</button>
+        <button id="stop">Stop</button>
+        <button id="reset">Reset</button>
+    </div>
+    <script type="module">
+        import { adminInit } from '/js/admin.js';
+        adminInit();
+    </script>
+</body>
+</html>

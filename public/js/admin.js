@@ -34,7 +34,9 @@ setInterval(() => { if (active) recompute(); }, 300);
     active = status.active; // Fixed incorrect variable 'act' to 'status'
     clickEl.textContent = `${clicks.length} clicks`;
     stateEl.textContent = active ? 'RUNNING' : 'PAUSED';
-    render();
+
+    // Call recompute instead of the undefined render function
+    recompute();
 
     // WebSocket setup
     const ws = socketFor(room, room);

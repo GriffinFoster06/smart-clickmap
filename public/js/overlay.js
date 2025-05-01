@@ -9,9 +9,9 @@ const qp = new URLSearchParams(location.search);
 const cfg = {
     minPct: +qp.get('minPct') || 5,
     maxN: +qp.get('maxClusters') || 10,
-    minR: +qp.get('minR') || 12,
-    k: +qp.get('scaleFactor') || 8,
-    maxR: 64,
+    minR: +qp.get('minR') || 6,
+    k: +qp.get('scaleFactor') || 4,
+    maxR: 48,
     topColor: 'lime', clusterColor: 'white', topStroke: 3, otherStroke: 2, fontScale: .55
 };
 

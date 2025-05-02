@@ -74,10 +74,16 @@ app.post('/login', async (req, res) => {
     if (!rec || !(await bcrypt.compare(password, rec.passwordHash))) {
         return res.status(403).send('Bad credentials');
     }
+
     req.session.roomId = rec.roomId;
-    await redisClient.set(ACTIVE_KEY(rec.roomId), '1'); // default to running
+
+    // only set default if room has never been started/stopped before
+    const exists = await redisClient.exists(ACTIVE_KEY(rec.roomId));
+    if (!exists) await redisClient.set(ACTIVE_KEY(rec.roomId), '1');
+
     res.redirect(`/admin/${rec.roomId}`);
 });
+
 
 app.post('/logout', (req, res) => {
     req.session.destroy(() => res.redirect('/'));

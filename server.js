@@ -3,7 +3,8 @@
 import express from 'express';
 import session from 'express-session';
 import { createClient } from 'redis';
-import connectRedis from 'connect-redis';          // ⬅️ correct import
+import pkg from 'connect-redis';               // ✅ CORRECT
+const connectRedis = pkg;                      // ✅ FIXED LINE
 import bcrypt from 'bcrypt';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';

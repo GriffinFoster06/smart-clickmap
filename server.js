@@ -56,8 +56,8 @@ app.use(session({
         const { roomId } = req.params;
         if (!roomExists(roomId)) return res.status(404).send('Unknown room');
         res.sendFile(path.resolve(`public/${page}.html`));
-    });
-});
+    })
+);
 
 // Admin (with login)
 app.get('/admin/:roomId', (req, res) => {

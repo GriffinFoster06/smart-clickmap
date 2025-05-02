@@ -1,19 +1,25 @@
-﻿/* overlay.js – OBS overlay logic with dynamic clustering */
-import { getRoomId, socketFor } from './util.js';
+﻿import { getRoomId, socketFor } from './util.js';
 import { initCanvas, drawClusters, clearHeat } from './heatmap.js';
 import { clusterize } from './cluster.js';
 
 initCanvas();
 const room = getRoomId();
+
+// ⬇️ Pull from localStorage (if set)
+const stored = localStorage.getItem('clickmapCfg');
+if (stored) history.replaceState(null, '', `?${stored}`);
+
 const params = new URLSearchParams(location.search);
 const minPct = Number(params.get('minPct')) || 5;
 const maxClusters = Number(params.get('maxClusters')) || 10;
+const refreshMs = Number(params.get('refreshMs')) || 2000;
 
 let active = true;
 const clicks = [];
 
-// Recompute every 300ms
-setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, maxClusters)); }, 300);
+setInterval(() => {
+    if (active) drawClusters(clusterize(clicks, 0.03, minPct, maxClusters));
+}, refreshMs);
 
 (async () => {
     const [saved, act] = await Promise.all([
@@ -22,7 +28,6 @@ setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, ma
     ]);
     clicks.push(...saved);
     active = act.active;
-    drawClusters(clusterize(clicks, 0.03, minPct, maxClusters));
 
     const ws = socketFor(room, room);
     ws.onmessage = e => {
@@ -37,6 +42,6 @@ setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, ma
         if (!active) return;
 
         if (msg.type === 'click') clicks.push({ x: msg.x, y: msg.y });
-        if (msg.type === 'reset') clicks.length = 0, clearHeat();
+        if (msg.type === 'reset') { clicks.length = 0; clearHeat(); }
     };
 })();

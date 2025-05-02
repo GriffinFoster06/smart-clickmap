@@ -9,18 +9,17 @@ const minPct = Number(params.get('minPct')) || 5;
 const maxClusters = Number(params.get('maxClusters')) || 10;
 const refreshMs = Number(params.get('refreshMs')) || 2000;
 
-// Sync form with URL
+// Sync UI with URL
 document.getElementById('cfgPct').value = minPct;
 document.getElementById('cfgMax').value = maxClusters;
 document.getElementById('cfgRate').value = refreshMs;
 
 let active = true;
 const clicks = [];
-
 const clickEl = document.getElementById('clicks');
 const stateEl = document.getElementById('state');
 
-// Recompute periodically
+// Periodic redraw
 function recompute() {
     drawClusters(clusterize(clicks, 0.03, minPct, maxClusters));
 }
@@ -68,30 +67,28 @@ setInterval(() => { if (active) recompute(); }, refreshMs);
     document.getElementById('reset').onclick = () => ws.send(JSON.stringify({ type: 'reset' }));
 })();
 
-// Apply + Launch
+// Apply config and store
 document.getElementById('applyCfg').onclick = () => {
     const pct = document.getElementById('cfgPct').value || 5;
     const mx = document.getElementById('cfgMax').value || 10;
     const rt = document.getElementById('cfgRate').value || 2000;
-    const q = new URLSearchParams();
-    q.set('minPct', pct);
-    q.set('maxClusters', mx);
-    q.set('refreshMs', rt);
-    location.search = q.toString(); // reload
+
+    const q = new URLSearchParams({ minPct: pct, maxClusters: mx, refreshMs: rt });
+
+    // Persist for overlay/room to pick up
+    localStorage.setItem('clickmapCfg', q.toString());
+
+    location.search = q.toString(); // reload admin
 };
 
 document.getElementById('openViewer').onclick = () => {
-    const pct = document.getElementById('cfgPct').value || 5;
-    const mx = document.getElementById('cfgMax').value || 10;
-    const rt = document.getElementById('cfgRate').value || 2000;
-    const url = `/room/${room}?minPct=${pct}&maxClusters=${mx}&refreshMs=${rt}`;
+    const cfg = localStorage.getItem('clickmapCfg');
+    const url = `/room/${room}` + (cfg ? `?${cfg}` : '');
     window.open(url, '_blank');
 };
 
 document.getElementById('openOverlay').onclick = () => {
-    const pct = document.getElementById('cfgPct').value || 5;
-    const mx = document.getElementById('cfgMax').value || 10;
-    const rt = document.getElementById('cfgRate').value || 2000;
-    const url = `/overlay/${room}?minPct=${pct}&maxClusters=${mx}&refreshMs=${rt}`;
+    const cfg = localStorage.getItem('clickmapCfg');
+    const url = `/overlay/${room}` + (cfg ? `?${cfg}` : '');
     window.open(url, '_blank');
 };

@@ -1,4 +1,4 @@
-﻿// server.js  – production-ready click-map backend with safe JSON + pause/resume
+﻿// server.js – one-click-per-user logic
 import express from 'express';
 import session from 'express-session';
 import bcrypt from 'bcrypt';
@@ -9,9 +9,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import dotenv from 'dotenv';
 dotenv.config();
-
-// ───────────────────────────────────────────────────
-// Config & helpers
 
 const MAX_STORED_CLICKS = 5000;
 const streamers = JSON.parse(await fs.readFile('streamers.json', 'utf8'));
@@ -24,9 +21,7 @@ function roomExists(roomId) {
 }
 const ACTIVE_KEY = roomId => `active:${roomId}`;
 
-// ───────────────────────────────────────────────────
-// Redis & Express setup
-
+// Redis & Express
 const redis = Redis.createClient({ url: process.env.REDIS_URL });
 await redis.connect();
 
@@ -41,10 +36,12 @@ app.use(session({
     saveUninitialized: false
 }));
 
-// ───────────────────────────────────────────────────
-// Dynamic routes (must come before static)
+// WebSocket session state
+const sockets = new Map(); // roomId → Set<ws>
+const active = new Map();  // roomId → boolean
+const userClicks = new Map(); // roomId → Map<userId → {x,y}>
 
-// Overlay & Viewer
+// Public pages
 ['overlay', 'room'].forEach(page => {
     app.get(`/${page}/:roomId`, (req, res) => {
         const { roomId } = req.params;
@@ -53,7 +50,7 @@ app.use(session({
     });
 });
 
-// Admin (with login)
+// Admin & login
 app.get('/admin/:roomId', (req, res) => {
     const { roomId } = req.params;
     if (!roomExists(roomId)) return res.status(404).send('Unknown room');
@@ -63,7 +60,6 @@ app.get('/admin/:roomId', (req, res) => {
     res.sendFile(path.resolve('public/login.html'));
 });
 
-// Login & Logout
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
     const record = streamers[username];
@@ -72,7 +68,7 @@ app.post('/login', async (req, res) => {
     if (!ok) return res.status(403).send('Bad credentials');
 
     req.session.roomId = record.roomId;
-    await redis.set(ACTIVE_KEY(record.roomId), '1'); // ensure active
+    await redis.set(ACTIVE_KEY(record.roomId), '1');
     res.redirect(`/admin/${record.roomId}`);
 });
 
@@ -80,12 +76,13 @@ app.post('/logout', (req, res) => {
     req.session.destroy(() => res.redirect('/'));
 });
 
-// API: clicks & active flag
+// API: clicks per user
 app.get('/api/clicks/:roomId', async (req, res) => {
     const { roomId } = req.params;
     if (!roomExists(roomId)) return res.status(404).json([]);
-    const raw = await redis.lRange(`clicks:${roomId}`, 0, -1);
-    res.json(raw.map(JSON.parse));
+    const map = userClicks.get(roomId);
+    if (!map) return res.json([]);
+    res.json([...map.values()]);
 });
 
 app.get('/api/active/:roomId', async (req, res) => {
@@ -95,10 +92,7 @@ app.get('/api/active/:roomId', async (req, res) => {
     res.json({ active: val !== '0' });
 });
 
-// WebSocket: persistence + pause/resume
-const sockets = new Map(); // roomId → Set<ws>
-const active = new Map(); // roomId → boolean
-
+// WebSocket handling
 wss.on('connection', ws => {
     const roomId = ws.protocol;
     if (!roomExists(roomId)) return ws.close(1008, 'Unknown room');
@@ -112,17 +106,16 @@ wss.on('connection', ws => {
     if (!sockets.has(roomId)) sockets.set(roomId, new Set());
     sockets.get(roomId).add(ws);
 
+    if (!userClicks.has(roomId)) userClicks.set(roomId, new Map());
+
     ws.on('message', async raw => {
         let msg;
-        try { msg = JSON.parse(raw); }
-        catch { return; } // ignore non-JSON
+        try { msg = JSON.parse(raw); } catch { return; }
 
-        // Start / Stop
-        if (msg.type === 'start' || msg.type === 'stop') {
-            const a = msg.type === 'start';
+        if (msg.type === 'active') {
+            const a = msg.active;
             await redis.set(ACTIVE_KEY(roomId), a ? '1' : '0');
             active.set(roomId, a);
-            // broadcast new active state
             for (const c of sockets.get(roomId)) {
                 if (c.readyState === c.OPEN) {
                     c.send(JSON.stringify({ type: 'active', active: a }));
@@ -131,34 +124,31 @@ wss.on('connection', ws => {
             return;
         }
 
-        // Reset
         if (msg.type === 'reset') {
-            await redis.del(`clicks:${roomId}`);
+            userClicks.get(roomId)?.clear();
             for (const c of sockets.get(roomId)) {
                 if (c.readyState === c.OPEN) c.send(JSON.stringify(msg));
             }
             return;
         }
 
-        // Click
         if (msg.type === 'click') {
-            if (!active.get(roomId)) return; // ignore if paused
-            await redis.rPush(`clicks:${roomId}`, JSON.stringify(msg));
-            await redis.lTrim(`clicks:${roomId}`, -MAX_STORED_CLICKS, -1);
-        }
+            if (!active.get(roomId)) return;
+            if (!msg.userId) return;
 
-        // Broadcast click
-        for (const c of sockets.get(roomId)) {
-            if (c.readyState === c.OPEN) c.send(JSON.stringify(msg));
+            userClicks.get(roomId).set(msg.userId, { x: msg.x, y: msg.y });
+
+            // broadcast update
+            for (const c of sockets.get(roomId)) {
+                if (c.readyState === c.OPEN) c.send(JSON.stringify(msg));
+            }
         }
     });
 
     ws.on('close', () => sockets.get(roomId)?.delete(ws));
 });
 
-// ───────────────────────────────────────────────────
-// Static files last
-
+// Static last
 app.use(express.static('public'));
 
 const PORT = process.env.PORT || 3000;

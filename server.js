@@ -134,18 +134,20 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        /* CLICK */
+        /* CLICK  –– NEW strict checks */
         if (m.type === 'click') {
-            /* rate-limit: 10 clicks/second per user */
+            /* room must be active */
+            const isActive = (await redis.get(ACTIVE_KEY(roomId))) !== '0';
+            if (!isActive) return;
+
+            /* rate-limit */
             const key = `rl:${roomId}:${m.userId}`;
             const n = await redis.incr(key);
             if (n === 1) await redis.expire(key, 1);
-            if (n > 10) return; // ignore spam
+            if (n > 10) return;
 
-            const userCount = await redis.hLen(CLICK_HASH(roomId));
-            if (userCount >= MAX_USERS_PER_ROOM && !(await redis.hExists(CLICK_HASH(roomId), m.userId))) return;
-
-            await redis.hSet(CLICK_HASH(roomId), m.userId, JSON.stringify({ x: m.x, y: m.y }));
+            /* store / replace by userId */
+            await redis.hSet(CLICK_HASH(roomId), m.userId, JSON.stringify({ x: m.x, y: m.y, userId: m.userId }));
             await redis.publish(`room:${roomId}`, JSON.stringify(m));
         }
     });

@@ -11,16 +11,30 @@
             padding: 2rem;
         }
 
+        #stats {
+            margin-bottom: 1rem;
+            font-size: 1.1rem;
+        }
+
         #heat {
             width: 640px;
             height: 360px;
             border: 1px solid #333;
+            display: block;
             margin-bottom: 1rem;
         }
 
-        button {
+        #controls button {
+            margin-right: 0.5rem;
             padding: 0.5rem 1rem;
-            margin: 0.25rem;
+            font-size: 1rem;
+        }
+
+        details {
+            margin-top: 1.5rem;
+            border: 1px solid #333;
+            padding: 0.5rem;
+            width: 660px;
         }
 
         label {
@@ -31,17 +45,21 @@
         input[type="number"] {
             width: 4rem;
         }
+
+        summary {
+            cursor: pointer;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
-    <h2>Clickmap Admin Panel</h2>
+    <h1>Clickmap Admin</h1>
 
-    <div>
+    <div id="stats">
         <span id="clicks">0 unique</span> |
         <span id="unique">0 unique</span> |
         <strong id="state" style="color:lime;">RUNNING</strong>
     </div>
-
 
     <canvas id="heat" width="1920" height="1080"></canvas>
 
@@ -55,11 +73,11 @@
         <summary>Advanced Config</summary>
         <label>
             Min % shown:
-            <input id="cfgPct" type="number" min="0" max="100" value="5">
+            <input id="cfgPct" type="number" min="0" max="100" step="1" value="5">
         </label>
         <label>
             Max clusters:
-            <input id="cfgMax" type="number" min="1" max="50" value="10">
+            <input id="cfgMax" type="number" min="1" max="50" step="1" value="10">
         </label>
         <label>
             Refresh rate (ms):

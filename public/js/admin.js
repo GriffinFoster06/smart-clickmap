@@ -1,5 +1,4 @@
-﻿/* admin.js – admin panel with configs & dynamic clustering */
-import { getRoomId, socketFor } from './util.js';
+﻿import { getRoomId, socketFor } from './util.js';
 import { initCanvas, drawClusters, clearHeat } from './heatmap.js';
 import { clusterize } from './cluster.js';
 
@@ -8,6 +7,10 @@ const room = getRoomId();
 const params = new URLSearchParams(location.search);
 const minPct = Number(params.get('minPct')) || 5;
 const maxClusters = Number(params.get('maxClusters')) || 10;
+
+// ⬇️ Sync inputs with query on load
+document.getElementById('cfgPct').value = minPct;
+document.getElementById('cfgMax').value = maxClusters;
 
 let active = true;
 const clicks = [];
@@ -50,6 +53,7 @@ setInterval(() => { if (active) recompute(); }, 300);
             clickEl.textContent = `${clicks.length} clicks`;
             recompute();
         }
+
         if (msg.type === 'reset') {
             clicks.length = 0;
             clickEl.textContent = '0 clicks';
@@ -62,18 +66,17 @@ setInterval(() => { if (active) recompute(); }, 300);
     document.getElementById('reset').onclick = () => ws.send(JSON.stringify({ type: 'reset' }));
 })();
 
-// Advanced config panel toggles via query params
+// ⬇️ Config application and launcher buttons
 document.getElementById('applyCfg').onclick = () => {
     const pct = document.getElementById('cfgPct').value || 5;
     const mx = document.getElementById('cfgMax').value || 10;
     const q = new URLSearchParams();
     q.set('minPct', pct);
     q.set('maxClusters', mx);
-    location.search = q.toString(); // reloads admin with config
+    location.search = q.toString();
 };
 
 document.getElementById('openViewer').onclick = () => {
-    const room = getRoomId();
     const pct = document.getElementById('cfgPct').value || 5;
     const mx = document.getElementById('cfgMax').value || 10;
     const url = `/room/${room}?minPct=${pct}&maxClusters=${mx}`;
@@ -81,10 +84,8 @@ document.getElementById('openViewer').onclick = () => {
 };
 
 document.getElementById('openOverlay').onclick = () => {
-    const room = getRoomId();
     const pct = document.getElementById('cfgPct').value || 5;
     const mx = document.getElementById('cfgMax').value || 10;
     const url = `/overlay/${room}?minPct=${pct}&maxClusters=${mx}`;
     window.open(url, '_blank');
 };
-

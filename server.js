@@ -1,4 +1,4 @@
-﻿// server.js – production-ready, Redis-backed, one-click-per-user, START/STOP persistence
+﻿// server.js – production-ready, Redis-backed, one-click-per-user, persistent STOP state
 
 import express from 'express';
 import session from 'express-session';
@@ -12,29 +12,20 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 dotenv.config();
 
-// ───────────────────────────────────────────────────
-// 0. Config & Helpers
-
+// ─── Config & Helpers ────────────────────────────────────────────────
 const MAX_USERS_PER_ROOM = 100_000;
 const streamers = JSON.parse(await fs.readFile('streamers.json', 'utf8'));
-function roomExists(id) {
-    return Object.values(streamers).some(s => s.roomId === id);
-}
+const roomExists = id => Object.values(streamers).some(s => s.roomId === id);
 const ACTIVE_KEY = id => `active:${id}`;
 const CLICK_HASH = id => `userClicks:${id}`;
 
-// ───────────────────────────────────────────────────
-// 1. Redis Clients
-
+// ─── Redis Clients ───────────────────────────────────────────────────
 const redisClient = createClient({ url: process.env.REDIS_URL });
 await redisClient.connect();
-
 const redisPubSub = redisClient.duplicate();
 await redisPubSub.connect();
 
-// ───────────────────────────────────────────────────
-// 2. Express & Session Store
-
+// ─── Express & Sessions ──────────────────────────────────────────────
 const app = express();
 const http = createServer(app);
 const wss = new WebSocketServer({ server: http, path: '/ws' });
@@ -47,18 +38,16 @@ app.use(session({
     saveUninitialized: false
 }));
 
-// ───────────────────────────────────────────────────
-// 3. Dynamic Pages
-
-['overlay', 'room'].forEach(page => {
+// ─── Dynamic Pages ───────────────────────────────────────────────────
+['overlay', 'room'].forEach(page =>
     app.get(`/${page}/:roomId`, (req, res) => {
         const { roomId } = req.params;
         if (!roomExists(roomId)) return res.status(404).send('Unknown room');
         res.sendFile(path.resolve(`public/${page}.html`));
-    });
-});
+    })
+);
 
-// Admin & Login
+// ─── Admin & Login ────────────────────────────────────────────────────
 app.get('/admin/:roomId', (req, res) => {
     const { roomId } = req.params;
     if (!roomExists(roomId)) return res.status(404).send('Unknown room');
@@ -77,21 +66,20 @@ app.post('/login', async (req, res) => {
 
     req.session.roomId = rec.roomId;
 
-    // only set default if room has never been started/stopped before
+    // Only set initial RUNNING state if no key exists yet
     const exists = await redisClient.exists(ACTIVE_KEY(rec.roomId));
-    if (!exists) await redisClient.set(ACTIVE_KEY(rec.roomId), '1');
+    if (!exists) {
+        await redisClient.set(ACTIVE_KEY(rec.roomId), '1');
+    }
 
     res.redirect(`/admin/${rec.roomId}`);
 });
 
+app.post('/logout', (req, res) =>
+    req.session.destroy(() => res.redirect('/'))
+);
 
-app.post('/logout', (req, res) => {
-    req.session.destroy(() => res.redirect('/'));
-});
-
-// ───────────────────────────────────────────────────
-// 4. REST API
-
+// ─── REST API ─────────────────────────────────────────────────────────
 app.get('/api/active/:roomId', async (req, res) => {
     const { roomId } = req.params;
     if (!roomExists(roomId)) return res.status(404).json({ active: false });
@@ -106,9 +94,7 @@ app.get('/api/clicks/:roomId', async (req, res) => {
     res.json(Object.values(hash).map(JSON.parse));
 });
 
-// ───────────────────────────────────────────────────
-// 5. WebSocket + Pub/Sub
-
+// ─── WebSocket + Pub/Sub ─────────────────────────────────────────────
 const sockets = new Map(); // roomId → Set<ws>
 
 redisPubSub.pSubscribe('room:*', (message, channel) => {
@@ -127,11 +113,10 @@ wss.on('connection', ws => {
     const roomId = ws.protocol;
     if (!roomExists(roomId)) return ws.close(1008, 'Unknown room');
 
-    // track socket
     if (!sockets.has(roomId)) sockets.set(roomId, new Set());
     sockets.get(roomId).add(ws);
 
-    // initial active state
+    // send initial active state
     (async () => {
         const a = (await redisClient.get(ACTIVE_KEY(roomId))) !== '0';
         ws.send(JSON.stringify({ type: 'active', active: a }));
@@ -159,19 +144,18 @@ wss.on('connection', ws => {
             return;
         }
 
-        // CLICK (one dot per user)
+        // CLICK – one-dot-per-user, only if active
         if (msg.type === 'click') {
-            // enforce active state
             const isActive = (await redisClient.get(ACTIVE_KEY(roomId))) !== '0';
             if (!isActive) return;
 
-            // rate-limit: max 10 clicks/sec per user
+            // rate-limit
             const rlKey = `rl:${roomId}:${msg.userId}`;
             const n = await redisClient.incr(rlKey);
             if (n === 1) await redisClient.expire(rlKey, 1);
             if (n > 10) return;
 
-            // enforce max users per room
+            // enforce max users
             const count = await redisClient.hLen(CLICK_HASH(roomId));
             if (count >= MAX_USERS_PER_ROOM && !(await redisClient.hExists(CLICK_HASH(roomId), msg.userId))) {
                 return;
@@ -196,14 +180,11 @@ wss.on('connection', ws => {
 setInterval(() => {
     wss.clients.forEach(ws => {
         if (!ws.isAlive) return ws.terminate();
-        ws.isAlive = false;
-        ws.ping();
+        ws.isAlive = false; ws.ping();
     });
 }, 30_000);
 
-// ───────────────────────────────────────────────────
-// 6. Static Files & Start
-
+// ─── Static Files & Start ────────────────────────────────────────────
 app.use(express.static('public'));
 
 const PORT = process.env.PORT || 3000;

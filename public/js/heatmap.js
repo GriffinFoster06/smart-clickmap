@@ -1,53 +1,52 @@
-﻿/* heatmap.js – Ex-Machina-style rendering (soft glow, clean labels) */
+﻿/* heatmap.js – Ex-Machina-style with soft overlap opacity */
 let canvas, ctx;
 
-/*  INIT  */
+/* Init */
 export function initCanvas() {
     canvas = document.getElementById('heat');
     if (!canvas) throw new Error('❌ heatmap.js: <canvas id="heat"> missing');
     ctx = canvas.getContext('2d');
 }
 
-/*  INTERNAL HELPERS  */
-const VIOLET_FILL = 'rgba(128, 80, 255, 0.25)';   // default cluster fill
-const GREEN_FILL = 'rgba(  0,255,128, 0.25)';    // top cluster fill
-
+/* Draw one cluster */
 function drawOne(c, isTop) {
     const cx = canvas.width * c.x;
     const cy = canvas.height * c.y;
     const r = c.r;
+    const alpha = c.opacity ?? 1;
 
-    // 1️⃣  Soft-fill glow (shadowBlur = subtle)
+    const fillColor = isTop
+        ? `rgba(0,255,128,${0.25 * alpha})`
+        : `rgba(128,80,255,${0.25 * alpha})`;
+
+    // 1️⃣ Glow
     ctx.save();
-    ctx.fillStyle = isTop ? GREEN_FILL : VIOLET_FILL;
-    ctx.shadowColor = ctx.fillStyle;
-    ctx.shadowBlur = r * 0.6;              // proportional blur
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillStyle = fillColor;
+    ctx.shadowColor = fillColor;
+    ctx.shadowBlur = r * 0.6;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 6.28); ctx.fill();
     ctx.restore();
 
-    // 2️⃣  Clean outer ring
+    // 2️⃣ Ring
     ctx.lineWidth = isTop ? 3 : 2;
     ctx.strokeStyle = 'white';
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 6.28); ctx.stroke();
 
-    // 3️⃣  Percentage label
+    // 3️⃣ Label
     ctx.font = `bold ${Math.max(14, r * 0.55)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'white';
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
     ctx.shadowColor = 'black';
     ctx.shadowBlur = 4;
     ctx.fillText(`${c.pct.toFixed(0)}%`, cx, cy);
 }
 
-/*  PUBLIC API  */
+/* Public API */
 export function drawClusters(arr) {
     if (!ctx) initCanvas();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    /* draw non-top clusters first so top glows above everything */
-    if (arr.length > 1) arr.slice(1).forEach(c => drawOne(c, false));
-    if (arr.length) drawOne(arr[0], true);
+    arr.forEach((c, i) => drawOne(c, i === 0));
 }
 
 export function clearHeat() {

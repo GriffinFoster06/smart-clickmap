@@ -1,11 +1,12 @@
-﻿/* cluster.js – smart clustering with soft overlap + opacity fading */
+﻿/* cluster.js – pixel-overlap merging with center cluster */
+
 export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
     if (!points.length) return [];
 
-    const total = points.length;
+    const CANVAS_W = 1920, CANVAS_H = 1080;
     const clusters = [];
 
-    // 1️⃣ Group nearby points
+    // 1️⃣ Initial proximity-based clustering
     points.forEach(p => {
         let best = null, bestD2 = eps * eps;
         for (const c of clusters) {
@@ -22,33 +23,57 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
         }
     });
 
-    // 2️⃣ Compute pct and radius
+    const total = points.length;
     const MIN_R = 12, MAX_R = 60, K = 8;
-    clusters.forEach(c => {
-        c.pct = (c.w / total) * 100;
-        c.r = Math.min(MAX_R, MIN_R + Math.log2(c.w + 1) * K);
-    });
 
-    // 3️⃣ Filter by percentage + sort
-    const sorted = clusters
-        .filter(c => c.pct >= minPct && c.r >= 8)
-        .sort((a, b) => b.w - a.w);
+    // 2️⃣ Compute radius and canvas position
+    let pixels = clusters.map(c => {
+        const pct = (c.w / total) * 100;
+        const r = Math.min(MAX_R, MIN_R + Math.log2(c.w + 1) * K);
+        return {
+            x: c.x, y: c.y, w: c.w, pct, r,
+            cx: c.x * CANVAS_W,
+            cy: c.y * CANVAS_H
+        };
+    }).filter(c => c.pct >= minPct && c.r >= 8);
 
-    // 4️⃣ Allow partial overlap with opacity fade
-    const placed = [];
-    for (const c of sorted) {
-        let alpha = 1;
-        for (const other of placed) {
-            const dx = c.x - other.x, dy = c.y - other.y;
-            const d = Math.sqrt(dx * dx + dy * dy);
-            if (d < (c.r + other.r) / 1920 * 1.1) {
-                alpha *= 0.6; // reduce visibility if overlapping
+    // 3️⃣ Pixel-overlap merge: replace overlapping pairs with center cluster
+    const merged = [];
+    const visited = new Set();
+
+    for (let i = 0; i < pixels.length; i++) {
+        if (visited.has(i)) continue;
+
+        const base = pixels[i];
+        const overlaps = [base];
+        visited.add(i);
+
+        for (let j = i + 1; j < pixels.length; j++) {
+            if (visited.has(j)) continue;
+            const other = pixels[j];
+            const dx = base.cx - other.cx, dy = base.cy - other.cy;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < base.r + other.r) {
+                overlaps.push(other);
+                visited.add(j);
             }
         }
-        c.opacity = alpha;
-        placed.push(c);
-        if (placed.length >= maxN) break;
+
+        // Merge into center of mass
+        let wx = 0, wy = 0, totalW = 0;
+        overlaps.forEach(c => {
+            wx += c.x * c.w;
+            wy += c.y * c.w;
+            totalW += c.w;
+        });
+        const mx = wx / totalW, my = wy / totalW;
+        const pct = (totalW / total) * 100;
+        const r = Math.min(MAX_R, MIN_R + Math.log2(totalW + 1) * K);
+
+        merged.push({ x: mx, y: my, w: totalW, pct, r });
     }
 
-    return placed;
+    return merged
+        .sort((a, b) => b.w - a.w)
+        .slice(0, maxN);
 }

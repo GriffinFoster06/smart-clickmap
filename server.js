@@ -1,9 +1,9 @@
-﻿// server.js – scalable, Redis-backed, one-dot-per-viewer
+﻿// server.js – scalable, Redis-backed, one-dot-per-viewer, START/STOP persists
 
 import express from 'express';
 import session from 'express-session';
-import Redis from 'redis';
-import RedisStoreCreator from 'connect-redis';
+import { createClient } from 'redis';
+import connectRedis from 'connect-redis';          // ⬅️ correct import
 import bcrypt from 'bcrypt';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
@@ -12,28 +12,22 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 dotenv.config();
 
-/* ─────────────────────────────────────────────────── */
-/* 0.  CONFIG & HELPERS */
-
-const MAX_USERS_PER_ROOM = 100_000;  // hard cap safety
+/* ───── Config / Helpers ───────────────────────────── */
+const MAX_USERS_PER_ROOM = 100_000;
 const streamers = JSON.parse(await fs.readFile('streamers.json', 'utf8'));
-function roomExists(id) { return Object.values(streamers).some(s => s.roomId === id); }
+const roomExists = id => Object.values(streamers).some(s => s.roomId === id);
 const ACTIVE_KEY = id => `active:${id}`;
-const CLICK_HASH = id => `userClicks:${id}`;   // Redis hash  userId → JSON
+const CLICK_HASH = id => `userClicks:${id}`;
 
-/* ─────────────────────────────────────────────────── */
-/* 1.  REDIS  (one client for commands, one for pub/sub) */
+/* ───── Redis Clients ──────────────────────────────── */
+const redisClient = createClient({ url: process.env.REDIS_URL });
+await redisClient.connect();
 
-const redis = Redis.createClient({ url: process.env.REDIS_URL });
-await redis.connect();
+const redisPubSub = redisClient.duplicate();
+await redisPubSub.connect();
 
-const sub = redis.duplicate();
-await sub.connect();
-
-/* ─────────────────────────────────────────────────── */
-/* 2.  EXPRESS  */
-
-const RedisStore = RedisStoreCreator(session);
+/* ───── Express + Redis Session Store ─────────────── */
+const RedisStore = connectRedis(session);
 
 const app = express();
 const http = createServer(app);
@@ -41,121 +35,123 @@ const wss = new WebSocketServer({ server: http, path: '/ws' });
 
 app.use(express.urlencoded({ extended: true }));
 app.use(session({
-    store: new RedisStore({ client: redis }),
+    store: new RedisStore({ client: redisClient }),
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false
 }));
 
-/* ─────────────────────────────────────────────────── */
-/* 3.  DYNAMIC PAGES */
-
-['overlay', 'room'].forEach(p => {
-    app.get(`/${p}/:roomId`, (req, res) => {
-        const { roomId } = req.params;
-        if (!roomExists(roomId)) return res.status(404).send('Unknown room');
-        res.sendFile(path.resolve(`public/${p}.html`));
+/* ───── Dynamic Pages (room / overlay) ────────────── */
+['overlay', 'room'].forEach(page => {
+    app.get(`/${page}/:roomId`, (req, res) => {
+        if (!roomExists(req.params.roomId)) return res.status(404).send('Unknown room');
+        res.sendFile(path.resolve(`public/${page}.html`));
     });
 });
 
-/* admin & login (unchanged) */
+/* ───── Admin & Login ─────────────────────────────── */
 app.get('/admin/:roomId', (req, res) => {
     const { roomId } = req.params;
     if (!roomExists(roomId)) return res.status(404).send('Unknown room');
-    if (req.session?.roomId === roomId) return res.sendFile(path.resolve('public/admin.html'));
+    if (req.session?.roomId === roomId) {
+        return res.sendFile(path.resolve('public/admin.html'));
+    }
     res.sendFile(path.resolve('public/login.html'));
 });
+
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
     const rec = streamers[username];
-    if (!rec || !(await bcrypt.compare(password, rec.passwordHash))) return res.status(403).send('Bad creds');
+    if (!rec || !(await bcrypt.compare(password, rec.passwordHash))) {
+        return res.status(403).send('Bad credentials');
+    }
     req.session.roomId = rec.roomId;
-    await redis.set(ACTIVE_KEY(rec.roomId), '1');
+    await redisClient.set(ACTIVE_KEY(rec.roomId), '1');   // default RUNNING
     res.redirect(`/admin/${rec.roomId}`);
 });
+
 app.post('/logout', (req, res) => req.session.destroy(() => res.redirect('/')));
 
-/* ─────────────────────────────────────────────────── */
-/* 4.  REST  API  */
-
+/* ───── REST API (active + clicks) ────────────────── */
 app.get('/api/active/:roomId', async (req, res) => {
     if (!roomExists(req.params.roomId)) return res.status(404).json({ active: false });
-    res.json({ active: (await redis.get(ACTIVE_KEY(req.params.roomId))) !== '0' });
+    const active = (await redisClient.get(ACTIVE_KEY(req.params.roomId))) !== '0';
+    res.json({ active });
 });
+
 app.get('/api/clicks/:roomId', async (req, res) => {
     if (!roomExists(req.params.roomId)) return res.status(404).json([]);
-    const hash = await redis.hGetAll(CLICK_HASH(req.params.roomId));
+    const hash = await redisClient.hGetAll(CLICK_HASH(req.params.roomId));
     res.json(Object.values(hash).map(JSON.parse));
 });
 
-/* ─────────────────────────────────────────────────── */
-/* 5.  WEBSOCKET  */
+/* ───── WebSocket Setup ───────────────────────────── */
+const sockets = new Map();                  // roomId → Set<ws>
 
-const sockets = new Map();                // roomId → Set<ws>
-
-sub.pSubscribe('room:*', (msg, channel) => {
-    const roomId = channel.split(':')[1];
+redisPubSub.pSubscribe('room:*', (msg, chan) => {
+    const roomId = chan.split(':')[1];
     const set = sockets.get(roomId);
     if (set) for (const c of set) if (c.readyState === c.OPEN) c.send(msg);
 });
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', ws => {
     const roomId = ws.protocol;
     if (!roomExists(roomId)) return ws.close(1008, 'Unknown room');
 
-    /* track socket set */
+    /* register socket */
     if (!sockets.has(roomId)) sockets.set(roomId, new Set());
     sockets.get(roomId).add(ws);
 
-    /* initial active flag */
+    /* send current active state */
     (async () => {
-        const a = (await redis.get(ACTIVE_KEY(roomId))) !== '0';
+        const a = (await redisClient.get(ACTIVE_KEY(roomId))) !== '0';
         ws.send(JSON.stringify({ type: 'active', active: a }));
     })();
 
-    /* heartbeat to avoid stale sockets */
+    /* heartbeat */
     ws.isAlive = true;
-    ws.on('pong', () => ws.isAlive = true);
+    ws.on('pong', () => (ws.isAlive = true));
 
     ws.on('message', async raw => {
         let m; try { m = JSON.parse(raw); } catch { return; }
 
         /* START / STOP */
         if (m.type === 'active') {
-            await redis.set(ACTIVE_KEY(roomId), m.active ? '1' : '0');
-            await redis.publish(`room:${roomId}`, JSON.stringify({ type: 'active', active: m.active }));
+            await redisClient.set(ACTIVE_KEY(roomId), m.active ? '1' : '0');
+            await redisClient.publish(`room:${roomId}`, JSON.stringify({ type: 'active', active: m.active }));
             return;
         }
 
         /* RESET */
         if (m.type === 'reset') {
-            await redis.del(CLICK_HASH(roomId));
-            await redis.publish(`room:${roomId}`, JSON.stringify({ type: 'reset' }));
+            await redisClient.del(CLICK_HASH(roomId));
+            await redisClient.publish(`room:${roomId}`, JSON.stringify({ type: 'reset' }));
             return;
         }
 
-        /* CLICK  –– NEW strict checks */
+        /* CLICK (one dot per user) */
         if (m.type === 'click') {
-            /* room must be active */
-            const isActive = (await redis.get(ACTIVE_KEY(roomId))) !== '0';
+            const isActive = (await redisClient.get(ACTIVE_KEY(roomId))) !== '0';
             if (!isActive) return;
 
-            /* rate-limit */
-            const key = `rl:${roomId}:${m.userId}`;
-            const n = await redis.incr(key);
-            if (n === 1) await redis.expire(key, 1);
+            // rate-limit 10 clicks/s
+            const rlKey = `rl:${roomId}:${m.userId}`;
+            const n = await redisClient.incr(rlKey);
+            if (n === 1) await redisClient.expire(rlKey, 1);
             if (n > 10) return;
 
-            /* store / replace by userId */
-            await redis.hSet(CLICK_HASH(roomId), m.userId, JSON.stringify({ x: m.x, y: m.y, userId: m.userId }));
-            await redis.publish(`room:${roomId}`, JSON.stringify(m));
+            const count = await redisClient.hLen(CLICK_HASH(roomId));
+            if (count >= MAX_USERS_PER_ROOM && !(await redisClient.hExists(CLICK_HASH(roomId), m.userId))) return;
+
+            await redisClient.hSet(CLICK_HASH(roomId), m.userId, JSON.stringify({ x: m.x, y: m.y, userId: m.userId }));
+            await redisClient.publish(`room:${roomId}`, JSON.stringify(m));
         }
     });
 
     ws.on('close', () => sockets.get(roomId)?.delete(ws));
 });
 
-/* periodic dead-socket cleanup */
+/* cleanup dead sockets every 30 s */
 setInterval(() => {
     wss.clients.forEach(ws => {
         if (!ws.isAlive) return ws.terminate();
@@ -163,8 +159,9 @@ setInterval(() => {
     });
 }, 30_000);
 
-/* ─────────────────────────────────────────────────── */
+/* ───── Static ────────────────────────────────────── */
 app.use(express.static('public'));
 
+/* ───── Start Server ─────────────────────────────── */
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => console.log('✅ Server on', PORT));
+http.listen(PORT, () => console.log('✅ Server listening on', PORT));

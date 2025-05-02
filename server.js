@@ -1,4 +1,4 @@
-﻿// server.js  –  production-ready click-map backend
+﻿// server.js  – production-ready click-map backend with safe JSON + pause/resume
 import express from 'express';
 import session from 'express-session';
 import bcrypt from 'bcrypt';
@@ -11,9 +11,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // ───────────────────────────────────────────────────
-// 0. Config & helpers
+// Config & helpers
 
-const MAX_STORED_CLICKS = 5_000;
+const MAX_STORED_CLICKS = 5000;
 const streamers = JSON.parse(await fs.readFile('streamers.json', 'utf8'));
 
 console.log("✅ Loaded streamers.json:");
@@ -25,17 +25,10 @@ function roomExists(roomId) {
 const ACTIVE_KEY = roomId => `active:${roomId}`;
 
 // ───────────────────────────────────────────────────
-// 1. Redis & Express
+// Redis & Express setup
 
 const redis = Redis.createClient({ url: process.env.REDIS_URL });
-
-try {
-    await redis.connect();
-    console.log("✅ Connected to Redis");
-} catch (error) {
-    console.error("❌ Failed to connect to Redis:", error);
-    process.exit(1); // Exit if Redis connection fails
-}
+await redis.connect();
 
 const app = express();
 const http = createServer(app);
@@ -43,21 +36,22 @@ const wss = new WebSocketServer({ server: http, path: '/ws' });
 
 app.use(express.urlencoded({ extended: true }));
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'default_secret', // Fallback for missing SESSION_SECRET
+    secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false
 }));
 
 // ───────────────────────────────────────────────────
-// 2. Public overlay & viewer pages
+// Dynamic routes (must come before static)
 
-['overlay', 'room'].forEach(page =>
+// Overlay & Viewer
+['overlay', 'room'].forEach(page => {
     app.get(`/${page}/:roomId`, (req, res) => {
         const { roomId } = req.params;
         if (!roomExists(roomId)) return res.status(404).send('Unknown room');
         res.sendFile(path.resolve(`public/${page}.html`));
-    })
-);
+    });
+});
 
 // Admin (with login)
 app.get('/admin/:roomId', (req, res) => {
@@ -69,17 +63,16 @@ app.get('/admin/:roomId', (req, res) => {
     res.sendFile(path.resolve('public/login.html'));
 });
 
+// Login & Logout
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
     const record = streamers[username];
     if (!record) return res.status(403).send('Bad credentials');
-
     const ok = await bcrypt.compare(password, record.passwordHash);
     if (!ok) return res.status(403).send('Bad credentials');
 
     req.session.roomId = record.roomId;
-    // initialize active flag if missing
-    await redis.set(ACTIVE_KEY(record.roomId), '1');
+    await redis.set(ACTIVE_KEY(record.roomId), '1'); // ensure active
     res.redirect(`/admin/${record.roomId}`);
 });
 
@@ -87,61 +80,42 @@ app.post('/logout', (req, res) => {
     req.session.destroy(() => res.redirect('/'));
 });
 
-// ───────────────────────────────────────────────────
-// 4. API – fetch clicks & active state
-
+// API: clicks & active flag
 app.get('/api/clicks/:roomId', async (req, res) => {
     const { roomId } = req.params;
     if (!roomExists(roomId)) return res.status(404).json([]);
-    try {
-        const raw = await redis.lRange(`clicks:${roomId}`, 0, -1);
-        res.json(raw.map(JSON.parse));
-    } catch (error) {
-        console.error("❌ Failed to fetch clicks:", error);
-        res.status(500).json([]);
-    }
+    const raw = await redis.lRange(`clicks:${roomId}`, 0, -1);
+    res.json(raw.map(JSON.parse));
 });
 
 app.get('/api/active/:roomId', async (req, res) => {
     const { roomId } = req.params;
     if (!roomExists(roomId)) return res.status(404).json({ active: false });
-    try {
-        const val = await redis.get(ACTIVE_KEY(roomId));
-        res.json({ active: val !== '0' });
-    } catch (error) {
-        console.error("❌ Failed to fetch active state:", error);
-        res.status(500).json({ active: false });
-    }
+    const val = await redis.get(ACTIVE_KEY(roomId));
+    res.json({ active: val !== '0' });
 });
 
-// ───────────────────────────────────────────────────
-// 5. WebSocket – live relay + persistence + control
-
+// WebSocket: persistence + pause/resume
 const sockets = new Map(); // roomId → Set<ws>
-const active = new Map(); // roomId → bool
+const active = new Map(); // roomId → boolean
 
 wss.on('connection', ws => {
     const roomId = ws.protocol;
-
     if (!roomExists(roomId)) return ws.close(1008, 'Unknown room');
 
-    // load active state
     (async () => {
-        try {
-            const a = (await redis.get(ACTIVE_KEY(roomId))) !== '0';
-            active.set(roomId, a);
-            ws.send(JSON.stringify({ type: 'active', active: a }));
-        } catch (error) {
-            console.error("❌ Failed to load active state:", error);
-            ws.close(1011, 'Internal server error');
-        }
+        const a = (await redis.get(ACTIVE_KEY(roomId))) !== '0';
+        active.set(roomId, a);
+        ws.send(JSON.stringify({ type: 'active', active: a }));
     })();
 
     if (!sockets.has(roomId)) sockets.set(roomId, new Set());
     sockets.get(roomId).add(ws);
 
-    ws.on('message', async buf => {
-        const msg = JSON.parse(buf);
+    ws.on('message', async raw => {
+        let msg;
+        try { msg = JSON.parse(raw); }
+        catch { return; } // ignore non-JSON
 
         // Start / Stop
         if (msg.type === 'start' || msg.type === 'stop') {
@@ -183,11 +157,9 @@ wss.on('connection', ws => {
 });
 
 // ───────────────────────────────────────────────────
-// 6. Static files – placed LAST
+// Static files last
 
 app.use(express.static('public'));
-
-// ───────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => console.log('✅ Server up on', PORT));

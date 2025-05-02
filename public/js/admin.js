@@ -64,10 +64,27 @@ setInterval(() => { if (active) recompute(); }, 300);
 
 // Advanced config panel toggles via query params
 document.getElementById('applyCfg').onclick = () => {
-    const pct = document.getElementById('cfgPct').value || minPct;
-    const mx = document.getElementById('cfgMax').value || maxClusters;
+    const pct = document.getElementById('cfgPct').value || 5;
+    const mx = document.getElementById('cfgMax').value || 10;
     const q = new URLSearchParams();
     q.set('minPct', pct);
     q.set('maxClusters', mx);
-    location.search = q.toString();
+    location.search = q.toString(); // reloads admin with config
 };
+
+document.getElementById('openViewer').onclick = () => {
+    const room = getRoomId();
+    const pct = document.getElementById('cfgPct').value || 5;
+    const mx = document.getElementById('cfgMax').value || 10;
+    const url = `/room/${room}?minPct=${pct}&maxClusters=${mx}`;
+    window.open(url, '_blank');
+};
+
+document.getElementById('openOverlay').onclick = () => {
+    const room = getRoomId();
+    const pct = document.getElementById('cfgPct').value || 5;
+    const mx = document.getElementById('cfgMax').value || 10;
+    const url = `/overlay/${room}?minPct=${pct}&maxClusters=${mx}`;
+    window.open(url, '_blank');
+};
+

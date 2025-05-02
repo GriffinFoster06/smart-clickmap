@@ -22,10 +22,13 @@
 
     <details style="margin-top:1rem">
         <summary>Advanced Config</summary>
-        <label>Min % shown: <input id="cfgPct" type="number" min="1" max="50" value="5"></label><br>
+        <label>Min % shown: <input id="cfgPct" type="number" min="0" max="100" value="5"></label><br>
         <label>Max clusters: <input id="cfgMax" type="number" min="1" max="50" value="10"></label><br>
-        <button id="applyCfg">Apply</button>
+        <button id="applyCfg">Apply (admin only)</button>
+        <button id="openViewer">Open Viewer</button>
+        <button id="openOverlay">Open Overlay</button>
     </details>
+
 
     <script type="module" src="/js/cluster.js"></script>
     <script type="module" src="/js/heatmap.js"></script>

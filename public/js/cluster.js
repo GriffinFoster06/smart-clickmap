@@ -1,11 +1,11 @@
-﻿/* cluster.js – smart, grid-less clustering with overlap merging */
-
-export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10, doMerge = true) {
+﻿/* cluster.js – clustering with visual overlap prevention */
+export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10) {
     if (!points.length) return [];
+
     const total = points.length;
     const clusters = [];
 
-    // 1️⃣ Merge nearby points into clusters
+    // 1️⃣ Group nearby points into clusters
     points.forEach(p => {
         let best = null, bestD2 = eps * eps;
         for (const c of clusters) {
@@ -22,47 +22,30 @@ export function clusterize(points, eps = 0.03, minPct = 5, maxN = 10, doMerge = 
         }
     });
 
-    // 2️⃣ Compute radius and percent
-    const MIN_R = 12, MAX_R = 64, K = 8;
+    // 2️⃣ Add stats (pct, radius)
+    const MIN_R = 12, MAX_R = 60, K = 8;
     clusters.forEach(c => {
         c.pct = (c.w / total) * 100;
         c.r = Math.min(MAX_R, MIN_R + Math.log2(c.w + 1) * K);
     });
 
-    // 3️⃣ Merge overlapping blobs if enabled
-    if (doMerge) mergeOverlappingClusters(clusters);
+    // 3️⃣ Filter by percentage
+    let result = clusters.filter(c => c.pct >= minPct && c.r >= 8);
+    result.sort((a, b) => b.w - a.w); // largest first
 
-    // 4️⃣ Filter, sort, limit
-    return clusters
-        .filter(c => c.pct >= minPct && c.r >= 8)
-        .sort((a, b) => b.w - a.w)
-        .slice(0, maxN);
-}
-
-// 🔁 Merge overlapping clusters
-function mergeOverlappingClusters(clusters) {
-    let changed = true;
-    while (changed) {
-        changed = false;
-        for (let i = 0; i < clusters.length; i++) {
-            for (let j = i + 1; j < clusters.length; j++) {
-                const a = clusters[i], b = clusters[j];
-                const dx = a.x - b.x, dy = a.y - b.y;
-                const dist = Math.hypot(dx, dy);
-                if (dist < a.r + b.r) {
-                    // Merge b into a
-                    const total = a.w + b.w;
-                    a.x = (a.x * a.w + b.x * b.w) / total;
-                    a.y = (a.y * a.w + b.y * b.w) / total;
-                    a.w += b.w;
-                    a.pct += b.pct;
-                    a.r = Math.min(64, 12 + Math.log2(a.w + 1) * 8);
-                    clusters.splice(j, 1);
-                    changed = true;
-                    break;
-                }
-            }
-            if (changed) break;
+    // 4️⃣ Overlap prevention
+    const placed = [];
+    for (const c of result) {
+        const cx = c.x, cy = c.y, r = c.r / 1920; // normalize radius
+        let overlaps = false;
+        for (const other of placed) {
+            const dx = cx - other.x, dy = cy - other.y;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (d < (r + other.r) * 1.1) { overlaps = true; break; }
         }
+        if (!overlaps) placed.push(c);
+        if (placed.length >= maxN) break;
     }
+
+    return placed;
 }

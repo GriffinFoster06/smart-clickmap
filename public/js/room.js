@@ -1,4 +1,3 @@
-/* room.js – viewer page logic with dynamic clustering */
 import { getRoomId, socketFor } from '/js/util.js';
 import { initCanvas, drawClusters, clearHeat } from '/js/heatmap.js';
 import { clusterize } from '/js/cluster.js';
@@ -8,11 +7,15 @@ const room = getRoomId();
 const params = new URLSearchParams(location.search);
 const minPct = Number(params.get('minPct')) || 5;
 const maxClusters = Number(params.get('maxClusters')) || 10;
+const merge = params.get('merge') !== 'false';
 
 let active = true;
 const clicks = [];
 
-setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, maxClusters)); }, 300);
+function recompute() {
+    drawClusters(clusterize(clicks, 0.03, minPct, maxClusters, merge));
+}
+setInterval(() => { if (active) recompute(); }, 300);
 
 (async () => {
     const [saved, act] = await Promise.all([
@@ -21,7 +24,7 @@ setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, ma
     ]);
     clicks.push(...saved);
     active = act.active;
-    drawClusters(clusterize(clicks, 0.03, minPct, maxClusters));
+    recompute();
 
     const ws = socketFor(room, room);
     ws.onmessage = e => {
@@ -36,10 +39,10 @@ setInterval(() => { if (active) drawClusters(clusterize(clicks, 0.03, minPct, ma
         if (!active) return;
 
         if (msg.type === 'click') clicks.push({ x: msg.x, y: msg.y });
-        if (msg.type === 'reset') clicks.length = 0, clearHeat();
+        if (msg.type === 'reset') { clicks.length = 0; clearHeat(); }
     };
 
-    // capture clicks
+    // Capture viewer clicks
     const canvas = document.getElementById('heat');
     canvas.addEventListener('click', e => {
         if (!active) return;

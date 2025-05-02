@@ -1,79 +1,17 @@
-﻿<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Clickmap Admin</title>
-    <link rel="stylesheet" href="/css/admin.css">
-    <style>
-        body {
-            font-family: sans-serif;
-            background: #111;
-            color: #eee;
-            margin: 2rem;
-        }
-
-        #heat {
-            width: 640px;
-            height: 360px;
-            border: 1px solid #333;
-            display: block;
-            margin-bottom: 1rem;
-        }
-
-        #controls button {
-            margin-right: 0.5rem;
-            padding: 0.5rem 1rem;
-            font-size: 1rem;
-        }
-
-        label {
-            display: block;
-            margin: 0.5rem 0;
-        }
-
-        input[type="number"] {
-            width: 4rem;
-        }
-
-        details {
-            margin-top: 1rem;
-        }
-    </style>
-</head>
-<body>
-    <h1>Clickmap Admin</h1>
-
-    <div id="stats">
-        <span id="clicks">0 clicks</span>
-        &nbsp;|&nbsp;
-        <span id="state" style="font-weight:bold;color:#0f0;">RUNNING</span>
-    </div>
-
-    <canvas id="heat" width="1920" height="1080"></canvas>
-
-    <div id="controls">
-        <button id="start">Start</button>
-        <button id="stop">Stop</button>
-        <button id="reset">Reset</button>
-    </div>
-
-    <details>
-        <summary>Advanced Config</summary>
-        <label>
-            Min % shown:
-            <input id="cfgPct" type="number" min="0" max="100" step="1" value="5">
-        </label>
-        <label>
-            Max clusters:
-            <input id="cfgMax" type="number" min="1" max="50" step="1" value="10">
-        </label>
-        <button id="applyCfg">Apply (reload admin)</button>
-        <button id="openViewer">Open Viewer</button>
-        <button id="openOverlay">Open Overlay</button>
-    </details>
-
-    <script type="module" src="/js/cluster.js"></script>
-    <script type="module" src="/js/heatmap.js"></script>
-    <script type="module" src="/js/admin.js"></script>
-</body>
-</html>
+﻿<details>
+    <summary>Advanced Config</summary>
+    <label>
+        Min % shown:
+        <input id="cfgPct" type="number" min="0" max="100" step="1" value="5">
+    </label>
+    <label>
+        Max clusters:
+        <input id="cfgMax" type="number" min="1" max="50" step="1" value="10">
+    </label>
+    <label>
+        <input type="checkbox" id="cfgMerge" checked> Merge overlapping clusters
+    </label>
+    <button id="applyCfg">Apply (reload admin)</button>
+    <button id="openViewer">Open Viewer</button>
+    <button id="openOverlay">Open Overlay</button>
+</details>

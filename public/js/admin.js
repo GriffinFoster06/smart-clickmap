@@ -7,10 +7,12 @@ const room = getRoomId();
 const params = new URLSearchParams(location.search);
 const minPct = Number(params.get('minPct')) || 5;
 const maxClusters = Number(params.get('maxClusters')) || 10;
+const merge = params.get('merge') !== 'false';
 
-// ⬇️ Sync inputs with query on load
+// ⬇️ Sync form inputs on load
 document.getElementById('cfgPct').value = minPct;
 document.getElementById('cfgMax').value = maxClusters;
+document.getElementById('cfgMerge').checked = merge;
 
 let active = true;
 const clicks = [];
@@ -18,9 +20,9 @@ const clicks = [];
 const clickEl = document.getElementById('clicks');
 const stateEl = document.getElementById('state');
 
-// Recompute every 300ms
+// 🔁 Recompute every 300ms
 function recompute() {
-    drawClusters(clusterize(clicks, 0.03, minPct, maxClusters));
+    drawClusters(clusterize(clicks, 0.03, minPct, maxClusters, merge));
 }
 setInterval(() => { if (active) recompute(); }, 300);
 
@@ -61,31 +63,37 @@ setInterval(() => { if (active) recompute(); }, 300);
         }
     };
 
+    // Control buttons
     document.getElementById('start').onclick = () => ws.send(JSON.stringify({ type: 'start' }));
     document.getElementById('stop').onclick = () => ws.send(JSON.stringify({ type: 'stop' }));
     document.getElementById('reset').onclick = () => ws.send(JSON.stringify({ type: 'reset' }));
 })();
 
-// ⬇️ Config application and launcher buttons
+// 🧠 Apply config and reload admin
 document.getElementById('applyCfg').onclick = () => {
     const pct = document.getElementById('cfgPct').value || 5;
     const mx = document.getElementById('cfgMax').value || 10;
+    const mg = document.getElementById('cfgMerge').checked;
     const q = new URLSearchParams();
     q.set('minPct', pct);
     q.set('maxClusters', mx);
-    location.search = q.toString();
+    q.set('merge', mg);
+    location.search = q.toString();  // reload with new settings
 };
 
+// 🌐 Launch viewer or overlay with config
 document.getElementById('openViewer').onclick = () => {
     const pct = document.getElementById('cfgPct').value || 5;
     const mx = document.getElementById('cfgMax').value || 10;
-    const url = `/room/${room}?minPct=${pct}&maxClusters=${mx}`;
+    const mg = document.getElementById('cfgMerge').checked;
+    const url = `/room/${room}?minPct=${pct}&maxClusters=${mx}&merge=${mg}`;
     window.open(url, '_blank');
 };
 
 document.getElementById('openOverlay').onclick = () => {
     const pct = document.getElementById('cfgPct').value || 5;
     const mx = document.getElementById('cfgMax').value || 10;
-    const url = `/overlay/${room}?minPct=${pct}&maxClusters=${mx}`;
+    const mg = document.getElementById('cfgMerge').checked;
+    const url = `/overlay/${room}?minPct=${pct}&maxClusters=${mx}&merge=${mg}`;
     window.open(url, '_blank');
 };

@@ -40,15 +40,17 @@ app.post('/click', (req, res) => {
         const token = (req.headers.authorization || '').replace('Bearer ', '');
         const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
         const { x, y } = req.body;
-        const uid = payload.user_id || payload.opaque_user_id;  // 🔥 FIX HERE
+        const uid = payload.user_id || payload.opaque_user_id;
+        const channelId = payload.channel_id;
 
         if (typeof x !== 'number' || typeof y !== 'number')
             return res.status(400).json({ error: 'coords' });
 
         if (useRedis) {
-            redis.hSet(`click:${uid}`, { x, y });
+            redis.hSet(`click:${channelId}:${uid}`, { x, y });
         } else {
-            clicks.set(uid, { x, y });
+            if (!clicks.has(channelId)) clicks.set(channelId, new Map());
+            clicks.get(channelId).set(uid, { x, y });
         }
 
         return res.sendStatus(200);
@@ -125,15 +127,23 @@ function clusterClicks(points, radius) {
 
 // --- /heatmap dynamic clustering ---
 app.get('/heatmap', async (req, res) => {
+    const channelId = req.query.channel;
+    if (!channelId) {
+        return res.json({ running: isRunning, blobs: [], totalClicks: 0 });
+    }
+
     let pts = [];
+
     if (useRedis) {
-        const keys = await redis.keys('click:*');
+        const keys = await redis.keys(`click:${channelId}:*`);
         for (const k of keys) {
             const { x, y } = await redis.hGetAll(k);
             pts.push({ x: parseFloat(x), y: parseFloat(y) });
         }
     } else {
-        pts = Array.from(clicks.values());
+        if (clicks.has(channelId)) {
+            pts = Array.from(clicks.get(channelId).values());
+        }
     }
 
     const totalClicks = pts.length;
@@ -145,7 +155,6 @@ app.get('/heatmap', async (req, res) => {
     const radius = getClusterRadius(pts);
     let blobs = clusterClicks(pts, radius);
 
-    // 🔥 Fallback if somehow no blobs
     if (blobs.length === 0 && pts.length > 0) {
         blobs = pts.map(p => ({ x: p.x, y: p.y, count: 1 }));
     }
@@ -159,8 +168,7 @@ app.get('/heatmap', async (req, res) => {
             pct: Math.round((b.count / totalClicks) * 100),
             isTop: i === 0
         }))
-        .filter(b => b.pct >= 5 || b.isTop);  // 🔥 Only show blobs ≥5% or top blob always
-
+        .filter(b => b.pct >= 5 || b.isTop);
 
     res.json({ running: isRunning, blobs: payload, totalClicks });
 });

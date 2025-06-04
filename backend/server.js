@@ -16,7 +16,7 @@ if (useRedis) {
     redis = Redis.createClient({ url: process.env.REDIS_URL });
     await redis.connect();
 } else {
-    clicks = new Map();  // userId → { x, y }
+    clicks = new Map();  // channelId → Map of userId → { x, y }
 }
 
 let isRunning = false;

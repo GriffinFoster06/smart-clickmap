@@ -1,8 +1,11 @@
 import { drawBlobs } from './heatmap.js';    // reuse same draw module
 
 const EBS = 'https://smart-clickmap-backend.onrender.com';
-const chan = new URLSearchParams(location.search).get('channel');
-if (!chan) document.body.textContent='channel param required';
+let channelId = null;
+Twitch.ext.onAuthorized(auth => {
+  channelId = auth.channelId;
+  setInterval(poll, 1000);
+});
 
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
@@ -13,10 +16,10 @@ function resize(){
 resize(); window.addEventListener('resize', resize);
 
 async function poll(){
+  if(!channelId) return;
   try{
-    const r = await fetch(`${EBS}/heatmap?channel=${encodeURIComponent(chan)}`);
+    const r = await fetch(`${EBS}/heatmap?channel=${encodeURIComponent(channelId)}`);
     const { blobs } = await r.json();
     drawBlobs(ctx, blobs);
   }catch(e){ console.error(e); }
 }
-setInterval(poll, 1000);

@@ -3,13 +3,15 @@
 let authToken = '';
 let running = false;
 let blobs = [];
+let channelId = '';
 const ctx = document.getElementById('heat').getContext('2d');
 const EBS = 'https://smart-clickmap-backend.onrender.com';
 
 function startPolling() {
     setInterval(async () => {
         try {
-            const res = await fetch(`${EBS}/heatmap`);
+            const url = `${EBS}/heatmap?channel=${encodeURIComponent(channelId)}`;
+            const res = await fetch(url);
             const data = await res.json();
             running = data.running;
             blobs = data.blobs || [];
@@ -22,6 +24,7 @@ function startPolling() {
 
 Twitch.ext.onAuthorized(auth => {
     authToken = auth.token;
+    channelId = auth.channelId;
     startPolling();
 });
 

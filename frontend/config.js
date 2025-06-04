@@ -1,4 +1,4 @@
-﻿const EBS = 'https://smart-clickmap-backend.onrender.com';
+const EBS = 'https://smart-clickmap-backend.onrender.com';
 
 const clicksEl = document.getElementById('clicks');
 const usersEl = document.getElementById('users');

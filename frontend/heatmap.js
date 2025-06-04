@@ -1,4 +1,4 @@
-﻿// drawBlobs(ctx, blobs)
+// drawBlobs(ctx, blobs)
 // blobs = [{ x, y, pct, isTop }]
 
 export function drawBlobs(ctx, blobs) {

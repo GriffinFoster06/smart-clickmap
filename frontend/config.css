@@ -27,7 +27,7 @@ body {
     margin-bottom: 10px;
 }
 
-#restart {
+#reset {
     background: #6441a5;
     color: #fff;
     border: none;
@@ -38,6 +38,6 @@ body {
     cursor: pointer;
 }
 
-    #restart:hover {
+    #reset:hover {
         background: #7e5cf7;
     }

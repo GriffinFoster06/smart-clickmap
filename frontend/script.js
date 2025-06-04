@@ -1,4 +1,4 @@
-﻿import { drawBlobs } from './heatmap.js';
+import { drawBlobs } from './heatmap.js';
 
 let authToken = '';
 let running = false;

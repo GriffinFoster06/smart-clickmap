@@ -1,12 +1,18 @@
-﻿const EBS = 'https://smart-clickmap-backend.onrender.com';
+const EBS = 'https://smart-clickmap-backend.onrender.com';
 
 const clicksEl = document.getElementById('clicks');
 const usersEl = document.getElementById('users');
 const blobsEl = document.getElementById('blobs');
+let channelId = null;
+Twitch.ext.onAuthorized(auth => {
+    channelId = auth.channelId;
+    setInterval(poll, 1000);
+});
 
 async function poll() {
+    if (!channelId) return;
     try {
-        const res = await fetch(`${EBS}/heatmap`);
+        const res = await fetch(`${EBS}/heatmap?channel=${channelId}`);
         const { blobs, totalClicks } = await res.json();
         clicksEl.textContent = `${totalClicks} clicks`;
         usersEl.textContent = `${totalClicks} users`;
@@ -15,8 +21,6 @@ async function poll() {
         console.error(e);
     }
 }
-
-setInterval(poll, 1000);
 
 document.getElementById('start').onclick = async () => {
     await fetch(`${EBS}/start`, { method: 'POST' });

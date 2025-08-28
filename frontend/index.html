@@ -2,21 +2,405 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Smart Click Map</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ex Machina Smart Click Maps</title>
 
-    <!-- ✅ Add this line to load Twitch Extension Helper Library -->
+    <!-- Twitch Extension Helper Library -->
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
 
-    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Ex Machina Smart Click Maps Overlay Styles */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            overflow: hidden;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* Main canvas for heatmap overlay */
+        #heat {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: auto; /* Allow click interactions */
+            z-index: 1000;
+            cursor: crosshair;
+            /* High quality canvas rendering */
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+        }
+
+            /* When system is not running, show different cursor */
+            #heat.inactive {
+                cursor: not-allowed;
+                opacity: 0.7;
+            }
+
+        /* Notification styles for the overlay */
+        .ex-machina-overlay-notification {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(30, 30, 46, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 12px 24px;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 2000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            max-width: 400px;
+            text-align: center;
+        }
+
+            .ex-machina-overlay-notification.show {
+                opacity: 1;
+            }
+
+            .ex-machina-overlay-notification.success {
+                border-left: 4px solid #48bb78;
+                background: rgba(30, 46, 30, 0.95);
+            }
+
+            .ex-machina-overlay-notification.error {
+                border-left: 4px solid #f56565;
+                background: rgba(46, 30, 30, 0.95);
+            }
+
+            .ex-machina-overlay-notification.info {
+                border-left: 4px solid #4299e1;
+                background: rgba(30, 39, 46, 0.95);
+            }
+
+        /* Status indicator in corner */
+        .ex-machina-status {
+            position: fixed;
+            top: 15px;
+            left: 15px;
+            background: rgba(30, 30, 46, 0.9);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: white;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            z-index: 1800;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+            .ex-machina-status.visible {
+                opacity: 1;
+            }
+
+            .ex-machina-status.running {
+                border-left: 3px solid #48bb78;
+                color: #48bb78;
+            }
+
+            .ex-machina-status.stopped {
+                border-left: 3px solid #f56565;
+                color: #f56565;
+            }
+
+        .ex-machina-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: ex-machina-status-pulse 2s ease-in-out infinite;
+        }
+
+        .ex-machina-status.running .ex-machina-status-dot {
+            background: #48bb78;
+        }
+
+        .ex-machina-status.stopped .ex-machina-status-dot {
+            background: #f56565;
+        }
+
+        @keyframes ex-machina-status-pulse {
+            0%, 100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 0.7;
+                transform: scale(1.2);
+            }
+        }
+
+        /* Debug info overlay */
+        .ex-machina-debug {
+            position: fixed;
+            bottom: 15px;
+            left: 15px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ff00;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            z-index: 1900;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            max-width: 250px;
+            border: 1px solid #333;
+        }
+
+            .ex-machina-debug.visible {
+                opacity: 0.8;
+            }
+
+        .ex-machina-debug-line {
+            margin: 1px 0;
+        }
+
+        /* Responsive design for mobile */
+        @media (max-width: 768px) {
+            .ex-machina-overlay-notification {
+                top: 10px;
+                left: 10px;
+                right: 10px;
+                transform: none;
+                max-width: none;
+                font-size: 13px;
+                padding: 10px 16px;
+            }
+
+            .ex-machina-status {
+                top: 10px;
+                left: 10px;
+                font-size: 10px;
+                padding: 6px 10px;
+            }
+
+            .ex-machina-debug {
+                bottom: 10px;
+                left: 10px;
+                right: 10px;
+                max-width: none;
+                font-size: 9px;
+            }
+
+            #heat {
+                cursor: pointer; /* Better for touch devices */
+            }
+        }
+
+        /* High contrast mode support */
+        @media (prefers-contrast: high) {
+            .ex-machina-overlay-notification,
+            .ex-machina-status,
+            .ex-machina-debug {
+                background: rgba(0, 0, 0, 0.95) !important;
+                border: 2px solid white !important;
+                color: white !important;
+            }
+        }
+
+        /* Reduced motion support */
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+
+            .ex-machina-status-dot {
+                animation: none !important;
+            }
+        }
+
+        /* Print styles (hide overlay) */
+        @media print {
+            body {
+                display: none !important;
+            }
+        }
+    </style>
 </head>
 <body>
+    <!-- Main heatmap canvas - this is where the Ex Machina magic happens -->
+    <canvas id="heat" width="1920" height="1080" title="Ex Machina Smart Click Maps - Click to participate!"></canvas>
 
-    <!-- The transparent heatmap canvas -->
-    <canvas id="heat" width="1920" height="1080"></canvas>
+    <!-- Status indicator (shown when debug mode or for important updates) -->
+    <div id="ex-machina-status" class="ex-machina-status">
+        <div class="ex-machina-status-dot"></div>
+        <span id="ex-machina-status-text">Stopped</span>
+    </div>
 
-    <!-- Your viewer overlay scripts -->
-    <script type="module" src="heatmap.js"></script>
-    <script type="module" src="script.js"></script>
+    <!-- Debug information (only shown in debug mode) -->
+    <div id="ex-machina-debug" class="ex-machina-debug">
+        <div class="ex-machina-debug-line">Ex Machina Smart Click Maps</div>
+        <div class="ex-machina-debug-line">Status: <span id="debug-status">Initializing...</span></div>
+        <div class="ex-machina-debug-line">Clusters: <span id="debug-clusters">0</span></div>
+        <div class="ex-machina-debug-line">Clicks: <span id="debug-clicks">0</span></div>
+        <div class="ex-machina-debug-line">WebSocket: <span id="debug-ws">Connecting...</span></div>
+        <div class="ex-machina-debug-line">Version: v2.0 Ex Machina</div>
+    </div>
 
+    <!-- Load the Ex Machina Smart Click Maps system -->
+    <script type="module">
+        // Check for debug mode
+        const isDebugMode = new URLSearchParams(location.search).has('debug');
+
+        // Show debug info if in debug mode
+        if (isDebugMode) {
+            document.getElementById('ex-machina-debug').classList.add('visible');
+            console.log('🚀 Ex Machina Smart Click Maps - Debug Mode Enabled');
+
+            // Log system info
+            console.log('📊 System Info:', {
+                userAgent: navigator.userAgent,
+                viewport: `${window.innerWidth}x${window.innerHeight}`,
+                pixelRatio: window.devicePixelRatio,
+                colorDepth: screen.colorDepth,
+                cookieEnabled: navigator.cookieEnabled,
+                onLine: navigator.onLine,
+                language: navigator.language
+            });
+        }
+
+        // Show loading message
+        const statusElement = document.getElementById('ex-machina-status-text');
+        const statusContainer = document.getElementById('ex-machina-status');
+
+        function updateStatus(text, isRunning = null) {
+            statusElement.textContent = text;
+            if (isRunning !== null) {
+                statusContainer.className = `ex-machina-status visible ${isRunning ? 'running' : 'stopped'}`;
+            }
+
+            if (isDebugMode) {
+                document.getElementById('debug-status').textContent = text;
+            }
+        }
+
+        updateStatus('Initializing Ex Machina...');
+        statusContainer.classList.add('visible');
+
+        // Initialize system
+        try {
+            // Dynamic import with error handling
+            const { default: ExMachinaSystem } = await import('./script.js').catch(async (error) => {
+                console.error('Failed to load main script, trying fallback:', error);
+                updateStatus('Loading fallback system...');
+
+                // Try to load alternative path or show error
+                throw new Error('Failed to load Ex Machina system');
+            });
+
+            console.log('✅ Ex Machina Smart Click Maps loaded successfully');
+            updateStatus('System Ready', false);
+
+            // Hide status after a few seconds unless debug mode
+            if (!isDebugMode) {
+                setTimeout(() => {
+                    statusContainer.classList.remove('visible');
+                }, 3000);
+            }
+
+        } catch (error) {
+            console.error('❌ Failed to initialize Ex Machina:', error);
+            updateStatus('System Error', false);
+
+            // Show error notification
+            const errorNotification = document.createElement('div');
+            errorNotification.className = 'ex-machina-overlay-notification error show';
+            errorNotification.textContent = 'Failed to load Ex Machina Smart Click Maps';
+            document.body.appendChild(errorNotification);
+
+            setTimeout(() => {
+                errorNotification.classList.remove('show');
+            }, 5000);
+        }
+
+        // Global error handler
+        window.addEventListener('error', (event) => {
+            console.error('Global error in Ex Machina:', event.error);
+            if (isDebugMode) {
+                updateStatus('Runtime Error', false);
+            }
+        });
+
+        // WebSocket connection status updates (if available)
+        window.addEventListener('ex-machina-ws-status', (event) => {
+            if (isDebugMode) {
+                document.getElementById('debug-ws').textContent = event.detail.status;
+            }
+        });
+
+        // Cluster updates (if available)
+        window.addEventListener('ex-machina-clusters-update', (event) => {
+            if (isDebugMode) {
+                document.getElementById('debug-clusters').textContent = event.detail.count || 0;
+                document.getElementById('debug-clicks').textContent = event.detail.clicks || 0;
+            }
+        });
+
+        // Handle page visibility changes
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                console.log('📱 Ex Machina: Page hidden');
+            } else {
+                console.log('📱 Ex Machina: Page visible');
+                // Could trigger data refresh here
+            }
+        });
+
+        // Prevent context menu on canvas (better UX)
+        document.getElementById('heat').addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
+
+        // Keyboard shortcuts for debugging
+        if (isDebugMode) {
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'c' && e.ctrlKey) {
+                    console.log('🧹 Manual canvas clear requested');
+                    const canvas = document.getElementById('heat');
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    e.preventDefault();
+                }
+
+                if (e.key === 'i' && e.ctrlKey && e.shiftKey) {
+                    console.log('ℹ️ Ex Machina Debug Info:', {
+                        canvas: document.getElementById('heat'),
+                        viewport: `${window.innerWidth}x${window.innerHeight}`,
+                        pixelRatio: window.devicePixelRatio,
+                        timestamp: Date.now()
+                    });
+                    e.preventDefault();
+                }
+            });
+        }
+
+        console.log(`🎯 Ex Machina Smart Click Maps v2.0 ${isDebugMode ? '(Debug Mode)' : ''}`);
+    </script>
 </body>
 </html>

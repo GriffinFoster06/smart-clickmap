@@ -1,155 +1,88 @@
-﻿import { HeatmapRenderer } from './heatmap.js';
+﻿import { ExMachinaRenderer, ExMachinaClusterer } from './heatmap.js';
 
-class SmartClickMap {
+/**
+ * Ex Machina Style Smart Click Map
+ * Replicates the exact behavior and visuals from the reference image
+ */
+class ExMachinaClickMap {
     constructor() {
         this.authToken = '';
         this.channelId = '';
         this.running = false;
-        this.blobs = [];
-        this.stats = { totalClicks: 0, uniqueUsers: 0 };
 
+        // Get canvas and setup renderer
         this.canvas = document.getElementById('heat');
-        this.renderer = new HeatmapRenderer(this.canvas);
+        if (!this.canvas) {
+            console.error('Canvas element with ID "heat" not found');
+            return;
+        }
 
+        this.renderer = new ExMachinaRenderer(this.canvas);
+        this.clusterer = new ExMachinaClusterer({
+            epsilon: 0.08,           // Clustering distance threshold  
+            minPts: 3,              // Minimum points per cluster
+            maxClusters: 8,         // Max clusters to display
+            minPercentage: 8        // Minimum 8% to show cluster
+        });
+
+        // Backend connection
         this.EBS = 'https://smart-clickmap-backend.onrender.com';
         this.wsUrl = this.EBS.replace('https://', 'wss://');
-
         this.ws = null;
         this.pollInterval = null;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
 
-        this.clickBuffer = []; // Buffer clicks when offline
-        this.isOnline = navigator.onLine;
+        // Data storage
+        this.currentClusters = [];
+        this.stats = { totalClicks: 0, uniqueUsers: 0 };
+
+        // Performance tracking
+        this.lastUpdateTime = 0;
+        this.updateCount = 0;
 
         this.setupEventListeners();
         this.setupResizeHandler();
     }
 
+    /**
+     * Initialize with Twitch Extension authorization
+     */
     async initialize() {
-        // Wait for Twitch extension authorization
         return new Promise((resolve) => {
             if (window.Twitch && window.Twitch.ext) {
                 Twitch.ext.onAuthorized((auth) => {
                     this.authToken = auth.token;
                     this.channelId = auth.channelId;
-                    this.startConnection();
+                    console.log(`Ex Machina ClickMap initialized for channel: ${this.channelId}`);
+                    this.startDataConnection();
                     resolve();
                 });
 
                 Twitch.ext.onContext((context) => {
-                    // Handle context changes (like fullscreen)
                     this.handleContextChange(context);
                 });
             } else {
-                // Fallback for testing
-                console.warn('Twitch extension not available, running in test mode');
+                // Fallback for testing without Twitch
+                console.log('Running Ex Machina ClickMap in test mode');
                 this.channelId = 'test_channel';
-                this.startPolling(); // Fallback to polling
+                this.startDataConnection();
                 resolve();
             }
         });
     }
 
-    setupEventListeners() {
-        // Click handling with improved feedback
-        document.addEventListener('click', (ev) => this.handleClick(ev));
-        document.addEventListener('touchstart', (ev) => this.handleTouch(ev));
-
-        // Network status
-        window.addEventListener('online', () => this.handleOnline());
-        window.addEventListener('offline', () => this.handleOffline());
-
-        // Visibility changes
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                this.renderer.stopAnimation();
-            } else {
-                this.renderer.startAnimation();
-            }
-        });
-
-        // Keyboard shortcuts for testing
-        document.addEventListener('keydown', (ev) => {
-            if (ev.key === 'c' && ev.ctrlKey) {
-                this.renderer.clear();
-            }
-            if (ev.key === 's' && ev.ctrlKey) {
-                this.cycleColorScheme();
-                ev.preventDefault();
-            }
-        });
-    }
-
-    setupResizeHandler() {
-        let resizeTimeout;
-        window.addEventListener('resize', () => {
-            clearTimeout(resizeTimeout);
-            resizeTimeout = setTimeout(() => {
-                this.resizeCanvas();
-            }, 250);
-        });
-        this.resizeCanvas();
-    }
-
-    resizeCanvas() {
-        const canvas = this.canvas;
-        const rect = document.body.getBoundingClientRect();
-
-        canvas.width = rect.width || window.innerWidth;
-        canvas.height = rect.height || window.innerHeight;
-
-        // Redraw current state
-        this.renderer.drawBlobs(this.blobs);
-    }
-
-    cycleColorScheme() {
-        const schemes = ['plasma', 'ocean', 'fire'];
-        const current = this.renderer.settings.colorScheme;
-        const currentIndex = schemes.indexOf(current);
-        const nextIndex = (currentIndex + 1) % schemes.length;
-
-        this.renderer.updateSettings({ colorScheme: schemes[nextIndex] });
-        this.showNotification(`Color scheme: ${schemes[nextIndex]}`);
-    }
-
-    showNotification(message, duration = 2000) {
-        // Create temporary notification element
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: rgba(100, 65, 165, 0.9);
-            color: white;
-            padding: 10px 20px;
-            border-radius: 5px;
-            font-family: 'Segoe UI', Arial, sans-serif;
-            font-size: 14px;
-            z-index: 1000;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-        `;
-        notification.textContent = message;
-
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.style.transition = 'opacity 0.3s';
-            notification.style.opacity = '0';
-            setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.parentNode.removeChild(notification);
-                }
-            }, 300);
-        }, duration);
-    }
-
-    startConnection() {
+    /**
+     * Start data connections (WebSocket + polling fallback)
+     */
+    startDataConnection() {
         this.connectWebSocket();
-        this.startPolling(); // Fallback polling
+        this.startPolling();
     }
 
+    /**
+     * Connect WebSocket for real-time updates
+     */
     connectWebSocket() {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             return;
@@ -160,9 +93,8 @@ class SmartClickMap {
             this.ws = new WebSocket(wsUrl);
 
             this.ws.onopen = () => {
-                console.log('🔗 WebSocket connected');
+                console.log('Ex Machina WebSocket connected');
                 this.reconnectAttempts = 0;
-                this.showNotification('Real-time updates active');
             };
 
             this.ws.onmessage = (event) => {
@@ -175,12 +107,12 @@ class SmartClickMap {
             };
 
             this.ws.onclose = (event) => {
-                console.log('🔌 WebSocket disconnected:', event.code);
+                console.log('Ex Machina WebSocket disconnected');
                 this.scheduleReconnect();
             };
 
             this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
+                console.error('Ex Machina WebSocket error:', error);
             };
 
         } catch (error) {
@@ -189,71 +121,52 @@ class SmartClickMap {
         }
     }
 
-    scheduleReconnect() {
-        if (this.reconnectAttempts < this.maxReconnectAttempts) {
-            const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-            this.reconnectAttempts++;
-
-            setTimeout(() => {
-                if (this.isOnline) {
-                    console.log(`🔄 Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
-                    this.connectWebSocket();
-                }
-            }, delay);
-        }
-    }
-
+    /**
+     * Handle incoming WebSocket messages
+     */
     handleWebSocketMessage(data) {
         switch (data.type) {
             case 'click':
-                // Real-time click feedback
-                this.renderer.createClickEffect(
-                    data.data.x,
-                    data.data.y,
-                    0.8
-                );
+                // Real-time click received - trigger immediate update
+                this.requestDataUpdate();
                 break;
 
             case 'status':
+                const wasRunning = this.running;
                 this.running = data.data.running;
-                this.showNotification(
-                    this.running ? 'Click mapping started!' : 'Click mapping stopped'
-                );
+
+                if (wasRunning !== this.running) {
+                    console.log(`Ex Machina status: ${this.running ? 'Started' : 'Stopped'}`);
+                }
                 break;
 
             case 'reset':
-                this.renderer.clear();
-                this.blobs = [];
+                this.currentClusters = [];
                 this.stats = { totalClicks: 0, uniqueUsers: 0 };
-                this.showNotification('Map reset');
-                break;
-
-            case 'heatmap_update':
-                this.updateHeatmap(data.data);
+                this.renderClusters();
+                console.log('Ex Machina map reset');
                 break;
         }
     }
 
+    /**
+     * Start polling for data updates
+     */
     startPolling() {
         if (this.pollInterval) return;
 
-        this.pollInterval = setInterval(async () => {
-            try {
-                await this.fetchHeatmap();
-            } catch (error) {
-                console.error('Polling failed:', error);
-            }
-        }, 2000); // Poll every 2 seconds
+        this.pollInterval = setInterval(() => {
+            this.requestDataUpdate();
+        }, 1500); // Poll every 1.5 seconds
+
+        // Initial data fetch
+        this.requestDataUpdate();
     }
 
-    stopPolling() {
-        if (this.pollInterval) {
-            clearInterval(this.pollInterval);
-            this.pollInterval = null;
-        }
-    }
-
-    async fetchHeatmap() {
+    /**
+     * Request data update from server
+     */
+    async requestDataUpdate() {
         try {
             const url = this.channelId ?
                 `${this.EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}` :
@@ -262,7 +175,8 @@ class SmartClickMap {
             const response = await fetch(url, {
                 headers: this.authToken ? {
                     'Authorization': `Bearer ${this.authToken}`
-                } : {}
+                } : {},
+                cache: 'no-cache'
             });
 
             if (!response.ok) {
@@ -270,49 +184,120 @@ class SmartClickMap {
             }
 
             const data = await response.json();
-            this.updateHeatmap(data);
+            this.processServerData(data);
 
         } catch (error) {
-            console.error('Failed to fetch heatmap:', error);
-            // Continue silently, don't show errors to users
+            console.error('Failed to fetch Ex Machina data:', error);
         }
     }
 
-    updateHeatmap(data) {
+    /**
+     * Process data from server and update clusters
+     */
+    processServerData(data) {
         const wasRunning = this.running;
         this.running = data.running;
-        this.blobs = data.blobs || [];
+
+        // Update statistics
         this.stats = {
             totalClicks: data.totalClicks || 0,
             uniqueUsers: data.uniqueUsers || 0
         };
 
-        // Show status change notifications
-        if (wasRunning !== this.running) {
-            this.showNotification(
-                this.running ? 'Click mapping active' : 'Click mapping paused',
-                1000
-            );
+        // Process raw clicks if available
+        if (data.rawClicks && Array.isArray(data.rawClicks)) {
+            this.updateClusters(data.rawClicks);
+        }
+        // Fallback to server-provided blobs
+        else if (data.blobs && Array.isArray(data.blobs)) {
+            this.currentClusters = this.convertServerBlobs(data.blobs);
+            this.renderClusters();
         }
 
-        // Update renderer settings if provided
-        if (data.settings) {
-            this.renderer.updateSettings({
-                fadeTime: data.settings.fadeTime
-            });
-        }
+        // Track update performance
+        const now = performance.now();
+        this.updateCount++;
 
-        // Update visualization
-        this.renderer.drawBlobs(this.blobs);
+        if (this.updateCount % 20 === 0) { // Log every 20 updates
+            const avgTime = (now - this.lastUpdateTime) / 20;
+            console.log(`Ex Machina: ${this.updateCount} updates, ${avgTime.toFixed(1)}ms avg`);
+        }
+        this.lastUpdateTime = now;
     }
 
-    async sendClick(x, y) {
+    /**
+     * Update clusters using Ex Machina clustering algorithm
+     */
+    updateClusters(rawClicks) {
+        const startTime = performance.now();
+
+        try {
+            // Use Ex Machina clusterer to create polygon clusters
+            this.currentClusters = this.clusterer.clusterPoints(rawClicks);
+
+            const clusterTime = performance.now() - startTime;
+
+            // Render the updated clusters
+            this.renderClusters();
+
+            if (this.currentClusters.length > 0) {
+                console.log(`Ex Machina: ${this.currentClusters.length} clusters generated in ${clusterTime.toFixed(1)}ms`);
+            }
+
+        } catch (error) {
+            console.error('Ex Machina clustering error:', error);
+        }
+    }
+
+    /**
+     * Convert server blobs to our format (fallback)
+     */
+    convertServerBlobs(serverBlobs) {
+        return serverBlobs.map((blob, index) => ({
+            id: `server_${index}`,
+            points: [{ x: blob.x, y: blob.y }],
+            polygon: this.createCirclePolygon({ x: blob.x, y: blob.y }, 0.05),
+            centroid: { x: blob.x, y: blob.y },
+            count: blob.count || 1,
+            percentage: blob.pct || 0,
+            isTop: blob.isTop || false,
+            rank: blob.rank || null
+        }));
+    }
+
+    /**
+     * Render clusters using Ex Machina renderer
+     */
+    renderClusters() {
+        this.renderer.renderClusters(this.currentClusters);
+    }
+
+    /**
+     * Handle user clicks on canvas
+     */
+    handleCanvasClick(event) {
+        // Only process clicks when system is running and user is authorized
         if (!this.running || !this.authToken) {
             return;
         }
 
-        const clickData = { x, y };
+        const rect = this.canvas.getBoundingClientRect();
+        const x = (event.clientX - rect.left) / rect.width;
+        const y = (event.clientY - rect.top) / rect.height;
 
+        // Validate coordinates
+        if (x < 0 || x > 1 || y < 0 || y > 1) {
+            return;
+        }
+
+        // Send click to server
+        this.sendClick(x, y);
+    }
+
+    /**
+     * Send click to server
+     */
+    async sendClick(x, y) {
         try {
             const response = await fetch(`${this.EBS}/click`, {
                 method: 'POST',
@@ -320,105 +305,191 @@ class SmartClickMap {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.authToken}`
                 },
-                body: JSON.stringify(clickData)
+                body: JSON.stringify({ x, y })
             });
 
             if (response.ok) {
-                // Immediate visual feedback
-                this.renderer.createClickEffect(x, y, 1);
+                console.log(`Ex Machina click sent: (${x.toFixed(3)}, ${y.toFixed(3)})`);
+                // Trigger immediate data update for responsive feedback
+                setTimeout(() => this.requestDataUpdate(), 100);
             } else {
-                console.warn('Click failed:', response.status);
-                // Add to buffer for retry
-                this.clickBuffer.push({ ...clickData, timestamp: Date.now() });
+                console.warn('Ex Machina click failed:', response.status);
             }
 
         } catch (error) {
-            console.error('Click send failed:', error);
-            // Buffer click for when connection is restored
-            this.clickBuffer.push({ ...clickData, timestamp: Date.now() });
+            console.error('Failed to send Ex Machina click:', error);
         }
     }
 
-    async flushClickBuffer() {
-        if (this.clickBuffer.length === 0) return;
+    /**
+     * Setup event listeners
+     */
+    setupEventListeners() {
+        // Click handling
+        this.canvas.addEventListener('click', (e) => this.handleCanvasClick(e));
 
-        const clicks = [...this.clickBuffer];
-        this.clickBuffer = [];
+        // Touch support for mobile
+        this.canvas.addEventListener('touchstart', (e) => this.handleTouchStart(e));
 
-        // Send buffered clicks (limit to prevent spam)
-        const recentClicks = clicks
-            .filter(click => Date.now() - click.timestamp < 30000) // Only last 30 seconds
-            .slice(-10); // Max 10 clicks
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Ctrl+R to clear display (for testing)
+            if (e.key === 'r' && e.ctrlKey) {
+                this.renderer.clearCanvas();
+                e.preventDefault();
+            }
+        });
 
-        for (const click of recentClicks) {
-            await this.sendClick(click.x, click.y);
-            await new Promise(resolve => setTimeout(resolve, 100)); // Rate limit
-        }
+        // Network status
+        window.addEventListener('online', () => this.handleOnline());
+        window.addEventListener('offline', () => this.handleOffline());
     }
 
-    handleClick(event) {
-        if (event.target !== document.body && event.target !== this.canvas) {
-            return; // Only handle clicks on the overlay area
-        }
-
-        const rect = document.body.getBoundingClientRect();
-        const x = (event.clientX - rect.left) / rect.width;
-        const y = (event.clientY - rect.top) / rect.height;
-
-        // Boundary check
-        if (x < 0 || x > 1 || y < 0 || y > 1) return;
-
-        this.sendClick(x, y);
-    }
-
-    handleTouch(event) {
+    /**
+     * Handle touch events for mobile
+     */
+    handleTouchStart(event) {
         event.preventDefault();
-        const touch = event.touches[0];
-        const rect = document.body.getBoundingClientRect();
-        const x = (touch.clientX - rect.left) / rect.width;
-        const y = (touch.clientY - rect.top) / rect.height;
 
-        if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-            this.sendClick(x, y);
+        if (event.touches.length === 1) {
+            const touch = event.touches[0];
+            const rect = this.canvas.getBoundingClientRect();
+            const x = (touch.clientX - rect.left) / rect.width;
+            const y = (touch.clientY - rect.top) / rect.height;
+
+            if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+                this.handleCanvasClick({
+                    clientX: touch.clientX,
+                    clientY: touch.clientY
+                });
+            }
         }
     }
 
+    /**
+     * Setup canvas resize handling
+     */
+    setupResizeHandler() {
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                this.renderer.handleResize();
+                this.renderClusters(); // Re-render after resize
+            }, 250);
+        });
+    }
+
+    /**
+     * Handle Twitch context changes
+     */
     handleContextChange(context) {
         // Handle fullscreen, theater mode changes
-        setTimeout(() => this.resizeCanvas(), 100);
+        setTimeout(() => {
+            this.renderer.handleResize();
+            this.renderClusters();
+        }, 100);
     }
 
+    /**
+     * Schedule WebSocket reconnection
+     */
+    scheduleReconnect() {
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+            this.reconnectAttempts++;
+
+            setTimeout(() => {
+                if (navigator.onLine) {
+                    console.log(`Ex Machina reconnecting (attempt ${this.reconnectAttempts})`);
+                    this.connectWebSocket();
+                }
+            }, delay);
+        }
+    }
+
+    /**
+     * Handle online/offline events
+     */
     handleOnline() {
-        this.isOnline = true;
-        this.showNotification('Connection restored');
+        console.log('Ex Machina: Connection restored');
         this.connectWebSocket();
-        this.flushClickBuffer();
+        this.requestDataUpdate();
     }
 
     handleOffline() {
-        this.isOnline = false;
-        this.showNotification('Offline - clicks will be buffered');
+        console.log('Ex Machina: Connection lost');
     }
 
-    destroy() {
-        this.stopPolling();
-        this.renderer.stopAnimation();
+    /**
+     * Create circle polygon (utility)
+     */
+    createCirclePolygon(center, radius, segments = 8) {
+        const polygon = [];
+        for (let i = 0; i < segments; i++) {
+            const angle = (i / segments) * 2 * Math.PI;
+            polygon.push({
+                x: center.x + Math.cos(angle) * radius,
+                y: center.y + Math.sin(angle) * radius
+            });
+        }
+        return polygon;
+    }
 
+    /**
+     * Get current statistics
+     */
+    getStats() {
+        return {
+            running: this.running,
+            clusters: this.currentClusters.length,
+            totalClicks: this.stats.totalClicks,
+            uniqueUsers: this.stats.uniqueUsers,
+            wsConnected: this.ws && this.ws.readyState === WebSocket.OPEN,
+            updateCount: this.updateCount
+        };
+    }
+
+    /**
+     * Cleanup and destroy
+     */
+    destroy() {
+        // Stop polling
+        if (this.pollInterval) {
+            clearInterval(this.pollInterval);
+            this.pollInterval = null;
+        }
+
+        // Close WebSocket
         if (this.ws) {
             this.ws.close();
             this.ws = null;
         }
+
+        // Clear display
+        this.renderer.clearCanvas();
+        this.currentClusters = [];
+
+        console.log('Ex Machina ClickMap destroyed');
     }
 }
 
-// Initialize the application
-const clickMap = new SmartClickMap();
-clickMap.initialize().catch(console.error);
+// Initialize Ex Machina ClickMap when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    const exMachinaClickMap = new ExMachinaClickMap();
 
-// Cleanup on page unload
-window.addEventListener('beforeunload', () => {
-    clickMap.destroy();
+    exMachinaClickMap.initialize().catch(error => {
+        console.error('Failed to initialize Ex Machina ClickMap:', error);
+    });
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        exMachinaClickMap.destroy();
+    });
+
+    // Expose for debugging (only in development)
+    if (new URLSearchParams(location.search).has('debug')) {
+        window.exMachinaClickMap = exMachinaClickMap;
+        console.log('Ex Machina ClickMap debug mode enabled');
+    }
 });
-
-// Export for testing/debugging
-window.clickMap = clickMap;

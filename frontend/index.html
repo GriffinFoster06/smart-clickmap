@@ -3,143 +3,139 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ex Machina Smart Click Maps</title>
-
-    <!-- Twitch Extension Helper Library -->
-    <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
-
+    <title>Ex Machina Smart Click Maps - OBS Overlay</title>
     <style>
-        /* Ex Machina Smart Click Maps Overlay Styles */
+        /* OBS Overlay Styles - Optimized for streaming */
         * {
-            box-sizing: border-box;
             margin: 0;
             padding: 0;
+            box-sizing: border-box;
         }
 
         html, body {
-            margin: 0;
-            padding: 0;
+            width: 100%;
+            height: 100%;
             background: transparent;
             overflow: hidden;
             font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
         }
 
-        /* Main canvas for heatmap overlay */
-        #heat {
-            position: absolute;
-            top: 0;
-            left: 0;
+        #cv {
+            display: block;
             width: 100%;
             height: 100%;
-            pointer-events: auto; /* Allow click interactions */
-            z-index: 1000;
-            cursor: crosshair;
-            /* High quality canvas rendering */
+            background: transparent;
+            /* Optimize canvas for streaming */
             image-rendering: -webkit-optimize-contrast;
             image-rendering: crisp-edges;
         }
 
-            /* When system is not running, show different cursor */
-            #heat.inactive {
-                cursor: not-allowed;
-                opacity: 0.7;
-            }
-
-        /* Notification styles for the overlay */
-        .ex-machina-overlay-notification {
-            position: fixed;
-            top: 20px;
+        /* Error display styles */
+        .error-overlay {
+            position: absolute;
+            top: 50%;
             left: 50%;
-            transform: translateX(-50%);
-            background: rgba(30, 30, 46, 0.95);
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            transform: translate(-50%, -50%);
+            background: rgba(255, 68, 68, 0.9);
+            color: white;
+            padding: 20px 30px;
             border-radius: 8px;
-            padding: 12px 24px;
-            color: white;
-            font-size: 14px;
-            font-weight: 500;
-            z-index: 2000;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-            max-width: 400px;
+            font-size: 18px;
+            font-weight: bold;
             text-align: center;
+            max-width: 80%;
+            z-index: 1000;
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255, 255, 255, 0.2);
         }
 
-            .ex-machina-overlay-notification.show {
-                opacity: 1;
-            }
-
-            .ex-machina-overlay-notification.success {
-                border-left: 4px solid #48bb78;
-                background: rgba(30, 46, 30, 0.95);
-            }
-
-            .ex-machina-overlay-notification.error {
-                border-left: 4px solid #f56565;
-                background: rgba(46, 30, 30, 0.95);
-            }
-
-            .ex-machina-overlay-notification.info {
-                border-left: 4px solid #4299e1;
-                background: rgba(30, 39, 46, 0.95);
-            }
-
-        /* Status indicator in corner */
-        .ex-machina-status {
-            position: fixed;
-            top: 15px;
-            left: 15px;
+        /* Loading indicator */
+        .loading-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
             background: rgba(30, 30, 46, 0.9);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #00FFFF;
+            padding: 10px 15px;
             border-radius: 6px;
-            padding: 8px 12px;
-            color: white;
-            font-size: 11px;
+            font-size: 14px;
             font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            z-index: 1800;
+            backdrop-filter: blur(5px);
+            border-left: 3px solid #00FFFF;
+            z-index: 999;
+            transition: opacity 0.3s ease;
+        }
+
+            .loading-overlay.hidden {
+                opacity: 0;
+                pointer-events: none;
+            }
+
+        /* Debug info overlay (only in debug mode) */
+        .debug-overlay {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ff00;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.4;
+            z-index: 998;
+            border: 1px solid #333;
+            max-width: 300px;
             opacity: 0;
             transition: opacity 0.3s ease;
-            display: flex;
-            align-items: center;
-            gap: 8px;
         }
 
-            .ex-machina-status.visible {
-                opacity: 1;
+            .debug-overlay.visible {
+                opacity: 0.8;
             }
 
-            .ex-machina-status.running {
-                border-left: 3px solid #48bb78;
-                color: #48bb78;
-            }
+        .debug-line {
+            margin: 2px 0;
+        }
 
-            .ex-machina-status.stopped {
-                border-left: 3px solid #f56565;
-                color: #f56565;
-            }
+        .debug-label {
+            color: #61dafb;
+        }
 
-        .ex-machina-status-dot {
-            width: 8px;
-            height: 8px;
+        .debug-value {
+            color: #f7df1e;
+        }
+
+        /* Status indicator */
+        .status-indicator {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 12px;
+            height: 12px;
             border-radius: 50%;
-            animation: ex-machina-status-pulse 2s ease-in-out infinite;
+            z-index: 997;
+            transition: all 0.3s ease;
         }
 
-        .ex-machina-status.running .ex-machina-status-dot {
-            background: #48bb78;
-        }
+            .status-indicator.running {
+                background: #48bb78;
+                box-shadow: 0 0 10px rgba(72, 187, 120, 0.6);
+                animation: pulse-green 2s ease-in-out infinite;
+            }
 
-        .ex-machina-status.stopped .ex-machina-status-dot {
-            background: #f56565;
-        }
+            .status-indicator.stopped {
+                background: #f56565;
+                box-shadow: 0 0 10px rgba(245, 101, 101, 0.6);
+            }
 
-        @keyframes ex-machina-status-pulse {
+            .status-indicator.error {
+                background: #ed8936;
+                box-shadow: 0 0 10px rgba(237, 137, 54, 0.6);
+                animation: pulse-orange 1s ease-in-out infinite;
+            }
+
+        @keyframes pulse-green {
             0%, 100% {
                 opacity: 1;
                 transform: scale(1);
@@ -151,72 +147,20 @@
             }
         }
 
-        /* Debug info overlay */
-        .ex-machina-debug {
-            position: fixed;
-            bottom: 15px;
-            left: 15px;
-            background: rgba(0, 0, 0, 0.8);
-            color: #00ff00;
-            padding: 8px 12px;
-            border-radius: 4px;
-            font-family: 'Courier New', monospace;
-            font-size: 10px;
-            z-index: 1900;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-            max-width: 250px;
-            border: 1px solid #333;
-        }
-
-            .ex-machina-debug.visible {
-                opacity: 0.8;
+        @keyframes pulse-orange {
+            0%, 100% {
+                opacity: 1;
             }
 
-        .ex-machina-debug-line {
-            margin: 1px 0;
-        }
-
-        /* Responsive design for mobile */
-        @media (max-width: 768px) {
-            .ex-machina-overlay-notification {
-                top: 10px;
-                left: 10px;
-                right: 10px;
-                transform: none;
-                max-width: none;
-                font-size: 13px;
-                padding: 10px 16px;
-            }
-
-            .ex-machina-status {
-                top: 10px;
-                left: 10px;
-                font-size: 10px;
-                padding: 6px 10px;
-            }
-
-            .ex-machina-debug {
-                bottom: 10px;
-                left: 10px;
-                right: 10px;
-                max-width: none;
-                font-size: 9px;
-            }
-
-            #heat {
-                cursor: pointer; /* Better for touch devices */
+            50% {
+                opacity: 0.5;
             }
         }
 
-        /* High contrast mode support */
-        @media (prefers-contrast: high) {
-            .ex-machina-overlay-notification,
-            .ex-machina-status,
-            .ex-machina-debug {
-                background: rgba(0, 0, 0, 0.95) !important;
-                border: 2px solid white !important;
-                color: white !important;
+        /* Hide everything during print */
+        @media print {
+            body {
+                display: none;
             }
         }
 
@@ -229,178 +173,201 @@
                 animation-iteration-count: 1 !important;
                 transition-duration: 0.01ms !important;
             }
-
-            .ex-machina-status-dot {
-                animation: none !important;
-            }
-        }
-
-        /* Print styles (hide overlay) */
-        @media print {
-            body {
-                display: none !important;
-            }
         }
     </style>
 </head>
 <body>
-    <!-- Main heatmap canvas - this is where the Ex Machina magic happens -->
-    <canvas id="heat" width="1920" height="1080" title="Ex Machina Smart Click Maps - Click to participate!"></canvas>
+    <!-- Main canvas for heatmap rendering -->
+    <canvas id="cv" width="1920" height="1080"></canvas>
 
-    <!-- Status indicator (shown when debug mode or for important updates) -->
-    <div id="ex-machina-status" class="ex-machina-status">
-        <div class="ex-machina-status-dot"></div>
-        <span id="ex-machina-status-text">Stopped</span>
+    <!-- Loading indicator -->
+    <div id="loading" class="loading-overlay">
+        🚀 Loading Ex Machina Click Maps...
     </div>
 
-    <!-- Debug information (only shown in debug mode) -->
-    <div id="ex-machina-debug" class="ex-machina-debug">
-        <div class="ex-machina-debug-line">Ex Machina Smart Click Maps</div>
-        <div class="ex-machina-debug-line">Status: <span id="debug-status">Initializing...</span></div>
-        <div class="ex-machina-debug-line">Clusters: <span id="debug-clusters">0</span></div>
-        <div class="ex-machina-debug-line">Clicks: <span id="debug-clicks">0</span></div>
-        <div class="ex-machina-debug-line">WebSocket: <span id="debug-ws">Connecting...</span></div>
-        <div class="ex-machina-debug-line">Version: v2.0 Ex Machina</div>
+    <!-- Status indicator -->
+    <div id="status" class="status-indicator stopped"></div>
+
+    <!-- Debug overlay (shown only in debug mode) -->
+    <div id="debug" class="debug-overlay">
+        <div class="debug-line">
+            <span class="debug-label">Ex Machina OBS Overlay</span>
+        </div>
+        <div class="debug-line">
+            Channel: <span class="debug-value" id="debug-channel">-</span>
+        </div>
+        <div class="debug-line">
+            Status: <span class="debug-value" id="debug-status">Initializing</span>
+        </div>
+        <div class="debug-line">
+            Clusters: <span class="debug-value" id="debug-clusters">0</span>
+        </div>
+        <div class="debug-line">
+            Clicks: <span class="debug-value" id="debug-clicks">0</span>
+        </div>
+        <div class="debug-line">
+            Users: <span class="debug-value" id="debug-users">0</span>
+        </div>
+        <div class="debug-line">
+            Canvas: <span class="debug-value" id="debug-canvas">-</span>
+        </div>
+        <div class="debug-line">
+            Version: <span class="debug-value">v2.0</span>
+        </div>
     </div>
 
-    <!-- Load the Ex Machina Smart Click Maps system -->
     <script type="module">
+        // Initialize the overlay system
+        console.log('🎬 Ex Machina OBS Overlay starting...');
+
         // Check for debug mode
         const isDebugMode = new URLSearchParams(location.search).has('debug');
+        const channelId = new URLSearchParams(location.search).get('channel');
 
-        // Show debug info if in debug mode
+        // Show debug overlay if in debug mode
         if (isDebugMode) {
-            document.getElementById('ex-machina-debug').classList.add('visible');
-            console.log('🚀 Ex Machina Smart Click Maps - Debug Mode Enabled');
-
-            // Log system info
-            console.log('📊 System Info:', {
-                userAgent: navigator.userAgent,
-                viewport: `${window.innerWidth}x${window.innerHeight}`,
-                pixelRatio: window.devicePixelRatio,
-                colorDepth: screen.colorDepth,
-                cookieEnabled: navigator.cookieEnabled,
-                onLine: navigator.onLine,
-                language: navigator.language
-            });
+            document.getElementById('debug').classList.add('visible');
+            document.getElementById('debug-channel').textContent = channelId || 'Not specified';
+            console.log('🐛 Debug mode enabled');
         }
 
-        // Show loading message
-        const statusElement = document.getElementById('ex-machina-status-text');
-        const statusContainer = document.getElementById('ex-machina-status');
+        // Update debug info function
+        function updateDebugInfo(stats) {
+            if (!isDebugMode) return;
 
-        function updateStatus(text, isRunning = null) {
-            statusElement.textContent = text;
-            if (isRunning !== null) {
-                statusContainer.className = `ex-machina-status visible ${isRunning ? 'running' : 'stopped'}`;
-            }
+            document.getElementById('debug-status').textContent = stats.running ? 'Running' : 'Stopped';
+            document.getElementById('debug-clusters').textContent = stats.clusters || 0;
+            document.getElementById('debug-clicks').textContent = stats.totalClicks || 0;
+            document.getElementById('debug-users').textContent = stats.uniqueUsers || 0;
+            document.getElementById('debug-canvas').textContent =
+                `${stats.canvasSize?.width || 0}x${stats.canvasSize?.height || 0}`;
+        }
 
-            if (isDebugMode) {
-                document.getElementById('debug-status').textContent = text;
+        // Update status indicator
+        function updateStatusIndicator(running, hasError = false) {
+            const indicator = document.getElementById('status');
+
+            if (hasError) {
+                indicator.className = 'status-indicator error';
+            } else if (running) {
+                indicator.className = 'status-indicator running';
+            } else {
+                indicator.className = 'status-indicator stopped';
             }
         }
 
-        updateStatus('Initializing Ex Machina...');
-        statusContainer.classList.add('visible');
+        // Hide loading indicator after a delay
+        setTimeout(() => {
+            document.getElementById('loading').classList.add('hidden');
+        }, 2000);
 
-        // Initialize system
-        try {
-            // Dynamic import with error handling
-            const { default: ExMachinaSystem } = await import('./script.js').catch(async (error) => {
-                console.error('Failed to load main script, trying fallback:', error);
-                updateStatus('Loading fallback system...');
-
-                // Try to load alternative path or show error
-                throw new Error('Failed to load Ex Machina system');
-            });
-
-            console.log('✅ Ex Machina Smart Click Maps loaded successfully');
-            updateStatus('System Ready', false);
-
-            // Hide status after a few seconds unless debug mode
-            if (!isDebugMode) {
-                setTimeout(() => {
-                    statusContainer.classList.remove('visible');
-                }, 3000);
-            }
-
-        } catch (error) {
-            console.error('❌ Failed to initialize Ex Machina:', error);
-            updateStatus('System Error', false);
-
-            // Show error notification
-            const errorNotification = document.createElement('div');
-            errorNotification.className = 'ex-machina-overlay-notification error show';
-            errorNotification.textContent = 'Failed to load Ex Machina Smart Click Maps';
-            document.body.appendChild(errorNotification);
-
-            setTimeout(() => {
-                errorNotification.classList.remove('show');
-            }, 5000);
-        }
-
-        // Global error handler
+        // Error handling
         window.addEventListener('error', (event) => {
-            console.error('Global error in Ex Machina:', event.error);
+            console.error('🎬 OBS Overlay Error:', event.error);
+            updateStatusIndicator(false, true);
+
             if (isDebugMode) {
-                updateStatus('Runtime Error', false);
+                document.getElementById('debug-status').textContent = 'Error: ' + event.error.message;
             }
         });
 
-        // WebSocket connection status updates (if available)
-        window.addEventListener('ex-machina-ws-status', (event) => {
-            if (isDebugMode) {
-                document.getElementById('debug-ws').textContent = event.detail.status;
+        // Monitor overlay stats (if available)
+        setInterval(() => {
+            if (window.obsOverlay) {
+                const stats = window.obsOverlay.getStats();
+                updateDebugInfo(stats);
+                updateStatusIndicator(stats.running, false);
+            }
+        }, 1000);
+
+        // Canvas context lost/restored handling
+        const canvas = document.getElementById('cv');
+
+        canvas.addEventListener('webglcontextlost', (event) => {
+            console.warn('🎬 Canvas context lost');
+            event.preventDefault();
+            updateStatusIndicator(false, true);
+        });
+
+        canvas.addEventListener('webglcontextrestored', () => {
+            console.log('🎬 Canvas context restored');
+            if (window.obsOverlay) {
+                window.obsOverlay.renderer.handleResize();
             }
         });
 
-        // Cluster updates (if available)
-        window.addEventListener('ex-machina-clusters-update', (event) => {
-            if (isDebugMode) {
-                document.getElementById('debug-clusters').textContent = event.detail.count || 0;
-                document.getElementById('debug-clicks').textContent = event.detail.clicks || 0;
-            }
-        });
+        // Performance monitoring
+        let lastFrameTime = performance.now();
+        let frameCount = 0;
 
-        // Handle page visibility changes
+        function monitorPerformance() {
+            frameCount++;
+            const now = performance.now();
+
+            // Log performance every 10 seconds
+            if (now - lastFrameTime > 10000) {
+                const fps = Math.round(frameCount / (now - lastFrameTime) * 1000);
+                console.log(`🎬 OBS Performance: ~${fps} FPS`);
+
+                if (isDebugMode) {
+                    console.log(`🎬 Memory usage:`, {
+                        used: Math.round(performance.memory?.usedJSHeapSize / 1024 / 1024) + 'MB',
+                        total: Math.round(performance.memory?.totalJSHeapSize / 1024 / 1024) + 'MB',
+                        limit: Math.round(performance.memory?.jsHeapSizeLimit / 1024 / 1024) + 'MB'
+                    });
+                }
+
+                frameCount = 0;
+                lastFrameTime = now;
+            }
+
+            requestAnimationFrame(monitorPerformance);
+        }
+
+        // Start performance monitoring
+        requestAnimationFrame(monitorPerformance);
+
+        // Visibility API handling
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
-                console.log('📱 Ex Machina: Page hidden');
+                console.log('🎬 OBS Overlay hidden (browser minimized/tab switched)');
             } else {
-                console.log('📱 Ex Machina: Page visible');
-                // Could trigger data refresh here
+                console.log('🎬 OBS Overlay visible');
+                // Force canvas update when becoming visible
+                if (window.obsOverlay) {
+                    window.obsOverlay.renderClusters();
+                }
             }
         });
 
-        // Prevent context menu on canvas (better UX)
-        document.getElementById('heat').addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-        });
+        // Display usage instructions if no channel specified
+        if (!channelId) {
+            setTimeout(() => {
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error-overlay';
+                errorDiv.innerHTML = `
+                        <div style="margin-bottom: 10px;">❌ Channel ID Required</div>
+                        <div style="font-size: 14px; font-weight: normal;">
+                            Add <strong>?channel=YOUR_CHANNEL_ID</strong> to the URL<br>
+                            <br>
+                            Example:<br>
+                            <code style="background: rgba(0,0,0,0.3); padding: 2px 4px; border-radius: 3px;">
+                                ?channel=phummylw&debug
+                            </code>
+                        </div>
+                    `;
+                document.body.appendChild(errorDiv);
 
-        // Keyboard shortcuts for debugging
-        if (isDebugMode) {
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'c' && e.ctrlKey) {
-                    console.log('🧹 Manual canvas clear requested');
-                    const canvas = document.getElementById('heat');
-                    const ctx = canvas.getContext('2d');
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                    e.preventDefault();
-                }
-
-                if (e.key === 'i' && e.ctrlKey && e.shiftKey) {
-                    console.log('ℹ️ Ex Machina Debug Info:', {
-                        canvas: document.getElementById('heat'),
-                        viewport: `${window.innerWidth}x${window.innerHeight}`,
-                        pixelRatio: window.devicePixelRatio,
-                        timestamp: Date.now()
-                    });
-                    e.preventDefault();
-                }
-            });
+                updateStatusIndicator(false, true);
+            }, 1000);
         }
 
-        console.log(`🎯 Ex Machina Smart Click Maps v2.0 ${isDebugMode ? '(Debug Mode)' : ''}`);
+        console.log(`🎬 Ex Machina OBS Overlay initialized ${isDebugMode ? '(Debug Mode)' : ''}`);
+        console.log(`📺 Channel: ${channelId || 'Not specified'}`);
+        console.log(`🖼️  Canvas: ${canvas.width}x${canvas.height}`);
     </script>
+
+    <!-- Load the main overlay script -->
+    <script type="module" src="overlay.js"></script>
 </body>
 </html>

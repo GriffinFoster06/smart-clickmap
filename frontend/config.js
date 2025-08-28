@@ -1,22 +1,70 @@
-﻿import { ExMachinaRenderer, ExMachinaClusterer } from './heatmap.js';
-
-/**
- * Ex Machina Configuration Panel
- * Broadcaster controls for the Smart Click Maps system
+﻿/**
+ * Ex Machina Configuration Panel - Fixed Version
  */
+
+// Simple fallback renderer for config preview
+class SimpleConfigRenderer {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.setupCanvas();
+    }
+
+    setupCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = this.canvas.getBoundingClientRect();
+        this.canvas.width = rect.width * dpr;
+        this.canvas.height = rect.height * dpr;
+        this.ctx.scale(dpr, dpr);
+        this.canvas.style.width = rect.width + 'px';
+        this.canvas.style.height = rect.height + 'px';
+        this.ctx.imageSmoothingEnabled = true;
+    }
+
+    renderClusters(clusters) {
+        const W = this.canvas.width / (window.devicePixelRatio || 1);
+        const H = this.canvas.height / (window.devicePixelRatio || 1);
+
+        this.ctx.clearRect(0, 0, W, H);
+
+        if (!clusters || clusters.length === 0) return;
+
+        clusters.forEach(cluster => {
+            const cx = (cluster.x || 0.5) * W;
+            const cy = (cluster.y || 0.5) * H;
+            const r = 10 + (cluster.pct || 10) * 0.5;
+            const isTop = cluster.isTop || cluster.pct >= Math.max(...clusters.map(c => c.pct || 0));
+            const color = isTop ? '#00FFFF' : '#9D4EDD';
+
+            // Draw circle
+            this.ctx.strokeStyle = color;
+            this.ctx.lineWidth = isTop ? 3 : 2;
+            this.ctx.fillStyle = color + '30';
+            this.ctx.beginPath();
+            this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            this.ctx.fill();
+            this.ctx.stroke();
+
+            // Draw percentage
+            this.ctx.font = `bold ${Math.max(8, r * 0.4)}px Arial`;
+            this.ctx.fillStyle = 'white';
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            this.ctx.fillText(`${cluster.pct || 0}%`, cx, cy);
+        });
+    }
+
+    handleResize() {
+        this.setupCanvas();
+    }
+}
 class ExMachinaConfigPanel {
     constructor() {
         this.EBS = 'https://smart-clickmap-backend.onrender.com';
 
-        // Initialize preview renderer
+        // Initialize preview renderer with fallback
         const previewCanvas = document.getElementById('mini');
-        this.previewRenderer = new ExMachinaRenderer(previewCanvas);
-        this.clusterer = new ExMachinaClusterer({
-            epsilon: 0.08,
-            minPts: 3,
-            maxClusters: 8,
-            minPercentage: 8
-        });
+        this.previewRenderer = new SimpleConfigRenderer(previewCanvas);
 
         // UI Elements
         this.elements = {
@@ -143,32 +191,82 @@ class ExMachinaConfigPanel {
     }
 
     /**
-     * Update preview with clustering
+     * Update preview with clustering (simplified for config)
      */
     updatePreview(rawClicks) {
         try {
-            // Generate clusters for preview
-            this.currentClusters = this.clusterer.clusterPoints(rawClicks);
-
-            // Update cluster count display
-            this.elements.blobs.textContent = this.currentClusters.length.toString();
-
-            // Render preview
-            this.renderPreview();
+            // Simple clustering for preview
+            const clusters = this.simpleClustering(rawClicks);
+            this.elements.blobs.textContent = clusters.length.toString();
+            this.renderPreview(clusters);
 
         } catch (error) {
             console.error('Preview clustering error:', error);
-            this.currentClusters = [];
             this.elements.blobs.textContent = '0';
-            this.renderPreview();
+            this.renderPreview([]);
         }
     }
 
     /**
-     * Render the preview canvas
+     * Simple clustering for config preview
      */
-    renderPreview() {
-        this.previewRenderer.renderClusters(this.currentClusters);
+    simpleClustering(clicks) {
+        if (!clicks || clicks.length === 0) return [];
+
+        // Remove duplicates
+        const uniqueClicks = new Map();
+        clicks.forEach(click => {
+            if (click.userId) uniqueClicks.set(click.userId, click);
+        });
+
+        const clicksArray = Array.from(uniqueClicks.values());
+        const clusters = [];
+        const processed = new Set();
+
+        clicksArray.forEach((click, i) => {
+            if (processed.has(i)) return;
+
+            const cluster = { x: click.x, y: click.y, count: 1 };
+
+            // Find nearby clicks
+            for (let j = i + 1; j < clicksArray.length; j++) {
+                if (processed.has(j)) continue;
+
+                const other = clicksArray[j];
+                const distance = Math.sqrt(
+                    Math.pow(click.x - other.x, 2) +
+                    Math.pow(click.y - other.y, 2)
+                );
+
+                if (distance < 0.1) {
+                    cluster.x = (cluster.x * cluster.count + other.x) / (cluster.count + 1);
+                    cluster.y = (cluster.y * cluster.count + other.y) / (cluster.count + 1);
+                    cluster.count++;
+                    processed.add(j);
+                }
+            }
+
+            processed.add(i);
+            clusters.push(cluster);
+        });
+
+        // Calculate percentages
+        clusters.forEach(cluster => {
+            cluster.pct = Math.round((cluster.count / clicksArray.length) * 100);
+        });
+
+        // Sort and mark top
+        clusters.sort((a, b) => b.count - a.count);
+        if (clusters.length > 0) clusters[0].isTop = true;
+
+        return clusters.filter(cluster => cluster.pct >= 5);
+    }
+
+    /**
+     * Render preview with clusters
+     */
+    renderPreview(clusters = []) {
+        this.previewRenderer.renderClusters(clusters);
     }
 
     /**

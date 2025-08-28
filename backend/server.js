@@ -15,26 +15,9 @@ let redis;
 let clicks; // Map<channelId, Map<userId, {x, y, timestamp, userId}>>
 
 if (useRedis) {
-    redis = Redis.createClient({
-        url: process.env.REDIS_URL,
-        retry_strategy: (times) => Math.min(times * 50, 2000)
-    });
-
-    redis.on('error', (err) => {
-        console.error('Redis error:', err);
-        // Don't crash the server on Redis errors
-    });
-
-    redis.on('connect', () => {
-        console.log('✅ Redis connected');
-    });
-
-    try {
-        await redis.connect();
-    } catch (error) {
-        console.error('❌ Redis connection failed, falling back to in-memory:', error);
-        clicks = new Map();
-    }
+    redis = Redis.createClient({ url: process.env.REDIS_URL });
+    await redis.connect();
+    console.log('✅ Redis connected');
 } else {
     clicks = new Map();
     console.log('💾 Using in-memory storage (no Redis)');
@@ -45,41 +28,27 @@ let isRunning = false;
 let systemStats = {
     startTime: Date.now(),
     totalClicksReceived: 0,
-    totalRequests: 0,
-    errors: 0
+    totalUniqueUsers: 0,
+    totalChannels: 0
 };
 
 // Express and WebSocket setup
 const app = express();
 const server = createServer(app);
+const wss = new WebSocketServer({ server });
 
-// Enhanced CORS configuration - THIS IS CRITICAL
+// CORS configuration
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-    credentials: false,
-    optionsSuccessStatus: 200 // For legacy browser support
-}));
-
-// Handle preflight requests explicitly
-app.options('*', cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: false
 }));
 
 app.use(express.json({ limit: '10mb' }));
 
-// Enhanced security and performance headers
+// Security headers
 app.use((req, res, next) => {
-    // CRITICAL: Ensure CORS headers are ALWAYS set
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
-
-    // Other security headers
     res.set({
         'Cache-Control': 'no-store, no-cache, must-revalidate',
         'Pragma': 'no-cache',
@@ -88,112 +57,65 @@ app.use((req, res, next) => {
         'X-Frame-Options': 'SAMEORIGIN',
         'X-XSS-Protection': '1; mode=block'
     });
-
     next();
 });
 
-// Request logging and stats
+// Request logging
 app.use((req, res, next) => {
-    systemStats.totalRequests++;
     const start = Date.now();
-
     res.on('finish', () => {
         const duration = Date.now() - start;
-        const status = res.statusCode;
-
-        // Log errors and slow requests
-        if (status >= 400 || duration > 1000) {
-            console.log(`${status >= 400 ? '❌' : '⚠️'} ${req.method} ${req.path} - ${status} (${duration}ms)`);
-            if (status >= 400) {
-                systemStats.errors++;
-            }
-        } else if (req.path !== '/health') {
-            console.log(`✅ ${req.method} ${req.path} - ${status} (${duration}ms)`);
+        if (req.path !== '/health' || duration > 100) { // Skip health checks unless slow
+            console.log(`${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
         }
     });
-
     next();
-});
-
-// Global error handler to prevent crashes
-process.on('uncaughtException', (error) => {
-    console.error('🚨 Uncaught Exception:', error);
-    // Log but don't exit - keep server running
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('🚨 Unhandled Rejection at:', promise, 'reason:', reason);
-    // Log but don't exit - keep server running
 });
 
 // --- WebSocket Management ---
 const wsChannels = new Map(); // channelId -> Set<WebSocket>
-let wss;
 
-try {
-    wss = new WebSocketServer({
-        server,
-        perMessageDeflate: false // Disable compression for better performance
-    });
+wss.on('connection', (ws, req) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const channelId = url.searchParams.get('channel');
 
-    wss.on('connection', (ws, req) => {
-        try {
-            const url = new URL(req.url, `http://${req.headers.host}`);
-            const channelId = url.searchParams.get('channel');
+    if (!channelId) {
+        ws.close(1008, 'Channel ID required in query param');
+        return;
+    }
 
-            if (!channelId) {
-                ws.close(1008, 'Channel ID required in query param');
-                return;
+    // Add to channel connections
+    if (!wsChannels.has(channelId)) {
+        wsChannels.set(channelId, new Set());
+    }
+    wsChannels.get(channelId).add(ws);
+
+    // Send initial status
+    ws.send(JSON.stringify({
+        type: 'status',
+        data: {
+            running: isRunning,
+            timestamp: Date.now(),
+            channelId: channelId
+        }
+    }));
+
+    console.log(`📡 WebSocket connected: ${channelId} (${wsChannels.get(channelId).size} total)`);
+
+    ws.on('close', () => {
+        if (wsChannels.has(channelId)) {
+            wsChannels.get(channelId).delete(ws);
+            if (wsChannels.get(channelId).size === 0) {
+                wsChannels.delete(channelId);
+                console.log(`📡 Channel disconnected: ${channelId}`);
             }
-
-            // Add to channel connections
-            if (!wsChannels.has(channelId)) {
-                wsChannels.set(channelId, new Set());
-            }
-            wsChannels.get(channelId).add(ws);
-
-            // Send initial status
-            ws.send(JSON.stringify({
-                type: 'status',
-                data: {
-                    running: isRunning,
-                    timestamp: Date.now(),
-                    channelId: channelId
-                }
-            }));
-
-            console.log(`📡 WebSocket connected: ${channelId} (${wsChannels.get(channelId).size} total)`);
-
-            ws.on('close', () => {
-                if (wsChannels.has(channelId)) {
-                    wsChannels.get(channelId).delete(ws);
-                    if (wsChannels.get(channelId).size === 0) {
-                        wsChannels.delete(channelId);
-                    }
-                }
-            });
-
-            ws.on('error', (error) => {
-                console.error('WebSocket error:', error);
-                // Remove the problematic connection
-                if (wsChannels.has(channelId)) {
-                    wsChannels.get(channelId).delete(ws);
-                }
-            });
-
-        } catch (error) {
-            console.error('WebSocket connection error:', error);
-            ws.close(1011, 'Internal server error');
         }
     });
 
-    wss.on('error', (error) => {
-        console.error('WebSocket Server error:', error);
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
     });
-
-} catch (error) {
-    console.error('❌ WebSocket server creation failed:', error);
-}
+});
 
 /**
  * Broadcast message to all WebSocket connections for a channel
@@ -203,23 +125,19 @@ function broadcastToChannel(channelId, data) {
 
     const message = JSON.stringify(data);
     const connections = wsChannels.get(channelId);
-    const deadConnections = new Set();
 
     connections.forEach(ws => {
-        try {
-            if (ws.readyState === 1) { // WebSocket.OPEN
+        if (ws.readyState === 1) { // WebSocket.OPEN
+            try {
                 ws.send(message);
-            } else {
-                deadConnections.add(ws);
+            } catch (error) {
+                console.error('WebSocket broadcast error:', error);
+                connections.delete(ws);
             }
-        } catch (error) {
-            console.error('WebSocket broadcast error:', error);
-            deadConnections.add(ws);
+        } else {
+            connections.delete(ws);
         }
     });
-
-    // Clean up dead connections
-    deadConnections.forEach(ws => connections.delete(ws));
 }
 
 // --- Click Storage Functions ---
@@ -228,123 +146,137 @@ function broadcastToChannel(channelId, data) {
  * Store a click (replaces any existing click from same user)
  */
 async function storeUserClick(channelId, userId, x, y, timestamp) {
-    try {
-        const clickData = {
-            x: parseFloat(x),
-            y: parseFloat(y),
-            timestamp: parseInt(timestamp),
-            userId: userId
-        };
+    const clickData = {
+        x: parseFloat(x),
+        y: parseFloat(y),
+        timestamp: parseInt(timestamp),
+        userId: userId
+    };
 
-        if (useRedis && redis && redis.isOpen) {
-            const key = `click:${channelId}:${userId}`;
-            await redis.hSet(key, clickData);
-        } else {
-            if (!clicks.has(channelId)) {
-                clicks.set(channelId, new Map());
-            }
-            clicks.get(channelId).set(userId, clickData);
-        }
-
-        systemStats.totalClicksReceived++;
-
-    } catch (error) {
-        console.error('❌ Click storage error:', error);
-        // Fall back to in-memory storage
+    if (useRedis) {
+        const key = `click:${channelId}:${userId}`;
+        await redis.hSet(key, clickData);
+        // No expiration - clicks persist until manually reset
+    } else {
         if (!clicks.has(channelId)) {
             clicks.set(channelId, new Map());
         }
-        clicks.get(channelId).set(userId, { x, y, timestamp, userId });
+        clicks.get(channelId).set(userId, clickData);
     }
+
+    // Update stats
+    systemStats.totalClicksReceived++;
+
+    console.log(`💾 Stored click: Channel=${channelId}, User=${userId}, Pos=(${x.toFixed(3)}, ${y.toFixed(3)})`);
 }
 
 /**
  * Get all clicks for a channel
  */
 async function getChannelClicks(channelId) {
-    try {
-        let clicksArray = [];
+    let clicksArray = [];
 
-        if (useRedis && redis && redis.isOpen) {
-            const keys = await redis.keys(`click:${channelId}:*`);
+    if (useRedis) {
+        const keys = await redis.keys(`click:${channelId}:*`);
 
-            for (const key of keys) {
-                try {
-                    const clickData = await redis.hGetAll(key);
-                    if (clickData.x && clickData.y && clickData.userId) {
-                        clicksArray.push({
-                            x: parseFloat(clickData.x),
-                            y: parseFloat(clickData.y),
-                            timestamp: parseInt(clickData.timestamp) || Date.now(),
-                            userId: clickData.userId
-                        });
-                    }
-                } catch (keyError) {
-                    console.error('Error reading click data:', keyError);
-                }
-            }
-        } else {
-            if (clicks.has(channelId)) {
-                clicksArray = Array.from(clicks.get(channelId).values());
+        for (const key of keys) {
+            const clickData = await redis.hGetAll(key);
+            if (clickData.x && clickData.y && clickData.userId) {
+                clicksArray.push({
+                    x: parseFloat(clickData.x),
+                    y: parseFloat(clickData.y),
+                    timestamp: parseInt(clickData.timestamp) || Date.now(),
+                    userId: clickData.userId
+                });
             }
         }
-
-        return clicksArray;
-
-    } catch (error) {
-        console.error('❌ Get clicks error:', error);
-        // Fall back to in-memory
-        return clicks.has(channelId) ? Array.from(clicks.get(channelId).values()) : [];
+    } else {
+        if (clicks.has(channelId)) {
+            clicksArray = Array.from(clicks.get(channelId).values());
+        }
     }
+
+    return clicksArray;
 }
 
 /**
  * Clear all clicks for a channel
  */
 async function clearChannelClicks(channelId) {
-    try {
-        if (useRedis && redis && redis.isOpen) {
-            const keys = await redis.keys(`click:${channelId}:*`);
-            if (keys.length > 0) {
-                await redis.del(keys);
-            }
-        } else {
-            if (clicks.has(channelId)) {
-                clicks.get(channelId).clear();
-            }
+    if (useRedis) {
+        const keys = await redis.keys(`click:${channelId}:*`);
+        if (keys.length > 0) {
+            await redis.del(keys);
         }
-
-        console.log(`🗑️ Cleared clicks for channel: ${channelId}`);
-
-    } catch (error) {
-        console.error('❌ Clear channel clicks error:', error);
-        // Fall back to in-memory clear
+    } else {
         if (clicks.has(channelId)) {
             clicks.get(channelId).clear();
         }
     }
+
+    console.log(`🗑️  Cleared clicks for channel: ${channelId}`);
 }
 
 /**
  * Clear all clicks for all channels
  */
 async function clearAllClicks() {
-    try {
-        if (useRedis && redis && redis.isOpen) {
-            const keys = await redis.keys('click:*');
-            if (keys.length > 0) {
-                await redis.del(keys);
+    if (useRedis) {
+        const keys = await redis.keys('click:*');
+        if (keys.length > 0) {
+            await redis.del(keys);
+        }
+    } else {
+        clicks.clear();
+    }
+
+    console.log('🗑️  Cleared all clicks');
+}
+
+/**
+ * Get total statistics
+ */
+async function getTotalStats() {
+    let totalClicks = 0;
+    let totalUsers = 0;
+    let totalChannels = 0;
+
+    if (useRedis) {
+        const keys = await redis.keys('click:*');
+        totalClicks = keys.length;
+
+        // Count unique users and channels
+        const users = new Set();
+        const channels = new Set();
+
+        for (const key of keys) {
+            const parts = key.split(':'); // click:channelId:userId
+            if (parts.length === 3) {
+                channels.add(parts[1]);
+                users.add(parts[2]);
             }
-        } else {
-            clicks.clear();
         }
 
-        console.log('🗑️ Cleared all clicks');
+        totalUsers = users.size;
+        totalChannels = channels.size;
+    } else {
+        totalChannels = clicks.size;
 
-    } catch (error) {
-        console.error('❌ Clear all clicks error:', error);
-        clicks.clear(); // Fall back to clearing in-memory
+        clicks.forEach(channelMap => {
+            totalClicks += channelMap.size;
+        });
+
+        // Count unique users across all channels
+        const allUsers = new Set();
+        clicks.forEach(channelMap => {
+            channelMap.forEach(clickData => {
+                allUsers.add(clickData.userId);
+            });
+        });
+        totalUsers = allUsers.size;
     }
+
+    return { totalClicks, totalUsers, totalChannels };
 }
 
 // --- API Endpoints ---
@@ -401,11 +333,12 @@ app.post('/click', async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: 'Click stored successfully'
+            message: 'Click stored successfully',
+            data: { x, y, timestamp }
         });
 
     } catch (error) {
-        console.error('❌ Click processing error:', error);
+        console.error('Click processing error:', error);
 
         if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
             return res.status(401).json({ error: 'Invalid or expired token' });
@@ -428,7 +361,8 @@ app.get('/heatmap', async (req, res) => {
                 rawClicks: [],
                 totalClicks: 0,
                 uniqueUsers: 0,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                message: 'No channel specified'
             });
         }
 
@@ -439,7 +373,7 @@ app.get('/heatmap', async (req, res) => {
         // Return raw click data for client-side clustering
         res.json({
             running: isRunning,
-            rawClicks: rawClicks,
+            rawClicks: rawClicks, // Send raw clicks for Ex Machina clustering
             totalClicks: rawClicks.length,
             uniqueUsers: uniqueUsers,
             timestamp: Date.now(),
@@ -447,17 +381,8 @@ app.get('/heatmap', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Heatmap generation error:', error);
-
-        // Return safe default response instead of crashing
-        res.status(200).json({
-            running: isRunning,
-            rawClicks: [],
-            totalClicks: 0,
-            uniqueUsers: 0,
-            timestamp: Date.now(),
-            error: 'Failed to load data'
-        });
+        console.error('Heatmap generation error:', error);
+        res.status(500).json({ error: 'Failed to generate heatmap' });
     }
 });
 
@@ -465,74 +390,64 @@ app.get('/heatmap', async (req, res) => {
  * POST /start - Start click collection
  */
 app.post('/start', (req, res) => {
-    try {
-        const wasRunning = isRunning;
-        isRunning = true;
+    const wasRunning = isRunning;
+    isRunning = true;
 
-        if (!wasRunning) {
-            console.log('🚀 Ex Machina Click Mapping STARTED');
+    if (!wasRunning) {
+        console.log('🚀 Ex Machina Click Mapping STARTED');
 
-            // Broadcast to all connected channels
-            wsChannels.forEach((connections, channelId) => {
-                broadcastToChannel(channelId, {
-                    type: 'status',
-                    data: {
-                        running: true,
-                        timestamp: Date.now(),
-                        message: 'Click mapping started'
-                    }
-                });
+        // Broadcast to all connected channels
+        wsChannels.forEach((connections, channelId) => {
+            broadcastToChannel(channelId, {
+                type: 'status',
+                data: {
+                    running: true,
+                    timestamp: Date.now(),
+                    message: 'Click mapping started'
+                }
             });
-        }
-
-        res.json({
-            success: true,
-            running: isRunning,
-            message: 'Click mapping started',
-            timestamp: Date.now()
         });
-
-    } catch (error) {
-        console.error('❌ Start error:', error);
-        res.status(500).json({ error: 'Failed to start mapping' });
     }
+
+    res.json({
+        success: true,
+        running: isRunning,
+        message: 'Click mapping started',
+        timestamp: Date.now(),
+        previouslyRunning: wasRunning
+    });
 });
 
 /**
  * POST /stop - Stop click collection
  */
 app.post('/stop', (req, res) => {
-    try {
-        const wasRunning = isRunning;
-        isRunning = false;
+    const wasRunning = isRunning;
+    isRunning = false;
 
-        if (wasRunning) {
-            console.log('🛑 Ex Machina Click Mapping STOPPED');
+    if (wasRunning) {
+        console.log('🛑 Ex Machina Click Mapping STOPPED');
 
-            // Broadcast to all connected channels
-            wsChannels.forEach((connections, channelId) => {
-                broadcastToChannel(channelId, {
-                    type: 'status',
-                    data: {
-                        running: false,
-                        timestamp: Date.now(),
-                        message: 'Click mapping stopped'
-                    }
-                });
+        // Broadcast to all connected channels
+        wsChannels.forEach((connections, channelId) => {
+            broadcastToChannel(channelId, {
+                type: 'status',
+                data: {
+                    running: false,
+                    timestamp: Date.now(),
+                    message: 'Click mapping stopped'
+                }
             });
-        }
-
-        res.json({
-            success: true,
-            running: isRunning,
-            message: 'Click mapping stopped',
-            timestamp: Date.now()
         });
-
-    } catch (error) {
-        console.error('❌ Stop error:', error);
-        res.status(500).json({ error: 'Failed to stop mapping' });
     }
+
+    res.json({
+        success: true,
+        running: isRunning,
+        message: 'Click mapping stopped',
+        timestamp: Date.now(),
+        previouslyRunning: wasRunning
+    });
 });
 
 /**
@@ -586,8 +501,58 @@ app.post('/reset', async (req, res) => {
         }
 
     } catch (error) {
-        console.error('❌ Reset error:', error);
+        console.error('Reset error:', error);
         res.status(500).json({ error: 'Failed to reset click data' });
+    }
+});
+
+/**
+ * GET /stats - Get system statistics
+ */
+app.get('/stats', async (req, res) => {
+    try {
+        const channelId = req.query.channel;
+
+        if (channelId) {
+            // Stats for specific channel
+            const rawClicks = await getChannelClicks(channelId);
+            const uniqueUsers = new Set(rawClicks.map(c => c.userId)).size;
+            const wsConnections = wsChannels.get(channelId)?.size || 0;
+
+            res.json({
+                channelId: channelId,
+                totalClicks: rawClicks.length,
+                uniqueUsers: uniqueUsers,
+                wsConnections: wsConnections,
+                running: isRunning,
+                timestamp: Date.now()
+            });
+
+        } else {
+            // Global stats
+            const stats = await getTotalStats();
+            const totalWSConnections = Array.from(wsChannels.values()).reduce((sum, set) => sum + set.size, 0);
+
+            res.json({
+                running: isRunning,
+                totalClicks: stats.totalClicks,
+                totalUsers: stats.totalUsers,
+                totalChannels: stats.totalChannels,
+                activeChannels: wsChannels.size,
+                totalWSConnections: totalWSConnections,
+                systemStats: {
+                    ...systemStats,
+                    uptime: Date.now() - systemStats.startTime,
+                    uptimeFormatted: formatUptime(Date.now() - systemStats.startTime)
+                },
+                memory: process.memoryUsage(),
+                timestamp: Date.now()
+            });
+        }
+
+    } catch (error) {
+        console.error('Stats error:', error);
+        res.status(500).json({ error: 'Failed to get statistics' });
     }
 });
 
@@ -596,27 +561,26 @@ app.post('/reset', async (req, res) => {
  */
 app.get('/health', async (req, res) => {
     try {
+        const stats = await getTotalStats();
+
         const health = {
             status: 'healthy',
             running: isRunning,
             timestamp: Date.now(),
             uptime: process.uptime(),
-            memory: process.memoryUsage(),
-            stats: systemStats
+            totalClicks: stats.totalClicks,
+            totalChannels: stats.totalChannels,
+            wsConnections: Array.from(wsChannels.values()).reduce((sum, set) => sum + set.size, 0),
+            memory: process.memoryUsage()
         };
 
         // Check Redis if enabled
-        if (useRedis && redis) {
+        if (useRedis) {
             try {
-                if (redis.isOpen) {
-                    await redis.ping();
-                    health.redis = 'connected';
-                } else {
-                    health.redis = 'disconnected';
-                    health.status = 'degraded';
-                }
+                const pong = await redis.ping();
+                health.redis = pong === 'PONG' ? 'connected' : 'error';
             } catch (error) {
-                health.redis = 'error';
+                health.redis = 'disconnected';
                 health.status = 'degraded';
             }
         } else {
@@ -626,7 +590,7 @@ app.get('/health', async (req, res) => {
         res.json(health);
 
     } catch (error) {
-        console.error('❌ Health check error:', error);
+        console.error('Health check error:', error);
         res.status(500).json({
             status: 'unhealthy',
             error: error.message,
@@ -635,18 +599,63 @@ app.get('/health', async (req, res) => {
     }
 });
 
-// --- Error Handling ---
-app.use((error, req, res, next) => {
-    console.error('❌ Express error handler:', error);
-    systemStats.errors++;
+/**
+ * GET /channels - List active channels
+ */
+app.get('/channels', async (req, res) => {
+    try {
+        const channelData = [];
 
-    // Send safe error response
-    if (!res.headersSent) {
-        res.status(500).json({
-            error: 'Internal server error',
+        // Get data for all channels with WebSocket connections
+        for (const [channelId, connections] of wsChannels) {
+            const rawClicks = await getChannelClicks(channelId);
+            const uniqueUsers = new Set(rawClicks.map(c => c.userId)).size;
+
+            channelData.push({
+                channelId: channelId,
+                totalClicks: rawClicks.length,
+                uniqueUsers: uniqueUsers,
+                wsConnections: connections.size,
+                lastActivity: Math.max(...rawClicks.map(c => c.timestamp), 0) || null
+            });
+        }
+
+        // Sort by activity
+        channelData.sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0));
+
+        res.json({
+            running: isRunning,
+            totalChannels: channelData.length,
+            channels: channelData,
             timestamp: Date.now()
         });
+
+    } catch (error) {
+        console.error('Channels list error:', error);
+        res.status(500).json({ error: 'Failed to get channel list' });
     }
+});
+
+// --- Utility Functions ---
+function formatUptime(ms) {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (days > 0) return `${days}d ${hours % 24}h ${minutes % 60}m`;
+    if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
+}
+
+// --- Error Handling ---
+app.use((error, req, res, next) => {
+    console.error('Unhandled error:', error);
+    res.status(500).json({
+        error: 'Internal server error',
+        timestamp: Date.now()
+    });
 });
 
 // Handle 404
@@ -658,85 +667,70 @@ app.use('*', (req, res) => {
     });
 });
 
-// --- Graceful Shutdown (FIXED) ---
-let shutdownInProgress = false;
-
+// --- Graceful Shutdown ---
 process.on('SIGTERM', gracefulShutdown);
 process.on('SIGINT', gracefulShutdown);
 
 async function gracefulShutdown(signal) {
-    if (shutdownInProgress) {
-        console.log('🔄 Shutdown already in progress...');
-        return;
-    }
-
-    shutdownInProgress = true;
     console.log(`\n📡 Received ${signal}. Starting graceful shutdown...`);
 
+    // Set force exit timeout only during shutdown
+    setForceExitTimeout();
+
     // Stop accepting new connections
-    server.close((err) => {
-        if (err) {
-            console.error('❌ Error closing server:', err);
-        } else {
-            console.log('🔒 HTTP server closed');
-        }
+    server.close(() => {
+        console.log('🔒 HTTP server closed');
     });
 
     // Close all WebSocket connections
     let totalClosed = 0;
-    if (wss) {
-        wss.clients.forEach(ws => {
+    wsChannels.forEach((connections, channelId) => {
+        connections.forEach(ws => {
             ws.close(1000, 'Server shutting down');
             totalClosed++;
         });
-    }
+    });
     console.log(`🔌 Closed ${totalClosed} WebSocket connections`);
 
     // Close Redis connection
-    if (useRedis && redis && redis.isOpen) {
+    if (useRedis && redis) {
         try {
             await redis.disconnect();
             console.log('🔴 Redis disconnected');
         } catch (error) {
-            console.error('❌ Redis disconnect error:', error);
+            console.error('Redis disconnect error:', error);
         }
     }
 
     console.log('✅ Graceful shutdown complete');
+    if (forceExitTimeout) clearTimeout(forceExitTimeout);
     process.exit(0);
+}
+
+// Force exit after timeout only during shutdown
+let forceExitTimeout = null;
+
+function setForceExitTimeout() {
+    if (forceExitTimeout) clearTimeout(forceExitTimeout);
+    forceExitTimeout = setTimeout(() => {
+        console.error('⏰ Force shutdown after 15 seconds timeout');
+        process.exit(1);
+    }, 15000);
 }
 
 // --- Start Server ---
 server.listen(PORT, () => {
-    console.log('\n🚀 Ex Machina Smart ClickMap Server READY');
+    console.log('\n🚀 Ex Machina Smart ClickMap Server');
     console.log(`📍 Port: ${PORT}`);
     console.log(`💾 Storage: ${useRedis ? 'Redis' : 'In-Memory'}`);
-    console.log(`📡 WebSocket: ${wss ? 'Enabled' : 'Disabled'}`);
+    console.log(`📡 WebSocket: Enabled`);
     console.log(`🔒 JWT Verification: Enabled`);
-    console.log(`🌐 CORS: Enhanced configuration active`);
+    console.log(`🌐 CORS: All origins allowed`);
     console.log(`⚡ Status: ${isRunning ? 'Running' : 'Stopped'}`);
-    console.log(`🛡️ Error Handling: Enhanced`);
 
     if (process.env.NODE_ENV === 'development') {
-        console.log(`🛠️ Development mode active`);
+        console.log(`🛠️  Development mode active`);
     }
 
-    console.log('🎯 Ready to receive clicks!\n');
+    console.log(''); // Empty line for readability
 });
-
-// Keep the server alive (remove the 15-second force exit)
-server.on('error', (error) => {
-    console.error('❌ Server error:', error);
-    if (error.code === 'EADDRINUSE') {
-        console.error(`Port ${PORT} is already in use`);
-        process.exit(1);
-    }
-    // Don't exit on other errors - log and continue
-});
-
-// Periodic health logging (every 5 minutes)
-setInterval(() => {
-    const { totalRequests, errors, totalClicksReceived } = systemStats;
-    const errorRate = totalRequests > 0 ? (errors / totalRequests * 100).toFixed(1) : 0;
-    console.log(`📊 Stats: ${totalRequests} requests, ${errors} errors (${errorRate}%), ${totalClicksReceived} clicks stored`);
-}, 300000);

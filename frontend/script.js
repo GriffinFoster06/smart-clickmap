@@ -1,8 +1,103 @@
-﻿import { ExMachinaRenderer, ExMachinaClusterer } from './heatmap.js';
+﻿/**
+ * Ex Machina Smart Click Map - Fixed Version
+ * This file should work without module import issues
+ */
+
+// Import the heatmap components with error handling
+let ExMachinaRenderer, ExMachinaClusterer;
+
+// Try to import modules, fall back to inline versions if needed
+try {
+    const heatmapModule = await import('./heatmap.js');
+    ExMachinaRenderer = heatmapModule.ExMachinaRenderer;
+    ExMachinaClusterer = heatmapModule.ExMachinaClusterer;
+} catch (error) {
+    console.error('Failed to import heatmap module, using fallback:', error);
+
+    // Fallback: Define basic renderer inline
+    ExMachinaRenderer = class {
+        constructor(canvas) {
+            this.canvas = canvas;
+            this.ctx = canvas.getContext('2d');
+            this.setupCanvas();
+        }
+
+        setupCanvas() {
+            const dpr = window.devicePixelRatio || 1;
+            const rect = this.canvas.getBoundingClientRect();
+            this.canvas.width = rect.width * dpr;
+            this.canvas.height = rect.height * dpr;
+            this.ctx.scale(dpr, dpr);
+            this.canvas.style.width = rect.width + 'px';
+            this.canvas.style.height = rect.height + 'px';
+            this.ctx.imageSmoothingEnabled = true;
+            this.ctx.imageSmoothingQuality = 'high';
+        }
+
+        renderClusters(clusters) {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            if (!clusters || clusters.length === 0) return;
+
+            const W = this.canvas.width / (window.devicePixelRatio || 1);
+            const H = this.canvas.height / (window.devicePixelRatio || 1);
+
+            clusters.forEach(cluster => {
+                const cx = cluster.x * W;
+                const cy = cluster.y * H;
+                const r = 20 + Math.sqrt(cluster.pct || 10) * 2;
+
+                // Determine colors
+                const isTop = cluster.isTop || cluster.pct >= Math.max(...clusters.map(c => c.pct));
+                const color = isTop ? '#00FFFF' : '#9D4EDD'; // Cyan for top, purple for others
+
+                // Draw glow
+                this.ctx.shadowColor = color;
+                this.ctx.shadowBlur = 15;
+
+                // Draw circle
+                this.ctx.strokeStyle = color;
+                this.ctx.lineWidth = isTop ? 4 : 3;
+                this.ctx.fillStyle = color + '20'; // 20 = low alpha
+                this.ctx.beginPath();
+                this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                this.ctx.fill();
+                this.ctx.stroke();
+
+                // Reset shadow
+                this.ctx.shadowBlur = 0;
+
+                // Draw percentage
+                const fontSize = isTop ? 28 : 24;
+                this.ctx.font = `bold ${fontSize}px Arial`;
+                this.ctx.fillStyle = 'white';
+                this.ctx.strokeStyle = 'black';
+                this.ctx.lineWidth = 3;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+
+                const text = `${cluster.pct}%`;
+                this.ctx.strokeText(text, cx, cy);
+                this.ctx.fillText(text, cx, cy);
+            });
+        }
+
+        handleResize() {
+            this.setupCanvas();
+        }
+
+        clearCanvas() {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        }
+    };
+
+    ExMachinaClusterer = class {
+        constructor() { }
+        clusterPoints() { return []; } // Fallback - server will provide clusters
+    };
+}
 
 /**
- * Ex Machina Style Smart Click Map
- * Replicates the exact behavior and visuals from the reference image
+ * Main ClickMap Class
  */
 class ExMachinaClickMap {
     constructor() {
@@ -18,12 +113,7 @@ class ExMachinaClickMap {
         }
 
         this.renderer = new ExMachinaRenderer(this.canvas);
-        this.clusterer = new ExMachinaClusterer({
-            epsilon: 0.08,           // Clustering distance threshold  
-            minPts: 3,              // Minimum points per cluster
-            maxClusters: 8,         // Max clusters to display
-            minPercentage: 8        // Minimum 8% to show cluster
-        });
+        this.clusterer = new ExMachinaClusterer();
 
         // Backend connection
         this.EBS = 'https://smart-clickmap-backend.onrender.com';
@@ -37,12 +127,10 @@ class ExMachinaClickMap {
         this.currentClusters = [];
         this.stats = { totalClicks: 0, uniqueUsers: 0 };
 
-        // Performance tracking
-        this.lastUpdateTime = 0;
-        this.updateCount = 0;
-
         this.setupEventListeners();
         this.setupResizeHandler();
+
+        console.log('Ex Machina ClickMap initialized');
     }
 
     /**
@@ -54,7 +142,7 @@ class ExMachinaClickMap {
                 Twitch.ext.onAuthorized((auth) => {
                     this.authToken = auth.token;
                     this.channelId = auth.channelId;
-                    console.log(`Ex Machina ClickMap initialized for channel: ${this.channelId}`);
+                    console.log(`Authorized for channel: ${this.channelId}`);
                     this.startDataConnection();
                     resolve();
                 });
@@ -64,7 +152,7 @@ class ExMachinaClickMap {
                 });
             } else {
                 // Fallback for testing without Twitch
-                console.log('Running Ex Machina ClickMap in test mode');
+                console.log('Running in test mode without Twitch extension');
                 this.channelId = 'test_channel';
                 this.startDataConnection();
                 resolve();
@@ -73,7 +161,7 @@ class ExMachinaClickMap {
     }
 
     /**
-     * Start data connections (WebSocket + polling fallback)
+     * Start data connections
      */
     startDataConnection() {
         this.connectWebSocket();
@@ -81,7 +169,7 @@ class ExMachinaClickMap {
     }
 
     /**
-     * Connect WebSocket for real-time updates
+     * Connect WebSocket
      */
     connectWebSocket() {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -93,8 +181,9 @@ class ExMachinaClickMap {
             this.ws = new WebSocket(wsUrl);
 
             this.ws.onopen = () => {
-                console.log('Ex Machina WebSocket connected');
+                console.log('WebSocket connected');
                 this.reconnectAttempts = 0;
+                this.dispatchEvent('ex-machina-ws-status', { status: 'Connected' });
             };
 
             this.ws.onmessage = (event) => {
@@ -102,69 +191,65 @@ class ExMachinaClickMap {
                     const data = JSON.parse(event.data);
                     this.handleWebSocketMessage(data);
                 } catch (e) {
-                    console.error('WebSocket message parsing error:', e);
+                    console.error('WebSocket message error:', e);
                 }
             };
 
-            this.ws.onclose = (event) => {
-                console.log('Ex Machina WebSocket disconnected');
+            this.ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                this.dispatchEvent('ex-machina-ws-status', { status: 'Disconnected' });
                 this.scheduleReconnect();
             };
 
             this.ws.onerror = (error) => {
-                console.error('Ex Machina WebSocket error:', error);
+                console.error('WebSocket error:', error);
+                this.dispatchEvent('ex-machina-ws-status', { status: 'Error' });
             };
 
         } catch (error) {
             console.error('WebSocket connection failed:', error);
+            this.dispatchEvent('ex-machina-ws-status', { status: 'Failed' });
             this.scheduleReconnect();
         }
     }
 
     /**
-     * Handle incoming WebSocket messages
+     * Handle WebSocket messages
      */
     handleWebSocketMessage(data) {
         switch (data.type) {
             case 'click':
-                // Real-time click received - trigger immediate update
                 this.requestDataUpdate();
                 break;
 
             case 'status':
-                const wasRunning = this.running;
                 this.running = data.data.running;
-
-                if (wasRunning !== this.running) {
-                    console.log(`Ex Machina status: ${this.running ? 'Started' : 'Stopped'}`);
-                }
+                this.updateCanvasState();
                 break;
 
             case 'reset':
                 this.currentClusters = [];
-                this.stats = { totalClicks: 0, uniqueUsers: 0 };
                 this.renderClusters();
-                console.log('Ex Machina map reset');
                 break;
         }
     }
 
     /**
-     * Start polling for data updates
+     * Start polling
      */
     startPolling() {
         if (this.pollInterval) return;
 
         this.pollInterval = setInterval(() => {
             this.requestDataUpdate();
-        }, 1500); // Poll every 1.5 seconds
+        }, 2000); // Every 2 seconds
 
-        // Initial data fetch
+        // Initial fetch
         this.requestDataUpdate();
     }
 
     /**
-     * Request data update from server
+     * Request data update
      */
     async requestDataUpdate() {
         try {
@@ -187,97 +272,153 @@ class ExMachinaClickMap {
             this.processServerData(data);
 
         } catch (error) {
-            console.error('Failed to fetch Ex Machina data:', error);
+            console.error('Failed to fetch data:', error);
         }
     }
 
     /**
-     * Process data from server and update clusters
+     * Process server data
      */
     processServerData(data) {
-        const wasRunning = this.running;
         this.running = data.running;
-
-        // Update statistics
         this.stats = {
             totalClicks: data.totalClicks || 0,
             uniqueUsers: data.uniqueUsers || 0
         };
 
-        // Process raw clicks if available
+        // Update canvas state
+        this.updateCanvasState();
+
+        // Process clusters
         if (data.rawClicks && Array.isArray(data.rawClicks)) {
+            // Use server clusters if available, otherwise convert rawClicks
             this.updateClusters(data.rawClicks);
-        }
-        // Fallback to server-provided blobs
-        else if (data.blobs && Array.isArray(data.blobs)) {
-            this.currentClusters = this.convertServerBlobs(data.blobs);
+        } else if (data.blobs && Array.isArray(data.blobs)) {
+            this.currentClusters = data.blobs;
             this.renderClusters();
         }
 
-        // Track update performance
-        const now = performance.now();
-        this.updateCount++;
-
-        if (this.updateCount % 20 === 0) { // Log every 20 updates
-            const avgTime = (now - this.lastUpdateTime) / 20;
-            console.log(`Ex Machina: ${this.updateCount} updates, ${avgTime.toFixed(1)}ms avg`);
-        }
-        this.lastUpdateTime = now;
+        // Dispatch event for debug display
+        this.dispatchEvent('ex-machina-clusters-update', {
+            count: this.currentClusters.length,
+            clicks: this.stats.totalClicks
+        });
     }
 
     /**
-     * Update clusters using Ex Machina clustering algorithm
+     * Update clusters (simplified version)
      */
     updateClusters(rawClicks) {
-        const startTime = performance.now();
-
         try {
-            // Use Ex Machina clusterer to create polygon clusters
-            this.currentClusters = this.clusterer.clusterPoints(rawClicks);
-
-            const clusterTime = performance.now() - startTime;
-
-            // Render the updated clusters
+            // For now, just convert rawClicks to simple circular clusters
+            // Group clicks by proximity
+            const clusters = this.groupClicksByProximity(rawClicks);
+            this.currentClusters = clusters;
             this.renderClusters();
 
-            if (this.currentClusters.length > 0) {
-                console.log(`Ex Machina: ${this.currentClusters.length} clusters generated in ${clusterTime.toFixed(1)}ms`);
-            }
-
         } catch (error) {
-            console.error('Ex Machina clustering error:', error);
+            console.error('Clustering error:', error);
+            this.currentClusters = [];
+            this.renderClusters();
         }
     }
 
     /**
-     * Convert server blobs to our format (fallback)
+     * Simple proximity-based clustering
      */
-    convertServerBlobs(serverBlobs) {
-        return serverBlobs.map((blob, index) => ({
-            id: `server_${index}`,
-            points: [{ x: blob.x, y: blob.y }],
-            polygon: this.createCirclePolygon({ x: blob.x, y: blob.y }, 0.05),
-            centroid: { x: blob.x, y: blob.y },
-            count: blob.count || 1,
-            percentage: blob.pct || 0,
-            isTop: blob.isTop || false,
-            rank: blob.rank || null
-        }));
+    groupClicksByProximity(clicks) {
+        if (!clicks || clicks.length === 0) return [];
+
+        // Remove duplicates (one per user)
+        const uniqueClicks = new Map();
+        clicks.forEach(click => {
+            if (click.userId) {
+                uniqueClicks.set(click.userId, click);
+            }
+        });
+
+        const clicksArray = Array.from(uniqueClicks.values());
+        if (clicksArray.length === 0) return [];
+
+        const clusters = [];
+        const processed = new Set();
+        const threshold = 0.1; // Distance threshold for clustering
+
+        clicksArray.forEach((click, i) => {
+            if (processed.has(i)) return;
+
+            const cluster = {
+                x: click.x,
+                y: click.y,
+                count: 1,
+                clicks: [click]
+            };
+
+            // Find nearby clicks
+            for (let j = i + 1; j < clicksArray.length; j++) {
+                if (processed.has(j)) continue;
+
+                const other = clicksArray[j];
+                const distance = Math.sqrt(
+                    Math.pow(click.x - other.x, 2) +
+                    Math.pow(click.y - other.y, 2)
+                );
+
+                if (distance < threshold) {
+                    cluster.x = (cluster.x * cluster.count + other.x) / (cluster.count + 1);
+                    cluster.y = (cluster.y * cluster.count + other.y) / (cluster.count + 1);
+                    cluster.count++;
+                    cluster.clicks.push(other);
+                    processed.add(j);
+                }
+            }
+
+            processed.add(i);
+            clusters.push(cluster);
+        });
+
+        // Calculate percentages and mark top cluster
+        const totalClicks = clicksArray.length;
+        clusters.forEach(cluster => {
+            cluster.pct = Math.round((cluster.count / totalClicks) * 100);
+        });
+
+        // Sort and mark top
+        clusters.sort((a, b) => b.count - a.count);
+        if (clusters.length > 0) {
+            clusters[0].isTop = true;
+        }
+
+        // Filter out small clusters
+        return clusters.filter(cluster => cluster.pct >= 8);
     }
 
     /**
-     * Render clusters using Ex Machina renderer
+     * Render clusters
      */
     renderClusters() {
         this.renderer.renderClusters(this.currentClusters);
     }
 
     /**
-     * Handle user clicks on canvas
+     * Update canvas state based on running status
+     */
+    updateCanvasState() {
+        if (this.running) {
+            this.canvas.classList.remove('inactive');
+            this.canvas.style.cursor = 'crosshair';
+        } else {
+            this.canvas.classList.add('inactive');
+            this.canvas.style.cursor = 'not-allowed';
+        }
+    }
+
+    /**
+     * Handle canvas clicks
      */
     handleCanvasClick(event) {
-        // Only process clicks when system is running and user is authorized
         if (!this.running || !this.authToken) {
+            console.log('Click ignored - system not running or not authorized');
             return;
         }
 
@@ -285,12 +426,8 @@ class ExMachinaClickMap {
         const x = (event.clientX - rect.left) / rect.width;
         const y = (event.clientY - rect.top) / rect.height;
 
-        // Validate coordinates
-        if (x < 0 || x > 1 || y < 0 || y > 1) {
-            return;
-        }
+        if (x < 0 || x > 1 || y < 0 || y > 1) return;
 
-        // Send click to server
         this.sendClick(x, y);
     }
 
@@ -309,15 +446,15 @@ class ExMachinaClickMap {
             });
 
             if (response.ok) {
-                console.log(`Ex Machina click sent: (${x.toFixed(3)}, ${y.toFixed(3)})`);
-                // Trigger immediate data update for responsive feedback
+                console.log(`Click sent: (${x.toFixed(3)}, ${y.toFixed(3)})`);
+                // Immediate update
                 setTimeout(() => this.requestDataUpdate(), 100);
             } else {
-                console.warn('Ex Machina click failed:', response.status);
+                console.warn('Click failed:', response.status);
             }
 
         } catch (error) {
-            console.error('Failed to send Ex Machina click:', error);
+            console.error('Failed to send click:', error);
         }
     }
 
@@ -325,32 +462,25 @@ class ExMachinaClickMap {
      * Setup event listeners
      */
     setupEventListeners() {
-        // Click handling
         this.canvas.addEventListener('click', (e) => this.handleCanvasClick(e));
-
-        // Touch support for mobile
         this.canvas.addEventListener('touchstart', (e) => this.handleTouchStart(e));
 
-        // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
-            // Ctrl+R to clear display (for testing)
             if (e.key === 'r' && e.ctrlKey) {
                 this.renderer.clearCanvas();
                 e.preventDefault();
             }
         });
 
-        // Network status
         window.addEventListener('online', () => this.handleOnline());
         window.addEventListener('offline', () => this.handleOffline());
     }
 
     /**
-     * Handle touch events for mobile
+     * Handle touch events
      */
     handleTouchStart(event) {
         event.preventDefault();
-
         if (event.touches.length === 1) {
             const touch = event.touches[0];
             const rect = this.canvas.getBoundingClientRect();
@@ -367,7 +497,7 @@ class ExMachinaClickMap {
     }
 
     /**
-     * Setup canvas resize handling
+     * Setup resize handler
      */
     setupResizeHandler() {
         let resizeTimeout;
@@ -375,16 +505,15 @@ class ExMachinaClickMap {
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
                 this.renderer.handleResize();
-                this.renderClusters(); // Re-render after resize
+                this.renderClusters();
             }, 250);
         });
     }
 
     /**
-     * Handle Twitch context changes
+     * Handle context changes
      */
     handleContextChange(context) {
-        // Handle fullscreen, theater mode changes
         setTimeout(() => {
             this.renderer.handleResize();
             this.renderClusters();
@@ -392,7 +521,7 @@ class ExMachinaClickMap {
     }
 
     /**
-     * Schedule WebSocket reconnection
+     * Schedule reconnect
      */
     scheduleReconnect() {
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -401,7 +530,7 @@ class ExMachinaClickMap {
 
             setTimeout(() => {
                 if (navigator.onLine) {
-                    console.log(`Ex Machina reconnecting (attempt ${this.reconnectAttempts})`);
+                    console.log(`Reconnecting (attempt ${this.reconnectAttempts})`);
                     this.connectWebSocket();
                 }
             }, delay);
@@ -409,87 +538,63 @@ class ExMachinaClickMap {
     }
 
     /**
-     * Handle online/offline events
+     * Handle online/offline
      */
     handleOnline() {
-        console.log('Ex Machina: Connection restored');
+        console.log('Connection restored');
         this.connectWebSocket();
         this.requestDataUpdate();
     }
 
     handleOffline() {
-        console.log('Ex Machina: Connection lost');
+        console.log('Connection lost');
     }
 
     /**
-     * Create circle polygon (utility)
+     * Dispatch custom events
      */
-    createCirclePolygon(center, radius, segments = 8) {
-        const polygon = [];
-        for (let i = 0; i < segments; i++) {
-            const angle = (i / segments) * 2 * Math.PI;
-            polygon.push({
-                x: center.x + Math.cos(angle) * radius,
-                y: center.y + Math.sin(angle) * radius
-            });
-        }
-        return polygon;
+    dispatchEvent(eventName, detail) {
+        window.dispatchEvent(new CustomEvent(eventName, { detail }));
     }
 
     /**
-     * Get current statistics
-     */
-    getStats() {
-        return {
-            running: this.running,
-            clusters: this.currentClusters.length,
-            totalClicks: this.stats.totalClicks,
-            uniqueUsers: this.stats.uniqueUsers,
-            wsConnected: this.ws && this.ws.readyState === WebSocket.OPEN,
-            updateCount: this.updateCount
-        };
-    }
-
-    /**
-     * Cleanup and destroy
+     * Cleanup
      */
     destroy() {
-        // Stop polling
         if (this.pollInterval) {
             clearInterval(this.pollInterval);
             this.pollInterval = null;
         }
 
-        // Close WebSocket
         if (this.ws) {
             this.ws.close();
             this.ws = null;
         }
 
-        // Clear display
         this.renderer.clearCanvas();
         this.currentClusters = [];
-
-        console.log('Ex Machina ClickMap destroyed');
     }
 }
 
-// Initialize Ex Machina ClickMap when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    const exMachinaClickMap = new ExMachinaClickMap();
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const clickMap = new ExMachinaClickMap();
+        await clickMap.initialize();
 
-    exMachinaClickMap.initialize().catch(error => {
+        // Cleanup on unload
+        window.addEventListener('beforeunload', () => {
+            clickMap.destroy();
+        });
+
+        // Expose for debugging
+        if (new URLSearchParams(location.search).has('debug')) {
+            window.exMachinaClickMap = clickMap;
+        }
+
+        console.log('Ex Machina ClickMap ready');
+
+    } catch (error) {
         console.error('Failed to initialize Ex Machina ClickMap:', error);
-    });
-
-    // Cleanup on page unload
-    window.addEventListener('beforeunload', () => {
-        exMachinaClickMap.destroy();
-    });
-
-    // Expose for debugging (only in development)
-    if (new URLSearchParams(location.search).has('debug')) {
-        window.exMachinaClickMap = exMachinaClickMap;
-        console.log('Ex Machina ClickMap debug mode enabled');
     }
 });

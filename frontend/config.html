@@ -4,25 +4,559 @@
     <meta charset="UTF-8">
     <title>Smart Click Maps Control</title>
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
-    <link rel="stylesheet" href="config.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px;
+            min-height: 100vh;
+            overflow-y: auto;
+        }
+
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+            .header h1 {
+                font-size: 24px;
+                font-weight: 600;
+                background: linear-gradient(45deg, #6441a5, #b794f6);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }
+
+        .status-card {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+            .status-row:last-child {
+                margin-bottom: 0;
+            }
+
+        .status-label {
+            font-size: 14px;
+            color: #b3b3b3;
+            font-weight: 500;
+        }
+
+        .status-value {
+            font-size: 16px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-left: 8px;
+            transition: all 0.3s ease;
+        }
+
+            .status-indicator.running {
+                background: #48bb78;
+                box-shadow: 0 0 8px rgba(72, 187, 120, 0.6);
+            }
+
+            .status-indicator.stopped {
+                background: #f56565;
+                box-shadow: 0 0 8px rgba(245, 101, 101, 0.6);
+            }
+
+        .preview-section {
+            margin-bottom: 20px;
+        }
+
+        .preview-label {
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 10px;
+            color: #e2e8f0;
+        }
+
+        .preview-container {
+            position: relative;
+            border: 2px solid #6441a5;
+            border-radius: 8px;
+            overflow: hidden;
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        #mini {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+
+        .controls-section {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .control-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+            color: white;
+        }
+
+            .btn-primary:hover {
+                background: linear-gradient(135deg, #38a169, #2f855a);
+                transform: translateY(-1px);
+                box-shadow: 0 4px 12px rgba(72, 187, 120, 0.4);
+            }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+            color: white;
+        }
+
+            .btn-secondary:hover {
+                background: linear-gradient(135deg, #e53e3e, #c53030);
+                transform: translateY(-1px);
+                box-shadow: 0 4px 12px rgba(245, 101, 101, 0.4);
+            }
+
+        .btn-tertiary {
+            background: linear-gradient(135deg, #6441a5, #553c9a);
+            color: white;
+        }
+
+            .btn-tertiary:hover {
+                background: linear-gradient(135deg, #553c9a, #44337a);
+                transform: translateY(-1px);
+                box-shadow: 0 4px 12px rgba(100, 65, 165, 0.4);
+            }
+
+        .settings-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .setting-group {
+            margin-bottom: 16px;
+        }
+
+        .setting-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: #b3b3b3;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .setting-input {
+            width: 100%;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: white;
+            font-size: 14px;
+        }
+
+            .setting-input:focus {
+                outline: none;
+                border-color: #6441a5;
+                box-shadow: 0 0 0 3px rgba(100, 65, 165, 0.2);
+            }
+
+        .setting-select {
+            width: 100%;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: white;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+            .setting-select option {
+                background: #2d3748;
+                color: white;
+            }
+
+        .footer {
+            margin-top: 20px;
+            text-align: center;
+            font-size: 11px;
+            color: #718096;
+        }
+
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        .notification {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(100, 65, 165, 0.95);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            z-index: 1000;
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+        }
+
+            .notification.show {
+                transform: translateX(0);
+            }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.7;
+            }
+        }
+
+        .pulse {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+    </style>
 </head>
 <body>
-    <div id="stats">
-        <span id="clicks">0 clicks</span>
-        <span id="users">0 users</span>
-        <span id="blobs">0 blobs</span>
+    <div class="container">
+        <div class="header">
+            <h1>Smart Click Maps</h1>
+        </div>
+
+        <div class="status-card">
+            <div class="status-row">
+                <span class="status-label">Status</span>
+                <div style="display: flex; align-items: center;">
+                    <span class="status-value" id="status-text">Stopped</span>
+                    <div class="status-indicator stopped" id="status-indicator"></div>
+                </div>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Total Clicks</span>
+                <span class="status-value" id="clicks">0</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Unique Users</span>
+                <span class="status-value" id="users">0</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Heat Clusters</span>
+                <span class="status-value" id="blobs">0</span>
+            </div>
+        </div>
+
+        <div class="preview-section">
+            <div class="preview-label">Live Preview</div>
+            <div class="preview-container">
+                <canvas id="mini" width="360" height="203"></canvas>
+            </div>
+        </div>
+
+        <div class="controls-section">
+            <div class="control-row">
+                <button class="btn btn-primary" id="start">
+                    Start Mapping
+                </button>
+                <button class="btn btn-secondary" id="stop">
+                    Stop Mapping
+                </button>
+            </div>
+            <div class="control-row">
+                <button class="btn btn-tertiary" id="reset">
+                    Clear Map
+                </button>
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <div class="setting-group">
+                <label class="setting-label">Color Scheme</label>
+                <select class="setting-select" id="colorScheme">
+                    <option value="plasma">Plasma (Purple/Pink)</option>
+                    <option value="ocean">Ocean (Blue/Gold)</option>
+                    <option value="fire">Fire (Red/Orange)</option>
+                </select>
+            </div>
+
+            <div class="setting-group">
+                <label class="setting-label">Fade Time (seconds)</label>
+                <input type="number" class="setting-input" id="fadeTime"
+                       min="10" max="300" value="60" step="10">
+            </div>
+
+            <div class="setting-group">
+                <label class="setting-label">Min Cluster Size</label>
+                <input type="number" class="setting-input" id="minClusterSize"
+                       min="1" max="10" value="3">
+            </div>
+        </div>
+
+        <div class="footer">
+            Smart Click Maps v2.0 - Real-time heatmaps for Twitch
+        </div>
     </div>
 
-    <div id="preview">
-        <canvas id="mini" width="240" height="135"></canvas>
-    </div>
+    <script type="module">
+        import { HeatmapRenderer } from './heatmap.js';
 
-    <div id="controls">
-        <button id="start">Start</button>
-        <button id="stop">Stop</button>
-        <button id="reset">Reset</button>
-    </div>
+        class ConfigPanel {
+            constructor() {
+                this.EBS = 'https://smart-clickmap-backend.onrender.com';
+                this.renderer = new HeatmapRenderer(document.getElementById('mini'));
+                this.isLoading = false;
 
-    <script type="module" src="config.js"></script>
+                this.elements = {
+                    statusText: document.getElementById('status-text'),
+                    statusIndicator: document.getElementById('status-indicator'),
+                    clicks: document.getElementById('clicks'),
+                    users: document.getElementById('users'),
+                    blobs: document.getElementById('blobs'),
+                    startBtn: document.getElementById('start'),
+                    stopBtn: document.getElementById('stop'),
+                    resetBtn: document.getElementById('reset'),
+                    colorScheme: document.getElementById('colorScheme'),
+                    fadeTime: document.getElementById('fadeTime'),
+                    minClusterSize: document.getElementById('minClusterSize')
+                };
+
+                this.setupEventListeners();
+                this.startPolling();
+            }
+
+            setupEventListeners() {
+                this.elements.startBtn.onclick = () => this.startMapping();
+                this.elements.stopBtn.onclick = () => this.stopMapping();
+                this.elements.resetBtn.onclick = () => this.resetMapping();
+
+                this.elements.colorScheme.onchange = () => this.updateColorScheme();
+                this.elements.fadeTime.onchange = () => this.updateSettings();
+                this.elements.minClusterSize.onchange = () => this.updateSettings();
+            }
+
+            async startMapping() {
+                if (this.isLoading) return;
+                this.setLoading(true);
+
+                try {
+                    const response = await fetch(`${this.EBS}/start`, {
+                        method: 'POST'
+                    });
+
+                    if (response.ok) {
+                        this.showNotification('Mapping started!');
+                    } else {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                } catch (error) {
+                    this.showNotification('Failed to start mapping', true);
+                } finally {
+                    this.setLoading(false);
+                }
+            }
+
+            async stopMapping() {
+                if (this.isLoading) return;
+                this.setLoading(true);
+
+                try {
+                    const response = await fetch(`${this.EBS}/stop`, {
+                        method: 'POST'
+                    });
+
+                    if (response.ok) {
+                        this.showNotification('Mapping stopped');
+                    } else {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                } catch (error) {
+                    this.showNotification('Failed to stop mapping', true);
+                } finally {
+                    this.setLoading(false);
+                }
+            }
+
+            async resetMapping() {
+                if (this.isLoading) return;
+
+                if (!confirm('Are you sure you want to clear all click data?')) {
+                    return;
+                }
+
+                this.setLoading(true);
+
+                try {
+                    const response = await fetch(`${this.EBS}/reset`, {
+                        method: 'POST'
+                    });
+
+                    if (response.ok) {
+                        this.renderer.clear();
+                        this.showNotification('Map cleared');
+                    } else {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                } catch (error) {
+                    this.showNotification('Failed to reset map', true);
+                } finally {
+                    this.setLoading(false);
+                }
+            }
+
+            updateColorScheme() {
+                const scheme = this.elements.colorScheme.value;
+                this.renderer.updateSettings({ colorScheme: scheme });
+                this.showNotification(`Color scheme: ${scheme}`);
+            }
+
+            async updateSettings() {
+                const settings = {
+                    fadeTime: parseInt(this.elements.fadeTime.value) * 1000,
+                    minClusterSize: parseInt(this.elements.minClusterSize.value)
+                };
+
+                try {
+                    const response = await fetch(`${this.EBS}/settings`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(settings)
+                    });
+
+                    if (response.ok) {
+                        this.showNotification('Settings updated');
+                    }
+                } catch (error) {
+                    console.error('Failed to update settings:', error);
+                }
+            }
+
+            async fetchData() {
+                try {
+                    const response = await fetch(`${this.EBS}/heatmap`);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                    const data = await response.json();
+                    this.updateDisplay(data);
+
+                } catch (error) {
+                    console.error('Polling failed:', error);
+                }
+            }
+
+            updateDisplay(data) {
+                const { running, blobs = [], totalClicks = 0, uniqueUsers = 0 } = data;
+
+                // Update status
+                this.elements.statusText.textContent = running ? 'Running' : 'Stopped';
+                this.elements.statusIndicator.className =
+                    `status-indicator ${running ? 'running' : 'stopped'}`;
+
+                // Update stats
+                this.elements.clicks.textContent = totalClicks.toLocaleString();
+                this.elements.users.textContent = uniqueUsers.toLocaleString();
+                this.elements.blobs.textContent = blobs.length.toString();
+
+                // Update preview
+                this.renderer.drawBlobs(blobs);
+
+                // Update button states
+                this.elements.startBtn.disabled = running;
+                this.elements.stopBtn.disabled = !running;
+
+                if (running && totalClicks > 0) {
+                    this.elements.statusIndicator.classList.add('pulse');
+                } else {
+                    this.elements.statusIndicator.classList.remove('pulse');
+                }
+            }
+
+            setLoading(loading) {
+                this.isLoading = loading;
+                document.body.classList.toggle('loading', loading);
+            }
+
+            showNotification(message, isError = false) {
+                const notification = document.createElement('div');
+                notification.className = 'notification';
+                notification.textContent = message;
+
+                if (isError) {
+                    notification.style.background = 'rgba(245, 101, 101, 0.95)';
+                }
+
+                document.body.appendChild(notification);
+
+                setTimeout(() => notification.classList.add('show'), 10);
+
+                setTimeout(() => {
+                    notification.classList.remove('show');
+                    setTimeout(() => {
+                        if (notification.parentNode) {
+                            notification.parentNode.removeChild(notification);
+                        }
+                    }, 300);
+                }, 2000);
+            }
+
+            startPolling() {
+                this.fetchData(); // Initial fetch
+                setInterval(() => this.fetchData(), 1000);
+            }
+        }
+
+        // Initialize when DOM is ready
+        new ConfigPanel();
+    </script>
 </body>
 </html>

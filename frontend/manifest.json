@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "version": "0.0.1",
+  "version": "2.0.0",
   "author_name": "PhummyLW",
-  "description": "Smart Click Map Replica",
+  "description": "Smart Click Maps - Real-time interactive heatmaps with advanced clustering and visual effects for engaging Twitch streams",
   "permissions": [
     "EXTENSION_BACKEND"
   ],
@@ -15,9 +15,48 @@
     "config": {
       "viewer_url": "config.html",
       "content_type": "application/html",
-      "height": 300,
-      "width": 400
+      "height": 600,
+      "width": 450
     }
   },
-  "content_security_policy": "default-src 'self'; script-src 'self' https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js; connect-src 'self' https://smart-clickmap-backend.onrender.com wss://smart-clickmap-backend.onrender.com; img-src 'self' data:; style-src 'self'; frame-ancestors https://www.twitch.tv"
+  "content_security_policy": "default-src 'self'; script-src 'self' https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js 'unsafe-inline'; connect-src 'self' https://smart-clickmap-backend.onrender.com wss://smart-clickmap-backend.onrender.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors https://www.twitch.tv https://dashboard.twitch.tv; worker-src 'self' blob:",
+  "extension_manifest_version": "2.0",
+  "privacy_policy_url": "https://example.com/privacy",
+  "panel_height": 600,
+  "configuration_location": "hosted",
+  "mobile": {
+    "video_overlay": {
+      "viewer_url": "index.html"
+    },
+    "config": {
+      "viewer_url": "config.html"
+    }
+  },
+  "installation_lifecycle": {
+    "on_install": {
+      "webhook_url": "https://smart-clickmap-backend.onrender.com/webhook/install"
+    },
+    "on_uninstall": {
+      "webhook_url": "https://smart-clickmap-backend.onrender.com/webhook/uninstall"
+    }
+  },
+  "capabilities": [
+    "realtime_updates",
+    "click_tracking",
+    "visual_effects",
+    "mobile_support"
+  ],
+  "categories": [
+    "Games",
+    "Analytics",
+    "Interactive"
+  ],
+  "tags": [
+    "heatmap",
+    "clicks",
+    "analytics",
+    "interactive",
+    "visualization",
+    "real-time"
+  ]
 }

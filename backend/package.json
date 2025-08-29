@@ -1,7 +1,7 @@
 {
   "name": "smart-clickmap-ebs",
   "version": "2.2.0",
-  "description": "Enhanced EBS with precise grid-based clustering, instant WebSocket updates, and distinct target separation",
+  "description": "Enhanced EBS with precise area-based clustering, larger coverage visualization, and polygon support for irregular areas",
   "type": "module",
   "main": "server.js",
   "engines": {
@@ -36,9 +36,8 @@
     "interactive",
     "websocket",
     "real-time",
-    "precise-clustering",
-    "grid-based",
-    "target-separation"
+    "fire-effects",
+    "dynamic-blobs"
   ],
   "author": {
     "name": "PhummyLW",

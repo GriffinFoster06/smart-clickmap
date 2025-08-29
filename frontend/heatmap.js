@@ -1,4 +1,4 @@
-﻿// frontend/heatmap.js - Smooth, spring-animated precise area-based clustering
+﻿// frontend/heatmap.js - Smooth, spring-animated clustering with smart labels (canvas space)
 export class HeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
@@ -8,9 +8,8 @@ export class HeatmapRenderer {
         this.MIN_RADIUS = 80;
         this.MAX_RADIUS = 160;
 
-        // Animation state
         this.springs = new Map(); // key -> {x,y,r,p,seed}
-        this.targets = new Map(); // key -> {x,y,r,p,count}
+        this.targets = new Map();
         this.animationId = null;
         this.lastTs = 0;
         this.reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -19,44 +18,25 @@ export class HeatmapRenderer {
         this.start();
     }
 
-    resize() {
-        const rect = this.canvas.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-
-        this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-        this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-        this.canvas.style.width = rect.width + 'px';
-        this.canvas.style.height = rect.height + 'px';
-
-        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        this.render(performance.now() / 1000);
+    // ---------- animation helpers ----------
+    _spring(value = 0, omega = 10, zeta = 1) { return { x: value, v: 0, o: omega, z: zeta, t: value }; }
+    _stepSpring(s, dt) {
+        const f = -s.o * s.o * (s.x - s.t) - 2 * s.z * s.o * s.v;
+        s.v += f * dt; s.x += s.v * dt; return s.x;
     }
-
-    // --- helpers ---
-    hashSeed(x, y, pct, count) {
+    _hashSeed(x, y, pct, count) {
         let h = 2166136261 >>> 0;
         const mix = (n) => { h ^= (n | 0); h = Math.imul(h, 16777619); };
-        mix((x * 1e6) | 0);
-        mix((y * 1e6) | 0);
-        mix(((pct || 0) * 100) | 0);
-        mix(count | 0);
+        mix((x * 1e6) | 0); mix((y * 1e6) | 0);
+        mix(((pct || 0) * 100) | 0); mix(count | 0);
         return (h >>> 0) / 4294967295;
     }
-    wobble(t, seed, base = 1.0, amp = 0.10) {
+    _wobble(t, seed, base = 1.0, amp = 0.10) {
         const a1 = Math.sin(t * 0.7 + seed * 6.28318);
         const a2 = Math.sin(t * 1.1 + seed * 12.56636);
         const a3 = Math.sin(t * 0.43 + seed * 3.14159);
         const n = (a1 * 0.5 + a2 * 0.35 + a3 * 0.15);
         return base * (1.0 + amp * n);
-    }
-    spring(value = 0, omega = 10, zeta = 1) {
-        return { x: value, v: 0, o: omega, z: zeta, t: value };
-    }
-    stepSpring(s, dt) {
-        const f = -s.o * s.o * (s.x - s.t) - 2 * s.z * s.o * s.v;
-        s.v += f * dt;
-        s.x += s.v * dt;
-        return s.x;
     }
 
     start() {
@@ -71,10 +51,8 @@ export class HeatmapRenderer {
                 const t = this.targets.get(key);
                 if (!t) continue;
                 s.x.t = t.x; s.y.t = t.y; s.r.t = t.r; s.p.t = t.p;
-                this.stepSpring(s.x, dt);
-                this.stepSpring(s.y, dt);
-                this.stepSpring(s.r, dt);
-                this.stepSpring(s.p, dt);
+                this._stepSpring(s.x, dt); this._stepSpring(s.y, dt);
+                this._stepSpring(s.r, dt); this._stepSpring(s.p, dt);
             }
 
             this.render(ts / 1000);
@@ -83,9 +61,20 @@ export class HeatmapRenderer {
         this.animationId = requestAnimationFrame(loop);
     }
 
-    stop() {
-        if (this.animationId) cancelAnimationFrame(this.animationId);
-        this.animationId = null;
+    stop() { if (this.animationId) cancelAnimationFrame(this.animationId); this.animationId = null; }
+
+    // ---------- layout / draw ----------
+    resize() {
+        const rect = this.canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+
+        this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+        this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+        this.canvas.style.width = rect.width + 'px';
+        this.canvas.style.height = rect.height + 'px';
+
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        this.render(performance.now() / 1000);
     }
 
     updateClusters(newClusters) {
@@ -106,21 +95,19 @@ export class HeatmapRenderer {
             nextTargets.set(key, { x: c.x, y: c.y, r: rEff, p: c.percentage || 0, count: c.count || 1 });
 
             if (!this.springs.has(key)) {
-                const seed = this.hashSeed(c.x, c.y, c.percentage || 0, c.count || 1);
+                const seed = this._hashSeed(c.x, c.y, c.percentage || 0, c.count || 1);
                 this.springs.set(key, {
-                    x: this.spring(c.x, 9, 0.95),
-                    y: this.spring(c.y, 9, 0.95),
-                    r: this.spring(rEff, 12, 0.9),
-                    p: this.spring(c.percentage || 0, 7, 1.0),
+                    x: this._spring(c.x, 9, 0.95),
+                    y: this._spring(c.y, 9, 0.95),
+                    r: this._spring(rEff, 12, 0.9),
+                    p: this._spring(c.percentage || 0, 7, 1.0),
                     seed
                 });
             }
         }
-
-        for (const key of this.springs.keys()) {
+        for (const key of [...this.springs.keys()]) {
             if (!nextTargets.has(key)) this.springs.delete(key);
         }
-
         this.targets = nextTargets;
 
         if (this.reduced) {
@@ -142,14 +129,7 @@ export class HeatmapRenderer {
 
         const drawables = [];
         for (const [key, s] of this.springs.entries()) {
-            drawables.push({
-                key,
-                cx: s.x.x * W,
-                cy: s.y.x * H,
-                radius: s.r.x,
-                percentage: s.p.x,
-                seed: s.seed
-            });
+            drawables.push({ key, cx: s.x.x * W, cy: s.y.x * H, radius: s.r.x, percentage: s.p.x, seed: s.seed });
         }
         drawables.sort((a, b) => a.percentage - b.percentage);
 
@@ -158,25 +138,18 @@ export class HeatmapRenderer {
             const isTop = i === drawables.length - 1;
 
             const wobbleAmp = Math.min(0.12, 0.06 + (d.percentage / 100) * 0.08);
-            const r = this.reduced ? d.radius : d.radius * this.wobble(tSec, d.seed, 1.0, wobbleAmp);
+            const r = this.reduced ? d.radius : d.radius * this._wobble(tSec, d.seed, 1.0, wobbleAmp);
 
             let fillColor, borderColor;
-            if (isTop) {
-                fillColor = 'rgba(0, 255, 255, 0.2)';
-                borderColor = 'rgba(0, 255, 255, 0.85)';
-            } else if (d.percentage >= 15) {
-                fillColor = 'rgba(147, 51, 234, 0.25)';
-                borderColor = 'rgba(147, 51, 234, 0.9)';
-            } else {
-                fillColor = 'rgba(147, 51, 234, 0.2)';
-                borderColor = 'rgba(147, 51, 234, 0.7)';
-            }
+            if (isTop) { fillColor = 'rgba(0, 255, 255, 0.2)'; borderColor = 'rgba(0, 255, 255, 0.85)'; }
+            else if (d.percentage >= 15) { fillColor = 'rgba(147, 51, 234, 0.25)'; borderColor = 'rgba(147, 51, 234, 0.9)'; }
+            else { fillColor = 'rgba(147, 51, 234, 0.2)'; borderColor = 'rgba(147, 51, 234, 0.7)'; }
 
             const usePoly = (d.percentage >= 20) && !this.reduced;
             if (usePoly) this.renderPolygonArea(d.cx, d.cy, r, fillColor, borderColor, tSec, d.seed, d.percentage);
             else this.renderCircularArea(d.cx, d.cy, r, fillColor, borderColor);
 
-            this.renderPercentageText(d.cx, d.cy, Math.round(d.percentage), r, isTop);
+            this._renderPercentageLabelCanvas(d.cx, d.cy, Math.round(d.percentage), r, isTop);
         }
     }
 
@@ -202,7 +175,7 @@ export class HeatmapRenderer {
         this.ctx.beginPath();
         for (let i = 0; i <= sides; i++) {
             const a = (i / sides) * Math.PI * 2;
-            const local = this.wobble(tSec + i * 0.07, seed * 0.73, 1.0, 0.06);
+            const local = this._wobble(tSec + i * 0.07, seed * 0.73, 1.0, 0.06);
             const rr = radius * (0.94 + 0.08 * local);
             const x = cx + Math.cos(a) * rr;
             const y = cy + Math.sin(a) * rr;
@@ -218,45 +191,132 @@ export class HeatmapRenderer {
         this.ctx.stroke();
     }
 
-    renderPercentageText(cx, cy, percentage, radius, isTop) {
+    // ---------- label helpers ----------
+    _drawRoundedRect(x, y, w, h, r) {
+        const ctx = this.ctx;
+        const rr = Math.min(r, h * 0.5, w * 0.5);
+        ctx.beginPath();
+        ctx.moveTo(x + rr, y);
+        ctx.lineTo(x + w - rr, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+        ctx.lineTo(x + w, y + h - rr);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+        ctx.lineTo(x + rr, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+        ctx.lineTo(x, y + rr);
+        ctx.quadraticCurveTo(x, y, x + rr, y);
+        ctx.closePath();
+    }
+
+    _pointRectDistance(px, py, rx, ry, rw, rh) {
+        const cx = Math.max(rx, Math.min(px, rx + rw));
+        const cy = Math.max(ry, Math.min(py, ry + rh));
+        const dx = px - cx;
+        const dy = py - cy;
+        return Math.hypot(dx, dy);
+    }
+
+    _computeLabelLayoutCanvas(cx, cy, text, fontSize, radius) {
+        const ctx = this.ctx;
+        const W = this.canvas.width / (window.devicePixelRatio || 1);
+        const H = this.canvas.height / (window.devicePixelRatio || 1);
+
+        const textWidth = ctx.measureText(text).width;
+        const padX = Math.round(fontSize * 0.6);
+        const padY = Math.round(fontSize * 0.35);
+        const pillW = Math.ceil(textWidth + padX * 2);
+        const pillH = Math.ceil(fontSize + padY * 2);
+
+        let lx = cx, ly = cy;
+        const gutter = 6;
+        const minX = gutter + pillW / 2;
+        const maxX = W - gutter - pillW / 2;
+        const minY = gutter + pillH / 2;
+        const maxY = H - gutter - pillH / 2;
+
+        const clampedLx = Math.max(minX, Math.min(maxX, lx));
+        const clampedLy = Math.max(minY, Math.min(maxY, ly));
+
+        const pill = {
+            x: Math.round(clampedLx - pillW / 2),
+            y: Math.round(clampedLy - pillH / 2),
+            w: pillW,
+            h: pillH
+        };
+
+        // line only if pill is fully outside the circle (no overlap)
+        const dist = this._pointRectDistance(cx, cy, pill.x, pill.y, pill.w, pill.h);
+        const separated = dist > Math.max(0, radius - 2);
+
+        return { pill, center: { x: clampedLx, y: clampedLy }, separated };
+    }
+
+    _renderPercentageLabelCanvas(cx, cy, percentage, radius, isTop) {
+        const ctx = this.ctx;
+        const str = `${percentage}%`;
+
         const fontSize = Math.max(24, Math.min(40, radius * 0.35));
-        this.ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
-        this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = 'middle';
+        ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
 
-        this.ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-        this.ctx.shadowBlur = 8;
-        this.ctx.shadowOffsetX = 2;
-        this.ctx.shadowOffsetY = 2;
+        const layout = this._computeLabelLayoutCanvas(cx, cy, str, fontSize, radius);
 
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillText(`${percentage}%`, cx, cy);
+        if (layout.separated) {
+            const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
+            const sx = cx + Math.cos(ang) * Math.max(0, radius - 4);
+            const sy = cy + Math.sin(ang) * Math.max(0, radius - 4);
 
-        this.ctx.shadowBlur = 0;
-        this.ctx.shadowOffsetX = 0;
-        this.ctx.shadowOffsetY = 0;
+            const halfW = layout.pill.w / 2, halfH = layout.pill.h / 2;
+            const ex = layout.center.x - Math.sign(Math.cos(ang)) * (halfW - 2);
+            const ey = layout.center.y - Math.sign(Math.sin(ang)) * (halfH - 2);
 
-        this.ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.8)' : 'rgba(147, 51, 234, 0.8)';
-        this.ctx.lineWidth = 1;
-        this.ctx.strokeText(`${percentage}%`, cx, cy);
+            ctx.save();
+            ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.85)' : 'rgba(147, 51, 234, 0.85)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        ctx.save();
+        ctx.globalAlpha = 0.95;
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        this._drawRoundedRect(layout.pill.x, layout.pill.y, layout.pill.w, layout.pill.h, Math.round(fontSize * 0.45));
+        ctx.fill();
+        ctx.restore();
+
+        ctx.save();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 2;
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(str, layout.center.x, layout.center.y);
+
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+
+        ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.85)' : 'rgba(147, 51, 234, 0.85)';
+        ctx.lineWidth = 1;
+        ctx.strokeText(str, layout.center.x, layout.center.y);
+        ctx.restore();
     }
 
-    setThreshold(threshold) {
-        this.PERCENTAGE_THRESHOLD = threshold;
-        // No immediate redraw needed; animation loop will pick it up
-    }
-
-    destroy() {
-        this.stop();
-    }
+    // ---------- public ----------
+    setThreshold(threshold) { this.PERCENTAGE_THRESHOLD = threshold; }
+    destroy() { this.stop(); }
 }
 
 // Legacy compatibility
 export function drawBlobs(ctx, blobs) {
     const renderer = new HeatmapRenderer(ctx.canvas);
     const clusters = (blobs || []).map(blob => ({
-        x: blob.x,
-        y: blob.y,
+        x: blob.x, y: blob.y,
         percentage: blob.pct || blob.percentage,
         count: blob.count || 1,
         density: blob.density || 1,

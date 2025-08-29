@@ -1,12 +1,11 @@
-﻿// frontend/overlay/overlay.js - Aspect-correct overlay with smooth, dynamic animation
+﻿// frontend/overlay/overlay.js - Aspect-correct overlay with smooth animation and smart labels
 (function () {
     'use strict';
 
     const EBS = 'https://smart-clickmap-backend.onrender.com';
-
-    // ---- prefs / helpers ----
     const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+    // ---------- helpers ----------
     function parseAspectFromURL() {
         const params = new URLSearchParams(window.location.search);
 
@@ -26,7 +25,7 @@
             if (Number.isFinite(asFloat) && asFloat > 0) return asFloat;
         }
 
-        return 16 / 9; // default
+        return 16 / 9; // default common OBS base
     }
 
     function fitViewport(containerW, containerH, targetAspect) {
@@ -41,50 +40,41 @@
         return { x: vx, y: vy, width: vw, height: vh };
     }
 
-    // Stable hash from cluster props to seed wobble (avoid synchronized motion)
+    // Stable per-cluster seed
     function hashSeed(x, y, pct, count) {
-        // simple 32-bit mix
         let h = 2166136261 >>> 0;
         function mix(n) { h ^= (n | 0); h = Math.imul(h, 16777619); }
         mix((x * 1e6) | 0);
         mix((y * 1e6) | 0);
         mix(((pct || 0) * 100) | 0);
         mix(count | 0);
-        return (h >>> 0) / 4294967295; // 0..1
+        return (h >>> 0) / 4294967295;
     }
 
-    // Small “organic” wobble using layered sines (fast, no libs)
+    // Gentle organic wobble
     function wobble(t, seed, base = 1.0, amp = 0.10) {
-        const p1 = 2.1 + seed * 0.9;
-        const p2 = 3.7 + seed * 0.8;
-        const p3 = 5.2 + seed * 0.7;
         const a1 = Math.sin(t * 0.7 + seed * 6.28318);
         const a2 = Math.sin(t * 1.1 + seed * 12.56636);
         const a3 = Math.sin(t * 0.43 + seed * 3.14159);
-        // Weighted blend; stays in [-1,1], then map to [base-amp, base+amp]
         const n = (a1 * 0.5 + a2 * 0.35 + a3 * 0.15);
         return base * (1.0 + amp * n);
     }
 
-    // Critically-damped spring integrator
+    // Critically-damped spring
     class Spring {
         constructor(value = 0, { omega = 10, zeta = 1 } = {}) {
-            this.x = value; // value
-            this.v = 0;     // velocity
+            this.x = value;
+            this.v = 0;
             this.omega = omega;
             this.zeta = zeta;
+            this.target = value;
         }
-        setTarget(target) { this.target = target; }
-        jump(value) { this.x = value; this.v = 0; }
+        setTarget(t) { this.target = t; }
+        jump(v) { this.x = v; this.v = 0; this.target = v; }
         step(dt) {
-            const x = this.x, v = this.v;
-            const y = this.target ?? x;
-            const omega = this.omega;
-            const zeta = this.zeta;
-            // x'' + 2ζω x' + ω^2(x - y) = 0  → integrate
-            const f = -omega * omega * (x - y) - 2 * zeta * omega * v;
-            this.v = v + f * dt;
-            this.x = x + this.v * dt;
+            const f = -this.omega * this.omega * (this.x - this.target) - 2 * this.zeta * this.omega * this.v;
+            this.v += f * dt;
+            this.x += this.v * dt;
             return this.x;
         }
     }
@@ -93,6 +83,7 @@
         constructor(canvas, opts = {}) {
             this.canvas = canvas;
             this.ctx = canvas.getContext('2d');
+
             this.PERCENTAGE_THRESHOLD = 3;
             this.MIN_RADIUS = 80;
             this.MAX_RADIUS = 160;
@@ -100,9 +91,8 @@
             this.targetAspect = opts.targetAspect || 16 / 9;
             this.viewport = { x: 0, y: 0, width: 0, height: 0 };
 
-            // animated state per-cluster (by stable key)
-            this.springs = new Map(); // key -> {x:Spring, y:Spring, r:Spring, p:Spring, seed:number}
-            this.targets = new Map(); // key -> {x,y,r,p,count}
+            this.springs = new Map(); // key -> {x,y,r,p,seed}
+            this.targets = new Map();
 
             this.animationId = null;
             this.lastTs = 0;
@@ -113,25 +103,21 @@
         }
 
         start() {
-            if (REDUCED_MOTION) return; // respect user preference
+            if (REDUCED_MOTION) return;
             if (this.animationId) return;
             const loop = (ts) => {
                 if (!this.lastTs) this.lastTs = ts;
                 const dt = Math.min(0.05, Math.max(0.001, (ts - this.lastTs) / 1000));
                 this.lastTs = ts;
 
-                // advance all springs
-                for (const [key, springs] of this.springs.entries()) {
+                for (const [key, s] of this.springs.entries()) {
                     const t = this.targets.get(key);
                     if (!t) continue;
-                    springs.x.setTarget(t.x);
-                    springs.y.setTarget(t.y);
-                    springs.r.setTarget(t.r);
-                    springs.p.setTarget(t.p);
-                    springs.x.step(dt);
-                    springs.y.step(dt);
-                    springs.r.step(dt);
-                    springs.p.step(dt);
+                    s.x.setTarget(t.x);
+                    s.y.setTarget(t.y);
+                    s.r.setTarget(t.r);
+                    s.p.setTarget(t.p);
+                    s.x.step(dt); s.y.step(dt); s.r.step(dt); s.p.step(dt);
                 }
 
                 this.render(ts / 1000);
@@ -140,10 +126,7 @@
             this.animationId = requestAnimationFrame(loop);
         }
 
-        stop() {
-            if (this.animationId) cancelAnimationFrame(this.animationId);
-            this.animationId = null;
-        }
+        stop() { if (this.animationId) cancelAnimationFrame(this.animationId); this.animationId = null; }
 
         resize() {
             const dpr = window.devicePixelRatio || 1;
@@ -161,12 +144,10 @@
             this.render(performance.now() / 1000);
         }
 
-        // called by networking code
         updateClusters(newClusters) {
             const filtered = (newClusters || [])
                 .filter(c => (c.percentage || 0) >= this.PERCENTAGE_THRESHOLD);
 
-            // Build target map
             const nextTargets = new Map();
             for (const c of filtered) {
                 const baseArea = this.MIN_RADIUS + (c.percentage * 2.5);
@@ -177,14 +158,9 @@
                     Math.min(this.MAX_RADIUS, baseArea * densityFactor + (spreadRadius * 200))
                 );
 
-                // stable key (prefer server id if given)
                 const key = c.id ?? `${(c.x * 10000 | 0)}_${(c.y * 10000 | 0)}_${c.count | 0}`;
-                nextTargets.set(key, {
-                    x: c.x, y: c.y, r: effectiveRadius, p: c.percentage || 0,
-                    count: c.count || 1
-                });
+                nextTargets.set(key, { x: c.x, y: c.y, r: effectiveRadius, p: c.percentage || 0, count: c.count || 1 });
 
-                // ensure springs exist
                 if (!this.springs.has(key)) {
                     const seed = hashSeed(c.x, c.y, c.percentage || 0, c.count || 1);
                     this.springs.set(key, {
@@ -196,24 +172,16 @@
                     });
                 }
             }
-
-            // Remove springs that are no longer present (let them fade out smoothly if desired)
-            for (const key of this.springs.keys()) {
-                if (!nextTargets.has(key)) {
-                    this.springs.delete(key);
-                }
+            // prune missing
+            for (const key of [...this.springs.keys()]) {
+                if (!nextTargets.has(key)) this.springs.delete(key);
             }
-
             this.targets = nextTargets;
 
             if (REDUCED_MOTION) {
-                // No animation: jump to targets and render immediately
-                for (const [key, springs] of this.springs.entries()) {
+                for (const [key, s] of this.springs.entries()) {
                     const t = this.targets.get(key);
-                    springs.x.jump(t.x);
-                    springs.y.jump(t.y);
-                    springs.r.jump(t.r);
-                    springs.p.jump(t.p);
+                    s.x.jump(t.x); s.y.jump(t.y); s.r.jump(t.r); s.p.jump(t.p);
                 }
                 this.render(performance.now() / 1000);
             }
@@ -226,17 +194,15 @@
 
             const { x: vx, y: vy, width: vw, height: vh } = this.viewport;
 
-            // Gather drawable clusters (sorted so top percentage is drawn last)
             const drawables = [];
-            for (const [key, springs] of this.springs.entries()) {
-                const percentage = springs.p.x;
+            for (const [key, s] of this.springs.entries()) {
                 drawables.push({
                     key,
-                    cx: vx + springs.x.x * vw,
-                    cy: vy + springs.y.x * vh,
-                    radius: springs.r.x,
-                    percentage,
-                    seed: springs.seed
+                    cx: vx + s.x.x * vw,
+                    cy: vy + s.y.x * vh,
+                    radius: s.r.x,
+                    percentage: s.p.x,
+                    seed: s.seed
                 });
             }
             drawables.sort((a, b) => a.percentage - b.percentage);
@@ -245,32 +211,19 @@
                 const d = drawables[i];
                 const isTop = i === drawables.length - 1;
 
-                // smooth wobble factor (reduced on low %)
                 const wobbleAmp = Math.min(0.12, 0.06 + (d.percentage / 100) * 0.08);
                 const r = REDUCED_MOTION ? d.radius : d.radius * wobble(tSec, d.seed, 1.0, wobbleAmp);
 
-                // Colors
                 let fillColor, borderColor;
-                if (isTop) {
-                    fillColor = 'rgba(0, 255, 255, 0.20)';
-                    borderColor = 'rgba(0, 255, 255, 0.85)';
-                } else if (d.percentage >= 15) {
-                    fillColor = 'rgba(147, 51, 234, 0.25)';
-                    borderColor = 'rgba(147, 51, 234, 0.90)';
-                } else {
-                    fillColor = 'rgba(147, 51, 234, 0.20)';
-                    borderColor = 'rgba(147, 51, 234, 0.70)';
-                }
+                if (isTop) { fillColor = 'rgba(0, 255, 255, 0.20)'; borderColor = 'rgba(0, 255, 255, 0.85)'; }
+                else if (d.percentage >= 15) { fillColor = 'rgba(147, 51, 234, 0.25)'; borderColor = 'rgba(147, 51, 234, 0.90)'; }
+                else { fillColor = 'rgba(147, 51, 234, 0.20)'; borderColor = 'rgba(147, 51, 234, 0.70)'; }
 
-                // Choose shape mode
-                const needsPolygon = (d.percentage >= 20); // higher % look nicer with soft polygon
-                if (needsPolygon && !REDUCED_MOTION) {
-                    this.renderPolygonArea(d.cx, d.cy, r, fillColor, borderColor, tSec, d.seed, d.percentage);
-                } else {
-                    this.renderCircularArea(d.cx, d.cy, r, fillColor, borderColor);
-                }
+                const needsPolygon = (d.percentage >= 20) && !REDUCED_MOTION;
+                if (needsPolygon) this.renderPolygonArea(d.cx, d.cy, r, fillColor, borderColor, tSec, d.seed, d.percentage);
+                else this.renderCircularArea(d.cx, d.cy, r, fillColor, borderColor);
 
-                this.renderPercentageText(d.cx, d.cy, Math.round(d.percentage), r, isTop);
+                this._renderPercentageLabel(d.cx, d.cy, Math.round(d.percentage), r, isTop);
             }
         }
 
@@ -292,18 +245,15 @@
         }
 
         renderPolygonArea(cx, cy, radius, fillColor, borderColor, tSec, seed, pct) {
-            // Smooth, rounded-ish polygon via many short edges (8..16)
             const sides = Math.max(8, Math.min(16, 6 + Math.floor(pct / 7)));
             this.ctx.beginPath();
             for (let i = 0; i <= sides; i++) {
                 const a = (i / sides) * Math.PI * 2;
-                // gentle per-angle wobble; coherent across perimeter
                 const local = wobble(tSec + i * 0.07, seed * 0.73, 1.0, 0.06);
                 const rr = radius * (0.94 + 0.08 * local);
                 const x = cx + Math.cos(a) * rr;
                 const y = cy + Math.sin(a) * rr;
-                if (i === 0) this.ctx.moveTo(x, y);
-                else this.ctx.lineTo(x, y);
+                if (i === 0) this.ctx.moveTo(x, y); else this.ctx.lineTo(x, y);
             }
             this.ctx.closePath();
 
@@ -315,32 +265,134 @@
             this.ctx.stroke();
         }
 
-        renderPercentageText(cx, cy, percentage, radius, isTop) {
+        // ---------- label helpers ----------
+        _drawRoundedRect(x, y, w, h, r) {
+            const ctx = this.ctx;
+            const rr = Math.min(r, h * 0.5, w * 0.5);
+            ctx.beginPath();
+            ctx.moveTo(x + rr, y);
+            ctx.lineTo(x + w - rr, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+            ctx.lineTo(x + w, y + h - rr);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+            ctx.lineTo(x + rr, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+            ctx.lineTo(x, y + rr);
+            ctx.quadraticCurveTo(x, y, x + rr, y);
+            ctx.closePath();
+        }
+
+        // distance from point to rectangle
+        _pointRectDistance(px, py, rx, ry, rw, rh) {
+            const cx = Math.max(rx, Math.min(px, rx + rw));
+            const cy = Math.max(ry, Math.min(py, ry + rh));
+            const dx = px - cx;
+            const dy = py - cy;
+            return Math.hypot(dx, dy);
+        }
+
+        // Returns layout and whether label must be outside the blob (no overlap)
+        _computeLabelLayout(cx, cy, text, fontSize, radius) {
+            const ctx = this.ctx;
+            const { x: vx, y: vy, width: vw, height: vh } = this.viewport;
+
+            const textWidth = ctx.measureText(text).width;
+            const padX = Math.round(fontSize * 0.6);
+            const padY = Math.round(fontSize * 0.35);
+            const pillW = Math.ceil(textWidth + padX * 2);
+            const pillH = Math.ceil(fontSize + padY * 2);
+
+            // desired label center = blob center
+            let lx = cx, ly = cy;
+
+            // clamp pill inside viewport + small gutter
+            const gutter = 6;
+            const minX = vx + gutter + pillW / 2;
+            const maxX = vx + vw - gutter - pillW / 2;
+            const minY = vy + gutter + pillH / 2;
+            const maxY = vy + vh - gutter - pillH / 2;
+
+            const clampedLx = Math.max(minX, Math.min(maxX, lx));
+            const clampedLy = Math.max(minY, Math.min(maxY, ly));
+
+            const pill = {
+                x: Math.round(clampedLx - pillW / 2),
+                y: Math.round(clampedLy - pillH / 2),
+                w: pillW,
+                h: pillH
+            };
+
+            // Check overlap: if pill intersects the circle, keep it "on-blob" and don't draw a line.
+            const dist = this._pointRectDistance(cx, cy, pill.x, pill.y, pill.w, pill.h);
+            const separated = dist > Math.max(0, radius - 2); // if rect fully outside circle, it's separated
+
+            return {
+                pill,
+                center: { x: clampedLx, y: clampedLy },
+                separated
+            };
+        }
+
+        _renderPercentageLabel(cx, cy, percentage, radius, isTop) {
+            const ctx = this.ctx;
+            const str = `${percentage}%`;
+
             const fontSize = Math.max(24, Math.min(40, radius * 0.35));
-            this.ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
-            this.ctx.textAlign = 'center';
-            this.ctx.textBaseline = 'middle';
+            ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
 
-            this.ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-            this.ctx.shadowBlur = 8;
-            this.ctx.shadowOffsetX = 2;
-            this.ctx.shadowOffsetY = 2;
+            const layout = this._computeLabelLayout(cx, cy, str, fontSize, radius);
 
-            this.ctx.fillStyle = '#ffffff';
-            this.ctx.fillText(`${percentage}%`, cx, cy);
+            // Only draw leader line if the pill is forced completely off the blob (no overlap)
+            if (layout.separated) {
+                const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
+                const sx = cx + Math.cos(ang) * Math.max(0, radius - 4);
+                const sy = cy + Math.sin(ang) * Math.max(0, radius - 4);
 
-            this.ctx.shadowBlur = 0;
-            this.ctx.shadowOffsetX = 0;
-            this.ctx.shadowOffsetY = 0;
+                const halfW = layout.pill.w / 2, halfH = layout.pill.h / 2;
+                const ex = layout.center.x - Math.sign(Math.cos(ang)) * (halfW - 2);
+                const ey = layout.center.y - Math.sign(Math.sin(ang)) * (halfH - 2);
 
-            this.ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.8)' : 'rgba(147, 51, 234, 0.8)';
-            this.ctx.lineWidth = 1;
-            this.ctx.strokeText(`${percentage}%`, cx, cy);
+                ctx.save();
+                ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.85)' : 'rgba(147, 51, 234, 0.85)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(sx, sy);
+                ctx.lineTo(ex, ey);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Pill background
+            ctx.save();
+            ctx.globalAlpha = 0.95;
+            ctx.fillStyle = 'rgba(0,0,0,0.55)';
+            this._drawRoundedRect(layout.pill.x, layout.pill.y, layout.pill.w, layout.pill.h, Math.round(fontSize * 0.45));
+            ctx.fill();
+            ctx.restore();
+
+            // Text with shadow + outline
+            ctx.save();
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+            ctx.shadowBlur = 8;
+            ctx.shadowOffsetX = 2;
+            ctx.shadowOffsetY = 2;
+
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(str, layout.center.x, layout.center.y);
+
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+
+            ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.85)' : 'rgba(147, 51, 234, 0.85)';
+            ctx.lineWidth = 1;
+            ctx.strokeText(str, layout.center.x, layout.center.y);
+            ctx.restore();
         }
 
-        setThreshold(threshold) {
-            this.PERCENTAGE_THRESHOLD = threshold;
-        }
+        setThreshold(threshold) { this.PERCENTAGE_THRESHOLD = threshold; }
     }
 
     class InstantOverlay {
@@ -390,14 +442,10 @@
                     try {
                         const data = JSON.parse(event.data);
                         this.updateVisualization(data);
-                    } catch (e) {
-                        console.warn('WebSocket parse error:', e);
-                    }
+                    } catch (e) { console.warn('WebSocket parse error:', e); }
                 };
 
-                this.websocket.onerror = () => {
-                    this.websocket = null;
-                };
+                this.websocket.onerror = () => { this.websocket = null; };
 
                 this.websocket.onclose = () => {
                     this.websocket = null;
@@ -418,9 +466,7 @@
             if (this.websocket && this.websocket.readyState === WebSocket.OPEN) return;
 
             try {
-                const response = await fetch(
-                    `${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`
-                );
+                const response = await fetch(`${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
@@ -429,16 +475,12 @@
 
             } catch (error) {
                 this.consecutiveErrors++;
-                if (this.consecutiveErrors <= 3) {
-                    console.warn(`Connection issue ${this.consecutiveErrors}/3`);
-                }
+                if (this.consecutiveErrors <= 3) console.warn(`Connection issue ${this.consecutiveErrors}/3`);
             }
         }
 
         updateVisualization(data) {
-            if (this.renderer) {
-                this.renderer.updateClusters(data.clusters || []);
-            }
+            if (this.renderer) this.renderer.updateClusters(data.clusters || []);
         }
     }
 
@@ -446,9 +488,7 @@
         try {
             new InstantOverlay();
             console.log('🎯 Precise area-based overlay loaded');
-        } catch (error) {
-            console.error('Failed to initialize overlay:', error);
-        }
+        } catch (error) { console.error('Failed to initialize overlay:', error); }
     }
 
     if (document.readyState === 'loading') {

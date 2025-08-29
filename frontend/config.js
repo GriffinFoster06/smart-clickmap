@@ -1,4 +1,4 @@
-﻿// frontend/config.js - Complete broadcaster control panel
+﻿// frontend/config.js - Fixed config panel with working reset and live preview
 import { HeatmapRenderer } from './heatmap.js';
 
 const EBS = 'https://smart-clickmap-backend.onrender.com';
@@ -23,37 +23,58 @@ class ConfigPanel {
         this.setupTwitchAuth();
         this.startPolling();
 
-        console.log('🎛️ Config Panel v2.0.0 initialized');
+        console.log('🎛️ Config Panel v2.2.0 initialized');
     }
 
     setupCanvas() {
         const canvas = document.getElementById('mini-canvas');
         if (canvas) {
+            // Initialize the heatmap renderer for live preview
             this.renderer = new HeatmapRenderer(canvas);
+            console.log('✅ Live preview canvas initialized');
+        } else {
+            console.error('❌ Mini canvas not found');
         }
     }
 
     setupEventListeners() {
-        // Control buttons
+        // Control buttons with error handling
         const startBtn = document.getElementById('start-btn');
         const stopBtn = document.getElementById('stop-btn');
         const resetBtn = document.getElementById('reset-btn');
 
-        if (startBtn) startBtn.addEventListener('click', () => this.startSession());
-        if (stopBtn) stopBtn.addEventListener('click', () => this.stopSession());
-        if (resetBtn) resetBtn.addEventListener('click', () => this.resetSession());
-
-        // Threshold control (if exists)
-        const thresholdSlider = document.getElementById('threshold-slider');
-        if (thresholdSlider) {
-            thresholdSlider.addEventListener('input', (e) => {
-                const threshold = parseInt(e.target.value);
-                if (this.renderer) {
-                    this.renderer.setThreshold(threshold);
-                }
-                document.getElementById('threshold-value').textContent = threshold + '%';
+        if (startBtn) {
+            startBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.startSession();
             });
+            console.log('✅ Start button event listener added');
         }
+
+        if (stopBtn) {
+            stopBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.stopSession();
+            });
+            console.log('✅ Stop button event listener added');
+        }
+
+        if (resetBtn) {
+            resetBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.resetSession();
+            });
+            console.log('✅ Reset button event listener added');
+        } else {
+            console.error('❌ Reset button not found');
+        }
+
+        // Test button functionality
+        console.log('🔧 Button elements found:', {
+            start: !!startBtn,
+            stop: !!stopBtn,
+            reset: !!resetBtn
+        });
     }
 
     setupTwitchAuth() {
@@ -63,12 +84,17 @@ class ConfigPanel {
                 this.channelId = auth.channelId;
                 console.log('✅ Config panel authorized for channel:', this.channelId);
             });
+        } else {
+            console.warn('⚠️ Twitch Extension Helper not available in config panel');
         }
     }
 
     async startSession() {
+        console.log('🚀 Starting session...');
+
         try {
             this.setButtonState('start-btn', true); // Disable button
+            this.updateElement('server-status', 'Starting...');
 
             const response = await fetch(`${EBS}/start`, {
                 method: 'POST',
@@ -81,23 +107,34 @@ class ConfigPanel {
             if (response.ok) {
                 const data = await response.json();
                 this.sessionStart = Date.now();
+                this.isRunning = true;
                 this.updateStatus(true);
                 this.showNotification('✅ Session started successfully!', 'success');
-                console.log('🚀 ClickMap session started');
+                console.log('🚀 ClickMap session started:', data);
+
+                // Clear preview immediately
+                if (this.renderer) {
+                    this.renderer.updateClusters([]);
+                }
+
             } else {
                 throw new Error(`HTTP ${response.status}`);
             }
         } catch (error) {
             console.error('❌ Failed to start session:', error);
-            this.showError('Failed to start session. Please try again.');
+            this.showError(`Failed to start session: ${error.message}`);
         } finally {
-            this.setButtonState('start-btn', false); // Re-enable button
+            this.setButtonState('start-btn', false);
+            this.updateElement('server-status', 'Connected');
         }
     }
 
     async stopSession() {
+        console.log('⏹️ Stopping session...');
+
         try {
             this.setButtonState('stop-btn', true);
+            this.updateElement('server-status', 'Stopping...');
 
             const response = await fetch(`${EBS}/stop`, {
                 method: 'POST',
@@ -108,27 +145,38 @@ class ConfigPanel {
             });
 
             if (response.ok) {
+                const data = await response.json();
+                this.isRunning = false;
                 this.updateStatus(false);
                 this.sessionStart = null;
                 this.showNotification('⏹️ Session stopped', 'info');
-                console.log('⏸️ ClickMap session stopped');
+                console.log('⏸️ ClickMap session stopped:', data);
             } else {
                 throw new Error(`HTTP ${response.status}`);
             }
         } catch (error) {
             console.error('❌ Failed to stop session:', error);
-            this.showError('Failed to stop session. Please try again.');
+            this.showError(`Failed to stop session: ${error.message}`);
         } finally {
             this.setButtonState('stop-btn', false);
+            this.updateElement('server-status', 'Connected');
         }
     }
 
     async resetSession() {
+        console.log('🗑️ Reset button clicked');
+
         const confirmed = confirm('⚠️ Are you sure you want to clear all click data?\n\nThis action cannot be undone.');
-        if (!confirmed) return;
+        if (!confirmed) {
+            console.log('❌ Reset cancelled by user');
+            return;
+        }
+
+        console.log('🗑️ Resetting session...');
 
         try {
             this.setButtonState('reset-btn', true);
+            this.updateElement('server-status', 'Resetting...');
 
             const response = await fetch(`${EBS}/reset`, {
                 method: 'POST',
@@ -139,21 +187,30 @@ class ConfigPanel {
             });
 
             if (response.ok) {
+                const data = await response.json();
                 this.showNotification('🗑️ All data cleared', 'info');
-                console.log('🧹 ClickMap data reset');
+                console.log('🧹 ClickMap data reset:', data);
 
-                // Clear the preview canvas
+                // Clear the preview immediately
                 if (this.renderer) {
                     this.renderer.updateClusters([]);
                 }
+
+                // Reset all stats
+                this.updateElement('total-clicks', '0');
+                this.updateElement('unique-users', '0');
+                this.updateElement('cluster-count', '0');
+                this.updateElement('coverage', '0%');
+
             } else {
                 throw new Error(`HTTP ${response.status}`);
             }
         } catch (error) {
             console.error('❌ Failed to reset data:', error);
-            this.showError('Failed to reset data. Please try again.');
+            this.showError(`Failed to reset data: ${error.message}`);
         } finally {
             this.setButtonState('reset-btn', false);
+            this.updateElement('server-status', 'Connected');
         }
     }
 
@@ -161,6 +218,7 @@ class ConfigPanel {
         const button = document.getElementById(buttonId);
         if (button) {
             button.disabled = disabled;
+            console.log(`🔘 Button ${buttonId} ${disabled ? 'disabled' : 'enabled'}`);
         }
     }
 
@@ -168,6 +226,7 @@ class ConfigPanel {
         // Poll every second for real-time updates
         this.pollInterval = setInterval(() => this.pollData(), 1000);
         this.pollData(); // Initial poll
+        console.log('📊 Polling started');
     }
 
     async pollData() {
@@ -217,16 +276,29 @@ class ConfigPanel {
         // Update advanced statistics
         this.updateAdvancedStats(data);
 
-        // Update preview canvas
-        if (this.renderer) {
-            this.renderer.updateClusters(data.clusters || []);
+        // Update preview canvas - FIXED
+        if (this.renderer && data.clusters) {
+            console.log(`🎨 Updating preview with ${data.clusters.length} clusters`);
+            this.renderer.updateClusters(data.clusters);
+        } else if (this.renderer) {
+            console.log('🎨 Clearing preview - no clusters');
+            this.renderer.updateClusters([]);
         }
 
         // Update preview status
+        this.updatePreviewStatus(data.running, visibleClusters.length);
+    }
+
+    updatePreviewStatus(isRunning, clusterCount) {
         const previewStatus = document.getElementById('preview-status');
         if (previewStatus) {
-            previewStatus.textContent = data.running ? 'LIVE' : 'STOPPED';
-            previewStatus.className = 'preview-overlay ' + (data.running ? 'live' : 'stopped');
+            if (isRunning) {
+                previewStatus.textContent = clusterCount > 0 ? 'LIVE' : 'ACTIVE';
+                previewStatus.className = 'preview-status live';
+            } else {
+                previewStatus.textContent = 'STOPPED';
+                previewStatus.className = 'preview-status stopped';
+            }
         }
     }
 
@@ -244,23 +316,20 @@ class ConfigPanel {
         // Last update time
         this.updateElement('last-update', new Date().toLocaleTimeString());
 
-        // Top hotspot information
-        const topCluster = data.clusters?.[0];
-        if (topCluster) {
-            const topHotspotText = `${topCluster.percentage}% (${topCluster.count} users)`;
-            this.updateElement('top-hotspot', topHotspotText);
-        } else {
-            this.updateElement('top-hotspot', 'None');
-        }
+        // Server and overlay status
+        this.updateElement('server-status', 'Connected');
+        this.updateElement('overlay-status', data.running ? 'Active' : 'Ready');
 
         // Threshold information
-        this.updateElement('threshold-info', `${data.threshold || 3}%`);
+        this.updateElement('threshold-value', `${data.threshold || 3}%`);
     }
 
     updateElement(id, value) {
         const element = document.getElementById(id);
         if (element) {
             element.textContent = value;
+        } else {
+            console.warn(`⚠️ Element ${id} not found`);
         }
     }
 
@@ -271,10 +340,10 @@ class ConfigPanel {
         if (statusEl && statusText) {
             if (isRunning) {
                 statusEl.className = 'status-indicator running';
-                statusText.textContent = '🟢 Session Active';
+                statusText.textContent = 'Session Active';
             } else {
                 statusEl.className = 'status-indicator stopped';
-                statusText.textContent = '🔴 Session Stopped';
+                statusText.textContent = 'Session Stopped';
             }
         }
 
@@ -284,11 +353,11 @@ class ConfigPanel {
 
         if (startBtn && stopBtn) {
             if (isRunning) {
-                startBtn.textContent = '▶️ Session Running';
+                startBtn.textContent = '▶️ Running';
                 startBtn.disabled = true;
                 stopBtn.disabled = false;
             } else {
-                startBtn.textContent = '▶️ Start Session';
+                startBtn.textContent = '▶️ Start';
                 startBtn.disabled = false;
                 stopBtn.disabled = false;
             }
@@ -298,7 +367,11 @@ class ConfigPanel {
     showError(message) {
         const errorEl = document.getElementById('error');
         if (errorEl) {
-            errorEl.textContent = message;
+            if (errorEl.textContent !== undefined) {
+                errorEl.textContent = message;
+            } else {
+                errorEl.innerHTML = message;
+            }
             errorEl.style.display = 'block';
         }
         console.error('🔴 Config Panel Error:', message);
@@ -314,54 +387,44 @@ class ConfigPanel {
     showNotification(message, type = 'info') {
         console.log(`${type.toUpperCase()}: ${message}`);
 
-        // Create temporary notification element
+        // Create temporary notification
         const notification = document.createElement('div');
-        notification.className = `notification notification-${type}`;
-        notification.textContent = message;
         notification.style.cssText = `
             position: fixed;
             top: 20px;
             right: 20px;
-            padding: 10px 16px;
+            padding: 12px 16px;
             border-radius: 6px;
             color: white;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 600;
             z-index: 10000;
-            opacity: 0;
-            transform: translateX(20px);
             transition: all 0.3s ease;
         `;
 
         // Set color based on type
         switch (type) {
             case 'success':
-                notification.style.background = 'rgba(34, 197, 94, 0.9)';
+                notification.style.background = 'rgba(34, 197, 94, 0.95)';
                 break;
             case 'error':
-                notification.style.background = 'rgba(239, 68, 68, 0.9)';
+                notification.style.background = 'rgba(239, 68, 68, 0.95)';
                 break;
             default:
-                notification.style.background = 'rgba(59, 130, 246, 0.9)';
+                notification.style.background = 'rgba(59, 130, 246, 0.95)';
         }
 
+        notification.textContent = message;
         document.body.appendChild(notification);
-
-        // Animate in
-        requestAnimationFrame(() => {
-            notification.style.opacity = '1';
-            notification.style.transform = 'translateX(0)';
-        });
 
         // Remove after 3 seconds
         setTimeout(() => {
-            notification.style.opacity = '0';
-            notification.style.transform = 'translateX(20px)';
-            setTimeout(() => {
-                if (notification.parentNode) {
+            if (notification.parentNode) {
+                notification.style.opacity = '0';
+                setTimeout(() => {
                     notification.parentNode.removeChild(notification);
-                }
-            }, 300);
+                }, 300);
+            }
         }, 3000);
     }
 

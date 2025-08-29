@@ -1,14 +1,608 @@
-html, body {
+/* frontend/style.css - Complete HUD-style overlay styling */
+
+/* ===== RESET & BASE STYLES ===== */
+* {
     margin: 0;
     padding: 0;
-    background: transparent;
+    box-sizing: border-box;
 }
 
+html, body {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+}
+
+/* ===== MAIN HEATMAP CANVAS ===== */
 #heat {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
+    pointer-events: none; /* Allow clicks to pass through to background */
+    z-index: 1000;
+    /* Optimize canvas rendering */
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: optimize-contrast;
+    image-rendering: crisp-edges;
+    /* Hardware acceleration */
+    will-change: opacity;
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+}
+
+/* ===== BODY STATE CLASSES ===== */
+body.clickmap-active {
+    cursor: crosshair;
+}
+
+body.clickmap-inactive {
+    cursor: default;
+}
+
+body.clickmap-has-data #heat {
+    opacity: 1;
+    transition: opacity 0.5s ease-in-out;
+}
+
+body:not(.clickmap-has-data) #heat {
+    opacity: 0.8;
+}
+
+/* Mobile cursor adjustments */
+@media (hover: none) and (pointer: coarse) {
+    html, body {
+        cursor: default;
+    }
+
+        body.clickmap-active {
+            cursor: default;
+        }
+}
+
+/* ===== CLICK FEEDBACK ANIMATIONS ===== */
+@keyframes clickPulse {
+    0% {
+        transform: scale(0);
+        opacity: 1;
+        border-color: rgba(147, 51, 234, 1);
+    }
+
+    50% {
+        border-color: rgba(0, 255, 255, 0.8);
+    }
+
+    100% {
+        transform: scale(4);
+        opacity: 0;
+        border-color: rgba(147, 51, 234, 0);
+    }
+}
+
+@keyframes glow {
+    0%, 100% {
+        box-shadow: 0 0 5px rgba(147, 51, 234, 0.5);
+    }
+
+    50% {
+        box-shadow: 0 0 20px rgba(0, 255, 255, 0.8);
+    }
+}
+
+/* Click feedback element (created dynamically) */
+.click-feedback {
+    position: fixed;
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(147, 51, 234, 0.8);
+    border-radius: 50%;
     pointer-events: none;
+    z-index: 10001;
+    animation: clickPulse 0.6s ease-out forwards;
+    margin: -10px 0 0 -10px;
+}
+
+/* ===== LOADING OVERLAY ===== */
+.loading-overlay {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: rgba(20, 20, 30, 0.95);
+    color: #ffffff;
+    padding: 12px 16px;
+    border-radius: 25px;
+    font-size: 13px;
+    font-weight: 600;
+    z-index: 1002;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: all 0.4s ease;
+    pointer-events: none;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(147, 51, 234, 0.3);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+    .loading-overlay.visible {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+.loading-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: #9333ea;
+    animation: spin 1s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ===== STATUS BADGE ===== */
+.status-badge {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: rgba(20, 20, 30, 0.9);
+    color: #ffffff;
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 1002;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: all 0.4s ease;
+    pointer-events: none;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+    .status-badge.visible {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .status-badge.active {
+        background: rgba(34, 197, 94, 0.2);
+        border-color: rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+        animation: glow 2s ease-in-out infinite;
+    }
+
+    .status-badge.inactive {
+        background: rgba(107, 114, 128, 0.2);
+        border-color: rgba(107, 114, 128, 0.5);
+        color: #9ca3af;
+    }
+
+/* ===== ERROR OVERLAY ===== */
+.error-overlay {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(220, 38, 38, 0.95);
+    color: white;
+    padding: 24px 30px;
+    border-radius: 12px;
+    text-align: center;
+    z-index: 1003;
+    max-width: 400px;
+    width: 90%;
+    backdrop-filter: blur(15px);
+    border: 2px solid rgba(239, 68, 68, 0.6);
+    box-shadow: 0 10px 40px rgba(220, 38, 38, 0.3);
+    animation: errorFadeIn 0.3s ease-out;
+}
+
+.error-content h3 {
+    margin-bottom: 12px;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.error-content p {
+    margin: 8px 0;
+    font-size: 14px;
+    opacity: 0.95;
+    line-height: 1.4;
+}
+
+.error-content button {
+    margin-top: 16px;
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+
+    .error-content button:hover {
+        background: rgba(255, 255, 255, 0.3);
+    }
+
+@keyframes errorFadeIn {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -60%);
+    }
+
+    to {
+        opacity: 1;
+        transform: translate(-50%, -50%);
+    }
+}
+
+/* ===== DEBUG PANEL ===== */
+.debug-panel {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    background: rgba(0, 0, 0, 0.9);
+    color: #00ff00;
+    padding: 12px;
+    border-radius: 8px;
+    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    font-size: 11px;
+    z-index: 1004;
+    border: 1px solid rgba(0, 255, 0, 0.3);
+    backdrop-filter: blur(10px);
+    min-width: 180px;
+}
+
+.debug-header {
+    color: #ffffff;
+    font-weight: bold;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(0, 255, 0, 0.3);
+}
+
+.debug-stats div {
+    margin: 3px 0;
+    display: flex;
+    justify-content: space-between;
+}
+
+.debug-stats span {
+    color: #00ffff;
+    font-weight: bold;
+}
+
+#debug-toggle {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    background: transparent;
+    color: #ff6b6b;
+    border: none;
+    font-size: 16px;
+    cursor: pointer;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+    #debug-toggle:hover {
+        color: #ff5252;
+        background: rgba(255, 107, 107, 0.1);
+        border-radius: 4px;
+    }
+
+/* ===== ACCESSIBILITY ===== */
+.sr-only {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+/* Focus indicators for keyboard navigation */
+button:focus,
+[tabindex]:focus {
+    outline: 2px solid #9333ea;
+    outline-offset: 2px;
+}
+
+/* ===== RESPONSIVE DESIGN ===== */
+
+/* Large screens (1920px+) */
+@media (min-width: 1920px) {
+    .loading-overlay,
+    .status-badge {
+        font-size: 14px;
+        padding: 10px 18px;
+    }
+
+    .debug-panel {
+        font-size: 12px;
+        padding: 16px;
+    }
+}
+
+/* Medium screens (1280px - 1919px) */
+@media (max-width: 1919px) and (min-width: 1280px) {
+    .loading-overlay,
+    .status-badge {
+        font-size: 12px;
+        padding: 8px 14px;
+    }
+}
+
+/* Small screens (768px - 1279px) */
+@media (max-width: 1279px) and (min-width: 768px) {
+    .loading-overlay {
+        top: 15px;
+        right: 15px;
+        font-size: 11px;
+        padding: 6px 12px;
+    }
+
+    .status-badge {
+        bottom: 15px;
+        right: 15px;
+        font-size: 11px;
+        padding: 6px 12px;
+    }
+
+    .debug-panel {
+        font-size: 10px;
+        padding: 10px;
+        min-width: 150px;
+    }
+}
+
+/* Mobile screens (less than 768px) */
+@media (max-width: 767px) {
+    .loading-overlay,
+    .status-badge {
+        font-size: 10px;
+        padding: 6px 10px;
+        border-radius: 15px;
+    }
+
+    .loading-overlay {
+        top: 10px;
+        right: 10px;
+    }
+
+    .status-badge {
+        bottom: 10px;
+        right: 10px;
+    }
+
+    .debug-panel {
+        font-size: 9px;
+        padding: 8px;
+        min-width: 130px;
+        top: 10px;
+        left: 10px;
+    }
+
+    .error-overlay {
+        max-width: 320px;
+        padding: 20px 24px;
+    }
+
+    .click-feedback {
+        width: 30px;
+        height: 30px;
+        margin: -15px 0 0 -15px;
+        border-width: 3px;
+    }
+}
+
+/* Very small screens (less than 480px) */
+@media (max-width: 479px) {
+    .loading-overlay,
+    .status-badge {
+        font-size: 9px;
+        padding: 4px 8px;
+    }
+
+    .error-overlay {
+        max-width: 280px;
+        padding: 16px 20px;
+    }
+
+    .error-content h3 {
+        font-size: 16px;
+    }
+
+    .error-content p {
+        font-size: 13px;
+    }
+}
+
+/* ===== PERFORMANCE OPTIMIZATIONS ===== */
+
+/* Optimize animations for better performance */
+.loading-overlay,
+.status-badge,
+.error-overlay,
+.debug-panel {
+    will-change: transform, opacity;
+}
+
+/* Prevent text selection on overlay elements */
+.loading-overlay,
+.status-badge,
+.debug-panel {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+/* ===== HIGH CONTRAST MODE SUPPORT ===== */
+@media (prefers-contrast: high) {
+    .loading-overlay,
+    .status-badge,
+    .debug-panel {
+        background: #000000;
+        border: 2px solid #ffffff;
+        color: #ffffff;
+    }
+
+    .click-feedback {
+        border-color: #ffffff;
+        border-width: 3px;
+    }
+
+    .error-overlay {
+        background: #cc0000;
+        border: 3px solid #ffffff;
+    }
+}
+
+/* ===== REDUCED MOTION SUPPORT ===== */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.1s !important;
+        transition-duration: 0.1s !important;
+    }
+
+    .loading-spinner {
+        animation: none;
+    }
+
+    .click-feedback {
+        animation: none;
+        opacity: 0;
+    }
+
+    .status-badge.active {
+        animation: none;
+    }
+}
+
+/* ===== PRINT STYLES ===== */
+@media print {
+    body {
+        display: none;
+    }
+}
+
+/* ===== DARK MODE ENHANCEMENTS ===== */
+@media (prefers-color-scheme: dark) {
+    .loading-overlay,
+    .status-badge,
+    .debug-panel {
+        border-color: rgba(255, 255, 255, 0.2);
+    }
+}
+
+/* ===== LANDSCAPE ORIENTATION ADJUSTMENTS ===== */
+@media (orientation: landscape) and (max-height: 600px) {
+    .loading-overlay {
+        top: 10px;
+        right: 10px;
+    }
+
+    .status-badge {
+        bottom: 10px;
+        right: 10px;
+    }
+
+    .debug-panel {
+        top: 10px;
+        left: 10px;
+    }
+}
+
+/* ===== TOUCH DEVICE OPTIMIZATIONS ===== */
+@media (hover: none) {
+    /* Prevent hover effects on touch devices */
+    .error-content button:hover {
+        background: rgba(255, 255, 255, 0.2);
+    }
+
+    #debug-toggle:hover {
+        color: inherit;
+        background: transparent;
+    }
+
+    /* Larger touch targets */
+    .error-content button {
+        min-height: 44px;
+        padding: 12px 20px;
+    }
+}
+
+/* ===== OVERSCROLL BEHAVIOR ===== */
+body {
+    overscroll-behavior: none;
+    -ms-scroll-chaining: none;
+    scroll-behavior: smooth;
+}
+
+/* ===== WEBKIT SPECIFIC OPTIMIZATIONS ===== */
+@supports (-webkit-appearance: none) {
+    #heat {
+        -webkit-transform: translate3d(0, 0, 0);
+    }
+
+    .loading-overlay,
+    .status-badge {
+        -webkit-backdrop-filter: blur(10px);
+    }
+}
+
+/* ===== FINAL CATCH-ALL RULES ===== */
+
+/* Ensure no unexpected scrollbars */
+html {
+    overflow: hidden;
+    height: 100%;
+}
+
+/* Smooth font rendering */
+body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeSpeed;
+}
+
+/* Hardware acceleration for key elements */
+#heat,
+.loading-overlay,
+.status-badge,
+.error-overlay {
+    transform: translateZ(0);
+    will-change: transform, opacity;
 }

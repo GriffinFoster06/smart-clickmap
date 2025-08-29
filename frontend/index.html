@@ -2,21 +2,196 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Smart Click Map</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Click Map - Twitch Extension</title>
 
-    <!-- ✅ Add this line to load Twitch Extension Helper Library -->
+    <!-- Twitch Extension Helper Library -->
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
 
+    <!-- Extension Styles -->
     <link rel="stylesheet" href="style.css">
+
+    <!-- Preload important resources -->
+    <link rel="preload" href="heatmap.js" as="script">
+    <link rel="preload" href="script.js" as="script">
 </head>
 <body>
+    <!-- Main heatmap canvas - HUD-style overlay -->
+    <canvas id="heat" width="1920" height="1080" aria-label="Interactive click heatmap overlay"></canvas>
 
-    <!-- The transparent heatmap canvas -->
-    <canvas id="heat" width="1920" height="1080"></canvas>
+    <!-- Loading indicator (hidden by default) -->
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="loading-spinner"></div>
+        <span>Connecting...</span>
+    </div>
 
-    <!-- Your viewer overlay scripts -->
+    <!-- Status badge for user feedback -->
+    <div class="status-badge" id="status-badge">
+        <span id="status-text">Initializing...</span>
+    </div>
+
+    <!-- Error display (hidden by default) -->
+    <div class="error-overlay" id="error-overlay" style="display: none;">
+        <div class="error-content">
+            <h3>⚠️ Connection Issue</h3>
+            <p id="error-message">Unable to connect to ClickMap server.</p>
+            <button id="retry-button" onclick="location.reload()">🔄 Retry</button>
+        </div>
+    </div>
+
+    <!-- Debug panel (only visible in development) -->
+    <div class="debug-panel" id="debug-panel" style="display: none;">
+        <div class="debug-header">🐛 Debug Info</div>
+        <div class="debug-stats">
+            <div>Status: <span id="debug-status">-</span></div>
+            <div>Channel: <span id="debug-channel">-</span></div>
+            <div>Clicks: <span id="debug-clicks">0</span></div>
+            <div>Clusters: <span id="debug-clusters">0</span></div>
+            <div>Polls: <span id="debug-polls">0</span></div>
+            <div>Last Poll: <span id="debug-last-poll">-</span></div>
+        </div>
+        <button id="debug-toggle" onclick="this.parentElement.style.display='none'">×</button>
+    </div>
+
+    <!-- Accessibility announcements -->
+    <div class="sr-only" id="announcements" aria-live="polite" aria-atomic="true"></div>
+
+    <!-- Extension scripts -->
     <script type="module" src="heatmap.js"></script>
     <script type="module" src="script.js"></script>
 
+    <!-- Extension metadata for Twitch -->
+    <script type="application/json" id="extension-manifest">
+        {
+            "name": "Smart ClickMap",
+            "version": "2.0.0",
+            "description": "Interactive HUD-style click heatmap overlay",
+            "features": ["real-time", "hud-style", "interactive", "clustering"],
+            "thresholds": {
+                "default": 3,
+                "minimum": 1,
+                "maximum": 50
+            }
+        }
+    </script>
+
+    <!-- Performance monitoring (development only) -->
+    <script>
+        // Enable debug mode for localhost
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            document.getElementById('debug-panel').style.display = 'block';
+            console.log('🐛 Debug mode enabled');
+
+            // Add debug keyboard shortcuts
+            document.addEventListener('keydown', (e) => {
+                if (e.ctrlKey && e.shiftKey) {
+                    switch (e.key) {
+                        case 'D':
+                            document.getElementById('debug-panel').style.display =
+                                document.getElementById('debug-panel').style.display === 'none' ? 'block' : 'none';
+                            break;
+                        case 'C':
+                            console.clear();
+                            console.log('🧹 Console cleared');
+                            break;
+                        case 'R':
+                            if (window.ClickMapExtension) {
+                                window.ClickMapExtension.destroy();
+                                location.reload();
+                            }
+                            break;
+                    }
+                }
+            });
+
+            // Performance monitoring
+            let frameCount = 0;
+            let lastTime = performance.now();
+
+            function measureFPS() {
+                frameCount++;
+                const now = performance.now();
+
+                if (now - lastTime >= 1000) {
+                    const fps = Math.round((frameCount * 1000) / (now - lastTime));
+                    console.log(`📊 FPS: ${fps}, Memory: ${(performance.memory?.usedJSHeapSize / 1024 / 1024).toFixed(1)}MB`);
+                    frameCount = 0;
+                    lastTime = now;
+                }
+
+                requestAnimationFrame(measureFPS);
+            }
+
+            if (typeof performance !== 'undefined' && performance.memory) {
+                requestAnimationFrame(measureFPS);
+            }
+        }
+
+        // Error handling for unhandled promises and errors
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('🔴 Unhandled promise rejection:', event.reason);
+
+            // Don't show user-facing errors for network issues in production
+            if (window.location.hostname !== 'localhost') {
+                event.preventDefault();
+            }
+        });
+
+        window.addEventListener('error', (event) => {
+            console.error('🔴 Unhandled error:', event.error || event.message);
+        });
+
+        // Basic analytics (privacy-friendly)
+        const analytics = {
+            startTime: Date.now(),
+            interactions: 0,
+            errors: 0,
+
+            trackInteraction() {
+                this.interactions++;
+            },
+
+            trackError() {
+                this.errors++;
+            },
+
+            getSessionData() {
+                return {
+                    duration: Date.now() - this.startTime,
+                    interactions: this.interactions,
+                    errors: this.errors,
+                    userAgent: navigator.userAgent.substring(0, 50),
+                    timestamp: new Date().toISOString()
+                };
+            }
+        };
+
+        // Export for debugging
+        window.analytics = analytics;
+
+        console.log('🎯 Smart ClickMap Extension v2.0.0 loaded');
+        console.log('🎨 HUD-style visualization with purple/cyan theming');
+        console.log('📱 Touch and click interactions supported');
+        console.log('♿ Accessibility features enabled');
+    </script>
+
+    <!-- Structured data for better indexing -->
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "WebApplication",
+            "name": "Smart ClickMap",
+            "applicationCategory": "Twitch Extension",
+            "operatingSystem": "Web Browser",
+            "permissions": "Interactive Overlay",
+            "featureList": [
+                "Real-time click visualization",
+                "HUD-style overlay",
+                "Adaptive clustering algorithm",
+                "Touch and mouse support",
+                "Accessibility features"
+            ]
+        }
+    </script>
 </body>
 </html>

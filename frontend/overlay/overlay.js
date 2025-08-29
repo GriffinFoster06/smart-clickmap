@@ -4,26 +4,87 @@
 
     const EBS = 'https://smart-clickmap-backend.onrender.com';
 
+    // ---- helpers ----
+    function parseAspectFromURL() {
+        const params = new URLSearchParams(window.location.search);
+
+        // base_w/base_h override if present
+        const bw = parseInt(params.get('base_w') || params.get('bw') || '', 10);
+        const bh = parseInt(params.get('base_h') || params.get('bh') || '', 10);
+        if (Number.isFinite(bw) && bw > 0 && Number.isFinite(bh) && bh > 0) {
+            return bw / bh;
+        }
+
+        // aspect=16:9 or aspect=4/3
+        const aspectStr = params.get('aspect');
+        if (aspectStr) {
+            const parts = aspectStr.split(/[:/]/).map(Number);
+            if (parts.length === 2 && parts.every(n => Number.isFinite(n) && n > 0)) {
+                return parts[0] / parts[1];
+            }
+            const asFloat = parseFloat(aspectStr);
+            if (Number.isFinite(asFloat) && asFloat > 0) return asFloat;
+        }
+
+        // default to 16:9 (common OBS base)
+        return 16 / 9;
+    }
+
+    function fitViewport(containerW, containerH, targetAspect) {
+        // Returns a letterboxed viewport that fits inside container while preserving targetAspect
+        let vw = containerW;
+        let vh = Math.round(vw / targetAspect);
+        if (vh > containerH) {
+            vh = containerH;
+            vw = Math.round(vh * targetAspect);
+        }
+        const vx = Math.floor((containerW - vw) / 2);
+        const vy = Math.floor((containerH - vh) / 2);
+        return { x: vx, y: vy, width: vw, height: vh };
+    }
+
     class PreciseAreaRenderer {
-        constructor(canvas) {
+        constructor(canvas, opts = {}) {
             this.canvas = canvas;
             this.ctx = canvas.getContext('2d');
             this.clusters = [];
+
             this.PERCENTAGE_THRESHOLD = 3;
-            this.MIN_RADIUS = 80; // Much larger minimum
+            this.MIN_RADIUS = 80;
             this.MAX_RADIUS = 160;
 
+            this.targetAspect = opts.targetAspect || 16 / 9;
+            this.viewport = { x: 0, y: 0, width: 0, height: 0 };
+
+            // initial size + listen for resize
             this.resize();
             window.addEventListener('resize', () => this.resize());
         }
 
         resize() {
             const dpr = window.devicePixelRatio || 1;
-            this.canvas.width = window.innerWidth * dpr;
-            this.canvas.height = window.innerHeight * dpr;
-            this.canvas.style.width = window.innerWidth + 'px';
-            this.canvas.style.height = window.innerHeight + 'px';
-            this.ctx.scale(dpr, dpr);
+            const cssW = window.innerWidth;
+            const cssH = window.innerHeight;
+
+            // Physical backing store size
+            this.canvas.width = Math.max(1, Math.floor(cssW * dpr));
+            this.canvas.height = Math.max(1, Math.floor(cssH * dpr));
+
+            // CSS size (logical pixels)
+            this.canvas.style.width = cssW + 'px';
+            this.canvas.style.height = cssH + 'px';
+
+            // IMPORTANT: reset transform (avoid compounding scales across resizes)
+            this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            // Compute letterboxed viewport preserving OBS aspect
+            this.viewport = fitViewport(cssW, cssH, this.targetAspect);
+
+            // Optional: enable crisp lines on high DPR
+            this.ctx.imageSmoothingEnabled = true;
+
+            // Redraw with new dimensions
+            this.render();
         }
 
         updateClusters(newClusters) {
@@ -36,7 +97,6 @@
         }
 
         processClusterArea(cluster) {
-            // Calculate actual coverage area
             const baseArea = this.MIN_RADIUS + (cluster.percentage * 2.5);
             const densityFactor = cluster.density ? Math.sqrt(cluster.density) : 1;
             const spreadRadius = cluster.radius || 0.05;
@@ -58,10 +118,14 @@
         }
 
         render() {
-            const W = window.innerWidth;
-            const H = window.innerHeight;
+            const cssW = this.canvas.width / (window.devicePixelRatio || 1);
+            const cssH = this.canvas.height / (window.devicePixelRatio || 1);
 
-            this.ctx.clearRect(0, 0, W, H);
+            // Clear full canvas (logical coords since we setTransform to DPR)
+            this.ctx.clearRect(0, 0, cssW, cssH);
+
+            // If you want to dim outside the viewport to make the active area obvious, uncomment:
+            // this._shadeOutsideViewport(cssW, cssH);
 
             if (this.clusters.length === 0) return;
 
@@ -70,13 +134,33 @@
 
             reversedClusters.forEach((cluster, index) => {
                 const isTop = index === reversedClusters.length - 1;
-                this.renderAreaCluster(cluster, W, H, isTop);
+                this.renderAreaCluster(cluster, isTop);
             });
         }
 
-        renderAreaCluster(cluster, W, H, isTop) {
-            const cx = cluster.x * W;
-            const cy = cluster.y * H;
+        _shadeOutsideViewport(cssW, cssH) {
+            const { x, y, width, height } = this.viewport;
+            this.ctx.save();
+            this.ctx.fillStyle = 'rgba(0,0,0,0.15)';
+
+            // Top bar
+            this.ctx.fillRect(0, 0, cssW, y);
+            // Bottom bar
+            this.ctx.fillRect(0, y + height, cssW, cssH - (y + height));
+            // Left bar
+            this.ctx.fillRect(0, y, x, height);
+            // Right bar
+            this.ctx.fillRect(x + width, y, cssW - (x + width), height);
+
+            this.ctx.restore();
+        }
+
+        renderAreaCluster(cluster, isTop) {
+            const { x: vx, y: vy, width: vw, height: vh } = this.viewport;
+
+            // Map normalized heatmap coordinates into the letterboxed viewport
+            const cx = vx + (cluster.x * vw);
+            const cy = vy + (cluster.y * vh);
             const percentage = cluster.percentage || 0;
             const radius = cluster.effectiveRadius;
 
@@ -96,9 +180,9 @@
             }
 
             if (cluster.needsPolygon) {
-                this.renderPolygonArea(cx, cy, radius, fillColor, borderColor, percentage);
+                this.renderPolygonArea(cx, cy, radius, fillColor, borderColor);
             } else {
-                this.renderCircularArea(cx, cy, radius, fillColor, borderColor, percentage);
+                this.renderCircularArea(cx, cy, radius, fillColor, borderColor);
             }
 
             this.renderPercentageText(cx, cy, percentage, radius, isTop);
@@ -106,19 +190,16 @@
             this.ctx.restore();
         }
 
-        renderCircularArea(cx, cy, radius, fillColor, borderColor, percentage) {
-            // Main area fill
+        renderCircularArea(cx, cy, radius, fillColor, borderColor) {
             this.ctx.fillStyle = fillColor;
             this.ctx.beginPath();
             this.ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
             this.ctx.fill();
 
-            // Border
             this.ctx.strokeStyle = borderColor;
             this.ctx.lineWidth = 3;
             this.ctx.stroke();
 
-            // Inner highlight
             this.ctx.strokeStyle = borderColor.replace(/[\d\.]+\)$/g, '0.3)');
             this.ctx.lineWidth = 1.5;
             this.ctx.beginPath();
@@ -126,7 +207,8 @@
             this.ctx.stroke();
         }
 
-        renderPolygonArea(cx, cy, radius, fillColor, borderColor, percentage) {
+        renderPolygonArea(cx, cy, radius, fillColor, borderColor) {
+            const percentage = Math.max(0, Math.min(100, this.lastPercentage || 0));
             const sides = 6 + Math.floor(percentage / 10);
             const time = Date.now() * 0.001;
 
@@ -139,11 +221,8 @@
                 const x = cx + Math.cos(angle) * currentRadius;
                 const y = cy + Math.sin(angle) * currentRadius;
 
-                if (i === 0) {
-                    this.ctx.moveTo(x, y);
-                } else {
-                    this.ctx.lineTo(x, y);
-                }
+                if (i === 0) this.ctx.moveTo(x, y);
+                else this.ctx.lineTo(x, y);
             }
 
             this.ctx.closePath();
@@ -157,7 +236,6 @@
         }
 
         renderPercentageText(cx, cy, percentage, radius, isTop) {
-            // Large readable text
             const fontSize = Math.max(24, Math.min(40, radius * 0.35));
             this.ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
             this.ctx.textAlign = 'center';
@@ -222,12 +300,11 @@
             const canvas = document.getElementById('overlay-canvas');
             if (!canvas) return;
 
-            this.renderer = new PreciseAreaRenderer(canvas);
+            const targetAspect = parseAspectFromURL();
+            this.renderer = new PreciseAreaRenderer(canvas, { targetAspect });
 
             const threshold = new URLSearchParams(window.location.search).get('threshold');
-            if (threshold) {
-                this.renderer.setThreshold(parseInt(threshold));
-            }
+            if (threshold) this.renderer.setThreshold(parseInt(threshold, 10));
         }
 
         connectWebSocket() {
@@ -264,9 +341,7 @@
         }
 
         async poll() {
-            if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-                return;
-            }
+            if (this.websocket && this.websocket.readyState === WebSocket.OPEN) return;
 
             try {
                 const response = await fetch(
@@ -309,5 +384,4 @@
     } else {
         initialize();
     }
-
 })();

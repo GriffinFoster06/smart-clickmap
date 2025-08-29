@@ -1,4 +1,4 @@
-/* Ex Machina Smart Click Maps - Complete Styles */
+/* Ex Machina Smart Click Maps Styles */
 
 * {
     box-sizing: border-box;
@@ -16,7 +16,7 @@ html, body {
     -moz-osx-font-smoothing: grayscale;
 }
 
-/* Main heatmap canvas */
+/* Main canvas for heatmap overlay */
 #heat {
     position: absolute;
     top: 0;
@@ -29,18 +29,16 @@ html, body {
     /* High quality canvas rendering */
     image-rendering: -webkit-optimize-contrast;
     image-rendering: crisp-edges;
-    image-rendering: pixelated;
 }
 
     /* When system is not running, show different cursor */
     #heat.inactive {
         cursor: not-allowed;
-        opacity: 0.7;
-        filter: grayscale(0.3);
+        opacity: 0.8;
     }
 
-/* Notification styles for the overlay */
-.notification {
+/* Notification styles */
+.ex-machina-notification {
     position: fixed;
     top: 20px;
     right: 20px;
@@ -53,186 +51,149 @@ html, body {
     color: white;
     font-size: 14px;
     font-weight: 500;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05);
     z-index: 2000;
+    opacity: 0;
+    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
     transform: translateX(110%);
-    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    max-width: 280px;
+    max-width: 300px;
     word-wrap: break-word;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
 }
 
-    .notification.show {
+    .ex-machina-notification.show {
+        opacity: 1;
         transform: translateX(0);
     }
 
-    .notification.success {
+    .ex-machina-notification.success {
         border-left: 4px solid #48bb78;
         background: rgba(30, 46, 30, 0.95);
     }
 
-    .notification.error {
+    .ex-machina-notification.error {
         border-left: 4px solid #f56565;
         background: rgba(46, 30, 30, 0.95);
     }
 
-    .notification.info {
+    .ex-machina-notification.info {
         border-left: 4px solid #4299e1;
         background: rgba(30, 39, 46, 0.95);
     }
 
-    .notification.warning {
+    .ex-machina-notification.warning {
         border-left: 4px solid #ed8936;
         background: rgba(46, 39, 30, 0.95);
     }
 
-/* Status overlay */
-.status-overlay {
+/* Status indicator */
+.ex-machina-status {
     position: fixed;
-    top: 20px;
-    left: 20px;
+    top: 15px;
+    left: 15px;
     background: rgba(30, 30, 46, 0.9);
     backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 8px 16px;
+    border-radius: 6px;
+    padding: 8px 12px;
     color: white;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     z-index: 1800;
     opacity: 0;
-    transition: opacity 0.3s ease;
+    transition: all 0.3s ease;
     display: flex;
     align-items: center;
     gap: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
-    .status-overlay.visible {
+    .ex-machina-status.visible {
         opacity: 1;
     }
 
-    .status-overlay.running {
+    .ex-machina-status.running {
         border-left: 3px solid #48bb78;
         color: #48bb78;
     }
 
-    .status-overlay.stopped {
+    .ex-machina-status.stopped {
         border-left: 3px solid #f56565;
         color: #f56565;
     }
 
-/* Pulsing status dot */
-.status-dot {
+.ex-machina-status-dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    margin-right: 8px;
-    vertical-align: middle;
+    animation: status-pulse 2s ease-in-out infinite;
 }
 
-    .status-dot.running {
-        background: #48bb78;
-        animation: pulse-green 2s ease-in-out infinite;
-    }
+.ex-machina-status.running .ex-machina-status-dot {
+    background: #48bb78;
+}
 
-    .status-dot.stopped {
-        background: #f56565;
-        animation: pulse-red 2s ease-in-out infinite;
-    }
+.ex-machina-status.stopped .ex-machina-status-dot {
+    background: #f56565;
+}
 
-@keyframes pulse-green {
+@keyframes status-pulse {
     0%, 100% {
         opacity: 1;
+        transform: scale(1);
         box-shadow: 0 0 0 0 rgba(72, 187, 120, 0.7);
     }
 
     50% {
-        opacity: 0.8;
+        opacity: 0.7;
+        transform: scale(1.1);
         box-shadow: 0 0 0 8px rgba(72, 187, 120, 0);
     }
 }
 
-@keyframes pulse-red {
-    0%, 100% {
-        opacity: 1;
-        box-shadow: 0 0 0 0 rgba(245, 101, 101, 0.7);
-    }
-
-    50% {
-        opacity: 0.8;
-        box-shadow: 0 0 0 8px rgba(245, 101, 101, 0);
-    }
-}
-
-/* Debug overlay styles */
-.debug-overlay {
+/* Debug info overlay */
+.ex-machina-debug {
     position: fixed;
-    bottom: 20px;
-    left: 20px;
-    background: rgba(0, 0, 0, 0.85);
+    bottom: 15px;
+    left: 15px;
+    background: rgba(0, 0, 0, 0.9);
     color: #00ff00;
-    padding: 12px;
+    padding: 10px 12px;
     border-radius: 6px;
-    border: 1px solid #333;
-    font-family: 'Courier New', 'Consolas', monospace;
+    font-family: 'Courier New', 'Monaco', 'Menlo', monospace;
     font-size: 11px;
-    z-index: 2000;
+    z-index: 1900;
     opacity: 0;
     transition: opacity 0.3s ease;
-    max-width: 320px;
-    min-width: 280px;
+    max-width: 280px;
+    border: 1px solid #333;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
-    .debug-overlay.visible {
+    .ex-machina-debug.visible {
         opacity: 0.9;
     }
 
-.debug-line {
-    margin: 3px 0;
-    display: flex;
-    justify-content: space-between;
+.ex-machina-debug-line {
+    margin: 2px 0;
+    font-size: 10px;
 }
 
-    .debug-line span {
-        color: #ffff00;
-        font-weight: bold;
-        margin-left: 10px;
-    }
-
-/* Loading indicator */
-.loading-indicator {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: rgba(30, 30, 46, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 20px 30px;
-    color: white;
-    font-size: 16px;
-    z-index: 3000;
-    text-align: center;
-    backdrop-filter: blur(10px);
+.ex-machina-debug-label {
+    color: #61dafb;
 }
 
-.loading-spinner {
-    display: inline-block;
-    width: 20px;
-    height: 20px;
-    border: 3px solid rgba(255, 255, 255, 0.3);
-    border-radius: 50%;
-    border-top-color: #48bb78;
-    animation: spin 1s ease-in-out infinite;
-    margin-right: 10px;
-    vertical-align: middle;
+.ex-machina-debug-value {
+    color: #f7df1e;
 }
 
-@keyframes spin {
-    to {
-        transform: rotate(360deg);
-    }
+/* Loading states */
+.loading {
+    opacity: 0.6;
+    pointer-events: none;
+    cursor: wait;
 }
 
 /* Click ripple effect */
@@ -242,10 +203,10 @@ html, body {
     border-radius: 50%;
     pointer-events: none;
     z-index: 1500;
-    animation: ripple-effect 0.6s ease-out forwards;
+    animation: ripple-expand 0.6s ease-out forwards;
 }
 
-@keyframes ripple-effect {
+@keyframes ripple-expand {
     0% {
         transform: scale(0);
         opacity: 1;
@@ -259,7 +220,7 @@ html, body {
 
 /* Responsive design for mobile */
 @media (max-width: 768px) {
-    .notification {
+    .ex-machina-notification {
         top: 10px;
         right: 10px;
         left: 10px;
@@ -269,53 +230,56 @@ html, body {
         padding: 10px 16px;
     }
 
-        .notification.show {
+        .ex-machina-notification.show {
             transform: translateY(0);
         }
 
-    .status-overlay {
+    .ex-machina-status {
         top: 10px;
         left: 10px;
         font-size: 10px;
-        padding: 6px 12px;
+        padding: 6px 10px;
     }
 
-    .debug-overlay {
+    .ex-machina-debug {
         bottom: 10px;
         left: 10px;
         right: 10px;
         max-width: none;
-        min-width: auto;
-        font-size: 10px;
+        font-size: 9px;
     }
 
     #heat {
         cursor: pointer; /* Better for touch devices */
     }
+}
 
-        #heat.inactive {
-            cursor: default;
-        }
+/* Tablet landscape adjustments */
+@media (min-width: 769px) and (max-width: 1024px) {
+    .ex-machina-notification {
+        top: 15px;
+        right: 15px;
+        max-width: 280px;
+    }
 }
 
 /* High contrast mode support */
 @media (prefers-contrast: high) {
-    .notification,
-    .status-overlay,
-    .debug-overlay,
-    .loading-indicator {
+    .ex-machina-notification,
+    .ex-machina-status,
+    .ex-machina-debug {
         background: rgba(0, 0, 0, 0.95) !important;
         border: 2px solid white !important;
         color: white !important;
     }
 
-    .debug-overlay {
-        color: white !important;
-    }
+        .ex-machina-notification.success {
+            border-color: #90EE90 !important;
+        }
 
-    .debug-line span {
-        color: yellow !important;
-    }
+        .ex-machina-notification.error {
+            border-color: #FFB6C1 !important;
+        }
 }
 
 /* Reduced motion support */
@@ -328,13 +292,25 @@ html, body {
         transition-duration: 0.01ms !important;
     }
 
-    .click-ripple,
-    .loading-spinner {
-        display: none !important;
+    .ex-machina-status-dot {
+        animation: none !important;
     }
 
-    .status-dot {
-        animation: none !important;
+    .click-ripple {
+        display: none;
+    }
+}
+
+/* Dark mode enhancements */
+@media (prefers-color-scheme: dark) {
+    .ex-machina-notification {
+        background: rgba(20, 20, 30, 0.95);
+        border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .ex-machina-status {
+        background: rgba(20, 20, 30, 0.9);
+        border-color: rgba(255, 255, 255, 0.15);
     }
 }
 
@@ -347,25 +323,52 @@ html, body {
 
 /* Focus styles for accessibility */
 #heat:focus {
-    outline: 3px solid #4299e1;
-    outline-offset: 2px;
+    outline: 2px solid #4299e1;
+    outline-offset: -2px;
 }
 
-/* Performance optimizations */
+/* Selection styles */
+::selection {
+    background: rgba(66, 153, 225, 0.3);
+    color: white;
+}
+
+::-moz-selection {
+    background: rgba(66, 153, 225, 0.3);
+    color: white;
+}
+
+/* Scrollbar styles (for debug overlay) */
+.ex-machina-debug::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ex-machina-debug::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.ex-machina-debug::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 3px;
+}
+
+    .ex-machina-debug::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.5);
+    }
+
+/* Backdrop blur fallback */
+@supports not (backdrop-filter: blur(10px)) {
+    .ex-machina-notification,
+    .ex-machina-status {
+        background: rgba(30, 30, 46, 0.98) !important;
+    }
+}
+
+/* GPU acceleration hints */
 #heat,
-.notification,
-.debug-overlay {
+.ex-machina-notification,
+.ex-machina-status,
+.click-ripple {
     will-change: transform;
     transform: translateZ(0);
-}
-
-/* Smooth canvas scaling */
-#heat {
-    image-rendering: optimizeQuality;
-}
-
-@supports (image-rendering: -webkit-optimize-contrast) {
-    #heat {
-        image-rendering: -webkit-optimize-contrast;
-    }
 }

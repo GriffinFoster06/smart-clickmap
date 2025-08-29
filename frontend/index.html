@@ -2,33 +2,19 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Ex Machina Smart Click Maps</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title> Smart Click Maps</title>
 
     <!-- Twitch Extension Helper Library -->
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
 
-    <!-- Load our stylesheet -->
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <!-- Main heatmap canvas -->
     <canvas id="heat" width="1920" height="1080"></canvas>
 
-    <!-- Debug overlay (only shown in debug mode) -->
-    <div id="debug-overlay" class="debug-overlay">
-        <div class="debug-line">Ex Machina Smart Click Maps v2.0</div>
-        <div class="debug-line">Status: <span id="debug-status">Loading...</span></div>
-        <div class="debug-line">Auth: <span id="debug-auth">Waiting...</span></div>
-        <div class="debug-line">Channel: <span id="debug-channel">Unknown</span></div>
-        <div class="debug-line">Clicks: <span id="debug-clicks">0</span></div>
-        <div class="debug-line">Clusters: <span id="debug-clusters">0</span></div>
-        <div class="debug-line">WebSocket: <span id="debug-ws">Disconnected</span></div>
-    </div>
-
-    <!-- Load our heatmap rendering engine -->
-    <script type="module" src="heatmap.js"></script>
-
-    <!-- Load our main application script -->
+    <!-- Load the  system -->
     <script type="module" src="script.js"></script>
 </body>
 </html>

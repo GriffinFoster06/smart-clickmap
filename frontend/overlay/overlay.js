@@ -1,9 +1,22 @@
-﻿// frontend/overlay/overlay.js - Aspect-correct overlay with smooth animation and smart labels
+﻿// frontend/overlay/overlay.js - Aspect-correct overlay with smooth animation, smart labels, and click-through
 (function () {
     'use strict';
 
     const EBS = 'https://smart-clickmap-backend.onrender.com';
     const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Ensure the page is transparent and overlay never blocks clicks (e.g., Twitch theater mode)
+    try {
+        document.documentElement.style.background = 'transparent';
+        document.body.style.background = 'transparent';
+        // If the HTML includes the canvas, force it click-through via CSS as well
+        const style = document.createElement('style');
+        style.textContent = `
+            html, body { background: transparent !important; }
+            #overlay-canvas { pointer-events: none !important; position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+        `;
+        document.head.appendChild(style);
+    } catch { }
 
     // ---------- helpers ----------
     function parseAspectFromURL() {
@@ -82,7 +95,10 @@
     class PreciseAreaRenderer {
         constructor(canvas, opts = {}) {
             this.canvas = canvas;
-            this.ctx = canvas.getContext('2d');
+            this.ctx = canvas.getContext('2d', { alpha: true });
+
+            // Make sure the canvas itself never captures clicks
+            this.canvas.style.pointerEvents = 'none';
 
             this.PERCENTAGE_THRESHOLD = 3;
             this.MIN_RADIUS = 80;
@@ -282,7 +298,6 @@
             ctx.closePath();
         }
 
-        // distance from point to rectangle
         _pointRectDistance(px, py, rx, ry, rw, rh) {
             const cx = Math.max(rx, Math.min(px, rx + rw));
             const cy = Math.max(ry, Math.min(py, ry + rh));
@@ -291,7 +306,7 @@
             return Math.hypot(dx, dy);
         }
 
-        // Returns layout and whether label must be outside the blob (no overlap)
+        // Compute layout; draw line only if label is fully off the blob
         _computeLabelLayout(cx, cy, text, fontSize, radius) {
             const ctx = this.ctx;
             const { x: vx, y: vy, width: vw, height: vh } = this.viewport;
@@ -302,10 +317,8 @@
             const pillW = Math.ceil(textWidth + padX * 2);
             const pillH = Math.ceil(fontSize + padY * 2);
 
-            // desired label center = blob center
             let lx = cx, ly = cy;
 
-            // clamp pill inside viewport + small gutter
             const gutter = 6;
             const minX = vx + gutter + pillW / 2;
             const maxX = vx + vw - gutter - pillW / 2;
@@ -322,15 +335,11 @@
                 h: pillH
             };
 
-            // Check overlap: if pill intersects the circle, keep it "on-blob" and don't draw a line.
+            // If the pill does NOT overlap the circle, it's "separated"
             const dist = this._pointRectDistance(cx, cy, pill.x, pill.y, pill.w, pill.h);
-            const separated = dist > Math.max(0, radius - 2); // if rect fully outside circle, it's separated
+            const separated = dist > Math.max(0, radius - 2);
 
-            return {
-                pill,
-                center: { x: clampedLx, y: clampedLy },
-                separated
-            };
+            return { pill, center: { x: clampedLx, y: clampedLy }, separated };
         }
 
         _renderPercentageLabel(cx, cy, percentage, radius, isTop) {
@@ -344,7 +353,7 @@
 
             const layout = this._computeLabelLayout(cx, cy, str, fontSize, radius);
 
-            // Only draw leader line if the pill is forced completely off the blob (no overlap)
+            // Draw leader line only if pill is fully off the blob
             if (layout.separated) {
                 const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
                 const sx = cx + Math.cos(ang) * Math.max(0, radius - 4);
@@ -364,10 +373,9 @@
                 ctx.restore();
             }
 
-            // Pill background
+            // More transparent pill (so it doesn't cover content)
             ctx.save();
-            ctx.globalAlpha = 0.95;
-            ctx.fillStyle = 'rgba(0,0,0,0.55)';
+            ctx.fillStyle = 'rgba(0,0,0,0.30)'; // was 0.55 -> now lighter
             this._drawRoundedRect(layout.pill.x, layout.pill.y, layout.pill.w, layout.pill.h, Math.round(fontSize * 0.45));
             ctx.fill();
             ctx.restore();
@@ -425,6 +433,9 @@
         setupRenderer() {
             const canvas = document.getElementById('overlay-canvas');
             if (!canvas) return;
+
+            // Force click-through in any embedding environment
+            canvas.style.pointerEvents = 'none';
 
             const targetAspect = parseAspectFromURL();
             this.renderer = new PreciseAreaRenderer(canvas, { targetAspect });

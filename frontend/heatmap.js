@@ -1,8 +1,11 @@
-﻿// frontend/heatmap.js - Smooth, spring-animated clustering with smart labels (canvas space)
+﻿// frontend/heatmap.js - Smooth, spring-animated clustering with smart labels and click-through
 export class HeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
-        this.ctx = canvas.getContext('2d');
+        this.ctx = canvas.getContext('2d', { alpha: true });
+
+        // Ensure this renderer never blocks clicks in any embedding context
+        this.canvas.style.pointerEvents = 'none';
 
         this.PERCENTAGE_THRESHOLD = 3;
         this.MIN_RADIUS = 80;
@@ -223,7 +226,7 @@ export class HeatmapRenderer {
 
         const textWidth = ctx.measureText(text).width;
         const padX = Math.round(fontSize * 0.6);
-        const padY = Math.round(fontSize * 0.35);
+        the const padY = Math.round(fontSize * 0.35);
         const pillW = Math.ceil(textWidth + padX * 2);
         const pillH = Math.ceil(fontSize + padY * 2);
 
@@ -244,7 +247,7 @@ export class HeatmapRenderer {
             h: pillH
         };
 
-        // line only if pill is fully outside the circle (no overlap)
+        // Only draw a leader if the pill doesn't overlap the circle
         const dist = this._pointRectDistance(cx, cy, pill.x, pill.y, pill.w, pill.h);
         const separated = dist > Math.max(0, radius - 2);
 
@@ -281,9 +284,9 @@ export class HeatmapRenderer {
             ctx.restore();
         }
 
+        // More transparent pill
         ctx.save();
-        ctx.globalAlpha = 0.95;
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillStyle = 'rgba(0,0,0,0.30)'; // was 0.55
         this._drawRoundedRect(layout.pill.x, layout.pill.y, layout.pill.w, layout.pill.h, Math.round(fontSize * 0.45));
         ctx.fill();
         ctx.restore();

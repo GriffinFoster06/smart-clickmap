@@ -1,7 +1,7 @@
 {
   "name": "smart-clickmap-ebs",
-  "version": "2.1.0",
-  "description": "Enhanced EBS with instant WebSocket updates, dynamic blob rendering, and fire effects",
+  "version": "2.2.0",
+  "description": "Enhanced EBS with precise grid-based clustering, instant WebSocket updates, and distinct target separation",
   "type": "module",
   "main": "server.js",
   "engines": {
@@ -36,8 +36,9 @@
     "interactive",
     "websocket",
     "real-time",
-    "fire-effects",
-    "dynamic-blobs"
+    "precise-clustering",
+    "grid-based",
+    "target-separation"
   ],
   "author": {
     "name": "PhummyLW",

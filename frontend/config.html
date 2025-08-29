@@ -3,29 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Click Maps Control Panel</title>
+    <title>ClickMap Control Panel</title>
 
     <!-- Twitch Extension Helper Library -->
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
 
     <!-- Config Panel Styles -->
     <link rel="stylesheet" href="config.css">
-
-    <!-- Preload scripts -->
-    <link rel="preload" href="heatmap.js" as="script">
-    <link rel="preload" href="config.js" as="script">
 </head>
 <body>
-    <!-- Header Section -->
+    <!-- Header -->
     <div class="header">
-        <h1>Smart Click Maps</h1>
-        <div class="subtitle">Real-time viewer interaction heatmap control panel</div>
-    </div>
-
-    <!-- Status Indicator -->
-    <div class="status-indicator" id="status">
-        <div class="status-dot"></div>
-        <span id="status-text">Initializing...</span>
+        <h1>ClickMap</h1>
+        <div class="subtitle">Interactive overlay control panel</div>
     </div>
 
     <!-- Error Display -->
@@ -33,19 +23,27 @@
         Connection error. Retrying...
     </div>
 
-    <!-- Statistics Grid -->
-    <div class="stats-grid">
+    <!-- Status Section -->
+    <div class="status-section">
+        <div class="status-indicator" id="status">
+            <div class="status-dot"></div>
+            <span id="status-text">Initializing...</span>
+        </div>
+    </div>
+
+    <!-- Statistics -->
+    <div class="stats-section">
         <div class="stat-card">
             <span class="stat-value" id="total-clicks">-</span>
             <div class="stat-label">Total Clicks</div>
         </div>
         <div class="stat-card">
             <span class="stat-value" id="unique-users">-</span>
-            <div class="stat-label">Active Users</div>
+            <div class="stat-label">Users</div>
         </div>
         <div class="stat-card">
             <span class="stat-value" id="cluster-count">-</span>
-            <div class="stat-label">Hot Spots</div>
+            <div class="stat-label">Clusters</div>
         </div>
         <div class="stat-card">
             <span class="stat-value" id="coverage">-</span>
@@ -53,56 +51,51 @@
         </div>
     </div>
 
-    <!-- Live Preview Section -->
+    <!-- Live Preview -->
     <div class="preview-section">
-        <div class="preview-header">Live Preview</div>
+        <div class="preview-header">
+            <span>Live Preview</span>
+            <div class="preview-status" id="preview-status">Stopped</div>
+        </div>
         <div class="preview-container">
             <canvas id="mini-canvas" width="320" height="180"></canvas>
-            <div class="preview-overlay" id="preview-status">Preview</div>
         </div>
     </div>
 
-    <!-- Control Buttons -->
-    <div class="controls">
-        <div class="control-row">
-            <button id="start-btn">▶️ Start Session</button>
-            <button id="stop-btn" class="secondary">⏹️ Stop Session</button>
-        </div>
-        <button id="reset-btn" class="danger">🗑️ Clear All Data</button>
-    </div>
-
-    <!-- Advanced Statistics -->
-    <div class="advanced-stats">
-        <h3>Session Details</h3>
-        <div class="stats-row">
-            <span class="stats-label">Session Duration:</span>
-            <span class="stats-value" id="duration">-</span>
-        </div>
-        <div class="stats-row">
-            <span class="stats-label">Last Update:</span>
-            <span class="stats-value" id="last-update">-</span>
-        </div>
-        <div class="stats-row">
-            <span class="stats-label">Top Hotspot:</span>
-            <span class="stats-value" id="top-hotspot">-</span>
-        </div>
-        <div class="stats-row">
-            <span class="stats-label">Threshold:</span>
-            <span class="stats-value" id="threshold-info">3%</span>
+    <!-- Controls -->
+    <div class="controls-section">
+        <div class="controls-header">Overlay Controls</div>
+        <div class="controls">
+            <div class="control-row">
+                <button id="start-btn">▶️ Start</button>
+                <button id="stop-btn" class="secondary">⏹️ Stop</button>
+            </div>
+            <button id="reset-btn" class="danger">🗑️ Reset</button>
         </div>
     </div>
 
-    <!-- Optional Threshold Control -->
-    <div class="threshold-control" id="threshold-control" style="display: none;">
-        <h3>Display Threshold</h3>
-        <div class="threshold-slider-container">
-            <label for="threshold-slider">Show clusters above:</label>
-            <input type="range" id="threshold-slider" min="1" max="20" value="3" step="1">
-            <span id="threshold-value">3%</span>
+    <!-- Overlay Settings -->
+    <div class="overlay-controls">
+        <h3>Settings</h3>
+        <div class="control-group">
+            <span class="control-label">Server</span>
+            <span class="control-value" id="server-status">Connected</span>
+        </div>
+        <div class="control-group">
+            <span class="control-label">Overlay</span>
+            <span class="control-value" id="overlay-status">Ready</span>
+        </div>
+        <div class="control-group">
+            <span class="control-label">Threshold</span>
+            <span class="control-value" id="threshold-value">3%</span>
+        </div>
+        <div class="control-group">
+            <span class="control-label">Last Update</span>
+            <span class="control-value" id="last-update">-</span>
         </div>
     </div>
 
-    <!-- Load JavaScript modules -->
+    <!-- Load JavaScript -->
     <script type="module" src="heatmap.js"></script>
     <script type="module" src="config.js"></script>
 </body>

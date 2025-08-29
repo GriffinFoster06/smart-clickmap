@@ -1,16 +1,12 @@
-﻿// frontend/heatmap.js - Enhanced dynamic heatmap with organic shapes and fire effects
+﻿// frontend/heatmap.js - Adaptive rendering with circles and organic polygons
 export class HeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
         this.clusters = [];
-        this.particles = [];
-        this.animationId = null;
-        this.lastTime = 0;
         this.PERCENTAGE_THRESHOLD = 3;
 
         this.resize();
-        this.startAnimation();
     }
 
     resize() {
@@ -23,6 +19,7 @@ export class HeatmapRenderer {
         this.canvas.style.height = rect.height + 'px';
 
         this.ctx.scale(dpr, dpr);
+        this.render();
     }
 
     updateClusters(newClusters) {
@@ -30,66 +27,7 @@ export class HeatmapRenderer {
             .filter(cluster => (cluster.percentage || 0) >= this.PERCENTAGE_THRESHOLD)
             .sort((a, b) => b.percentage - a.percentage);
 
-        this.generateFireParticles();
-    }
-
-    generateFireParticles() {
-        this.particles = [];
-
-        this.clusters.forEach(cluster => {
-            if (cluster.percentage >= 10) {
-                const particleCount = Math.min(15, Math.floor(cluster.percentage / 4));
-                const W = this.canvas.width / (window.devicePixelRatio || 1);
-                const H = this.canvas.height / (window.devicePixelRatio || 1);
-                const cx = cluster.x * W;
-                const cy = cluster.y * H;
-                const radius = this.calculateRadius(cluster.percentage);
-
-                for (let i = 0; i < particleCount; i++) {
-                    this.particles.push({
-                        x: cx + (Math.random() - 0.5) * radius * 2,
-                        y: cy + (Math.random() - 0.5) * radius * 2,
-                        vx: (Math.random() - 0.5) * 1.5,
-                        vy: (Math.random() - 0.5) * 1.5,
-                        life: 1.0,
-                        maxLife: 1.0 + Math.random() * 1.5,
-                        size: 1.5 + Math.random() * 2.5,
-                        isTop: cluster.isTop
-                    });
-                }
-            }
-        });
-    }
-
-    calculateRadius(percentage) {
-        return Math.max(30, Math.min(120, 40 + Math.sqrt(percentage) * 8));
-    }
-
-    startAnimation() {
-        const animate = (currentTime) => {
-            const deltaTime = currentTime - this.lastTime;
-            this.lastTime = currentTime;
-
-            this.updateParticles(deltaTime);
-            this.render();
-
-            this.animationId = requestAnimationFrame(animate);
-        };
-
-        this.animationId = requestAnimationFrame(animate);
-    }
-
-    updateParticles(deltaTime) {
-        this.particles.forEach(particle => {
-            particle.x += particle.vx;
-            particle.y += particle.vy;
-            particle.life -= deltaTime * 0.0008;
-
-            particle.vx *= 0.99;
-            particle.vy *= 0.99;
-        });
-
-        this.particles = this.particles.filter(p => p.life > 0);
+        this.render();
     }
 
     render() {
@@ -100,153 +38,259 @@ export class HeatmapRenderer {
 
         if (this.clusters.length === 0) return;
 
-        // Render from lowest to highest percentage
-        const reversedClusters = [...this.clusters].reverse();
-
-        reversedClusters.forEach((cluster, index) => {
-            const isTop = index === reversedClusters.length - 1;
-            this.renderDynamicBlob(cluster, W, H, isTop);
+        // Render each cluster with adaptive shape
+        this.clusters.forEach((cluster) => {
+            this.renderAdaptiveShape(cluster, W, H);
         });
-
-        this.renderFireParticles();
     }
 
-    renderDynamicBlob(cluster, W, H, isTop) {
+    renderAdaptiveShape(cluster, W, H) {
+        // Determine if this cluster should be a circle or polygon
+        const shouldUsePolygon = this.shouldUsePolygonShape(cluster);
+
+        if (shouldUsePolygon && cluster.points && cluster.points.length > 2) {
+            this.renderPolygonShape(cluster, W, H);
+        } else {
+            this.renderCircleShape(cluster, W, H);
+        }
+    }
+
+    shouldUsePolygonShape(cluster) {
+        // Use polygon for irregular/spread out clusters
+        if (!cluster.spread || !cluster.confidence || !cluster.points) return false;
+
+        // Criteria for polygon rendering:
+        // 1. Low confidence (spread out points)
+        // 2. High spread relative to cluster size
+        // 3. Sufficient points to form meaningful shape
+        // 4. Not too large (giant clusters stay circular)
+
+        const hasSpread = cluster.spread > 0.03;
+        const lowConfidence = cluster.confidence < 0.7;
+        const sufficientPoints = cluster.points && cluster.points.length >= 3;
+        const notTooLarge = cluster.percentage < 40;
+        const mediumSize = cluster.count >= 3 && cluster.count <= 15;
+
+        return hasSpread && (lowConfidence || mediumSize) && sufficientPoints && notTooLarge;
+    }
+
+    renderCircleShape(cluster, W, H) {
         const cx = cluster.x * W;
         const cy = cluster.y * H;
         const percentage = cluster.percentage || 0;
-        const baseRadius = this.calculateRadius(percentage);
+
+        // Precise sizing for circular clusters
+        let baseRadius;
+        if (cluster.count === 1) {
+            baseRadius = 28;
+        } else if (cluster.count <= 3) {
+            baseRadius = Math.max(32, 35 + (percentage * 0.8));
+        } else {
+            baseRadius = Math.max(35, Math.min(65, 38 + (percentage * 1.0)));
+        }
+
+        if (cluster.confidence) {
+            baseRadius *= (0.9 + (cluster.confidence * 0.2));
+        }
 
         this.ctx.save();
 
-        // Create organic blob shape
+        // Clean circular background
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
         this.ctx.beginPath();
-        const points = 8;
-        const variation = baseRadius * 0.25;
-        const time = Date.now() * 0.001;
-
-        for (let i = 0; i <= points; i++) {
-            const angle = (i / points) * Math.PI * 2;
-            const radiusVariation = baseRadius + (Math.sin(angle * 3 + time) * variation * 0.6);
-            const x = cx + Math.cos(angle) * radiusVariation;
-            const y = cy + Math.sin(angle) * radiusVariation;
-
-            if (i === 0) {
-                this.ctx.moveTo(x, y);
-            } else {
-                this.ctx.lineTo(x, y);
-            }
-        }
-        this.ctx.closePath();
-
-        // Enhanced gradient with more intensity
-        const gradient = this.ctx.createRadialGradient(cx, cy, 0, cx, cy, baseRadius);
-
-        if (isTop) {
-            gradient.addColorStop(0, 'rgba(0, 255, 255, 0.6)');
-            gradient.addColorStop(0.4, 'rgba(0, 200, 255, 0.4)');
-            gradient.addColorStop(0.7, 'rgba(100, 150, 255, 0.2)');
-            gradient.addColorStop(1, 'rgba(0, 255, 255, 0)');
-        } else if (percentage >= 15) {
-            gradient.addColorStop(0, 'rgba(255, 100, 0, 0.5)');
-            gradient.addColorStop(0.4, 'rgba(255, 150, 0, 0.35)');
-            gradient.addColorStop(0.7, 'rgba(200, 50, 150, 0.2)');
-            gradient.addColorStop(1, 'rgba(255, 100, 0, 0)');
-        } else {
-            gradient.addColorStop(0, 'rgba(147, 51, 234, 0.4)');
-            gradient.addColorStop(0.4, 'rgba(167, 71, 254, 0.3)');
-            gradient.addColorStop(0.7, 'rgba(120, 40, 200, 0.2)');
-            gradient.addColorStop(1, 'rgba(147, 51, 234, 0)');
-        }
-
-        this.ctx.fillStyle = gradient;
+        this.ctx.arc(cx, cy, baseRadius, 0, 2 * Math.PI);
         this.ctx.fill();
 
-        // Fire ring effect
-        if (percentage >= 10) {
-            this.renderFireRing(cx, cy, baseRadius, isTop, percentage);
+        // Clean white border
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+        this.ctx.lineWidth = baseRadius < 35 ? 2 : 2.5;
+        this.ctx.stroke();
+
+        // Inner highlight for depth
+        if (baseRadius > 30) {
+            this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            this.ctx.lineWidth = 1;
+            this.ctx.beginPath();
+            this.ctx.arc(cx, cy, baseRadius - 3, 0, 2 * Math.PI);
+            this.ctx.stroke();
         }
 
-        // Glowing text
-        const fontSize = Math.max(16, Math.min(28, baseRadius * 0.4));
+        this.renderClusterText(cx, cy, percentage, baseRadius);
+        this.ctx.restore();
+    }
+
+    renderPolygonShape(cluster, W, H) {
+        const points = cluster.points.map(p => ({
+            x: p.x * W,
+            y: p.y * H
+        }));
+
+        // Create convex hull or organic boundary
+        const hull = this.calculateConvexHull(points);
+        const smoothedHull = this.smoothPolygon(hull);
+
+        // Add padding to the hull
+        const padding = Math.max(20, Math.min(40, 25 + (cluster.percentage * 0.5)));
+        const paddedHull = this.expandPolygon(smoothedHull, padding);
+
+        this.ctx.save();
+
+        // Render polygon background
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        this.ctx.beginPath();
+        paddedHull.forEach((point, index) => {
+            if (index === 0) {
+                this.ctx.moveTo(point.x, point.y);
+            } else {
+                this.ctx.lineTo(point.x, point.y);
+            }
+        });
+        this.ctx.closePath();
+        this.ctx.fill();
+
+        // Polygon border
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+        this.ctx.lineWidth = 2.5;
+        this.ctx.stroke();
+
+        // Inner highlight
+        const innerHull = this.expandPolygon(smoothedHull, padding - 4);
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        innerHull.forEach((point, index) => {
+            if (index === 0) {
+                this.ctx.moveTo(point.x, point.y);
+            } else {
+                this.ctx.lineTo(point.x, point.y);
+            }
+        });
+        this.ctx.closePath();
+        this.ctx.stroke();
+
+        // Center text at cluster centroid
+        const cx = cluster.x * W;
+        const cy = cluster.y * H;
+        const avgRadius = padding;
+
+        this.renderClusterText(cx, cy, cluster.percentage, avgRadius);
+        this.ctx.restore();
+    }
+
+    renderClusterText(cx, cy, percentage, baseRadius) {
+        const fontSize = Math.max(14, Math.min(22, baseRadius * 0.45));
         this.ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'middle';
 
-        this.ctx.shadowColor = isTop ? '#00ffff' : '#9333ea';
-        this.ctx.shadowBlur = 8;
-        this.ctx.fillStyle = isTop ? '#ffffff' : '#e0e7ff';
-        this.ctx.fillText(`${percentage}%`, cx, cy);
+        // Text shadow
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        this.ctx.fillText(`${percentage}%`, cx + 1, cy + 1);
 
-        this.ctx.shadowBlur = 0;
-        this.ctx.restore();
+        // Main text
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillText(`${percentage}%`, cx, cy);
     }
 
-    renderFireRing(cx, cy, radius, isTop, percentage) {
-        const ringRadius = radius * 1.15;
-        const intensity = Math.min(1, percentage / 25);
-        const time = Date.now() * 0.003;
-        const segments = 24;
+    calculateConvexHull(points) {
+        if (points.length <= 3) return points;
 
-        this.ctx.save();
+        // Graham scan for convex hull
+        const p0 = points.reduce((min, p) => p.y < min.y || (p.y === min.y && p.x < min.x) ? p : min);
 
-        for (let i = 0; i < segments; i++) {
-            const angle = (i / segments) * Math.PI * 2;
-            const radiusVar = ringRadius + Math.sin(angle * 4 + time) * 6 * intensity;
+        const sorted = points
+            .filter(p => p !== p0)
+            .sort((a, b) => {
+                const angleA = Math.atan2(a.y - p0.y, a.x - p0.x);
+                const angleB = Math.atan2(b.y - p0.y, b.x - p0.x);
+                return angleA - angleB;
+            });
 
-            const x = cx + Math.cos(angle) * radiusVar;
-            const y = cy + Math.sin(angle) * radiusVar;
-
-            if (isTop) {
-                this.ctx.strokeStyle = `rgba(0, 255, 255, ${0.3 * intensity})`;
-            } else {
-                this.ctx.strokeStyle = `rgba(255, ${120 + i * 2}, 0, ${0.4 * intensity})`;
+        const hull = [p0];
+        for (const p of sorted) {
+            while (hull.length > 1 && this.crossProduct(hull[hull.length - 2], hull[hull.length - 1], p) <= 0) {
+                hull.pop();
             }
-
-            this.ctx.lineWidth = 1.5 + Math.sin(time + i) * intensity;
-            this.ctx.beginPath();
-            this.ctx.moveTo(cx, cy);
-            this.ctx.lineTo(x, y);
-            this.ctx.stroke();
+            hull.push(p);
         }
 
-        this.ctx.restore();
+        return hull;
     }
 
-    renderFireParticles() {
-        this.particles.forEach(particle => {
-            if (particle.life <= 0) return;
+    crossProduct(o, a, b) {
+        return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    }
 
-            this.ctx.save();
+    smoothPolygon(points) {
+        if (points.length < 3) return points;
 
-            const alpha = particle.life / particle.maxLife;
-            const size = particle.size * alpha;
+        // Simple smoothing by averaging adjacent points
+        const smoothed = [];
+        for (let i = 0; i < points.length; i++) {
+            const prev = points[(i - 1 + points.length) % points.length];
+            const curr = points[i];
+            const next = points[(i + 1) % points.length];
 
-            if (particle.isTop) {
-                this.ctx.fillStyle = `rgba(0, 255, 255, ${alpha * 0.7})`;
-                this.ctx.shadowColor = '#00ffff';
-            } else {
-                this.ctx.fillStyle = `rgba(255, ${100 + Math.random() * 100}, 0, ${alpha * 0.6})`;
-                this.ctx.shadowColor = '#ff6600';
+            smoothed.push({
+                x: (prev.x + curr.x * 2 + next.x) / 4,
+                y: (prev.y + curr.y * 2 + next.y) / 4
+            });
+        }
+
+        return smoothed;
+    }
+
+    expandPolygon(points, padding) {
+        if (points.length < 3) return points;
+
+        const expanded = [];
+        for (let i = 0; i < points.length; i++) {
+            const prev = points[(i - 1 + points.length) % points.length];
+            const curr = points[i];
+            const next = points[(i + 1) % points.length];
+
+            // Calculate normal vector pointing outward
+            const edge1 = { x: curr.x - prev.x, y: curr.y - prev.y };
+            const edge2 = { x: next.x - curr.x, y: next.y - curr.y };
+
+            const normal1 = { x: -edge1.y, y: edge1.x };
+            const normal2 = { x: -edge2.y, y: edge2.x };
+
+            // Normalize
+            const len1 = Math.hypot(normal1.x, normal1.y);
+            const len2 = Math.hypot(normal2.x, normal2.y);
+
+            if (len1 > 0) { normal1.x /= len1; normal1.y /= len1; }
+            if (len2 > 0) { normal2.x /= len2; normal2.y /= len2; }
+
+            // Average normal
+            const avgNormal = {
+                x: (normal1.x + normal2.x) / 2,
+                y: (normal1.y + normal2.y) / 2
+            };
+
+            const avgLen = Math.hypot(avgNormal.x, avgNormal.y);
+            if (avgLen > 0) {
+                avgNormal.x /= avgLen;
+                avgNormal.y /= avgLen;
             }
 
-            this.ctx.shadowBlur = size * 1.5;
-            this.ctx.beginPath();
-            this.ctx.arc(particle.x, particle.y, size, 0, Math.PI * 2);
-            this.ctx.fill();
+            expanded.push({
+                x: curr.x + avgNormal.x * padding,
+                y: curr.y + avgNormal.y * padding
+            });
+        }
 
-            this.ctx.restore();
-        });
+        return expanded;
     }
 
     setThreshold(threshold) {
         this.PERCENTAGE_THRESHOLD = threshold;
+        this.render();
     }
 
     destroy() {
-        if (this.animationId) {
-            cancelAnimationFrame(this.animationId);
-        }
+        // Clean up if needed
     }
 }
 

@@ -16,11 +16,11 @@ if (useRedis) {
     redis = Redis.createClient({ url: process.env.REDIS_URL });
     await redis.connect();
 } else {
-    clicks = new Map(); // channelId → Map(userId → { x, y, timestamp })
+    clicks = new Map();
 }
 
 let isRunning = false;
-const connectedClients = new Map(); // channelId → Set of WebSocket connections
+const connectedClients = new Map();
 
 const app = express();
 app.use(cors({
@@ -34,118 +34,133 @@ app.use((req, res, next) => {
     next();
 });
 
-// Enhanced clustering algorithm
-class DensityClusterer {
+// Enhanced clustering algorithm for precise target separation
+class PreciseClusterer {
     constructor(points) {
         this.points = points.map((p, i) => ({ ...p, id: i, visited: false, cluster: -1 }));
+        this.clusters = [];
     }
 
-    calculateOptimalEps() {
+    // Calculate adaptive epsilon based on local density patterns
+    calculateAdaptiveEps() {
         const n = this.points.length;
-        if (n < 4) return 0.05;
+        if (n < 3) return 0.08; // Larger threshold for very few points
 
-        const k = Math.max(3, Math.min(10, Math.floor(n * 0.08)));
-        const distances = [];
-
+        // Calculate distances to nearest neighbors
+        const nearestDistances = [];
         this.points.forEach(point => {
-            const dists = this.points
+            const distances = this.points
                 .filter(p => p.id !== point.id)
                 .map(p => this.distance(point, p))
-                .sort((a, b) => a - b)
-                .slice(0, k);
-            distances.push(dists[dists.length - 1]);
+                .sort((a, b) => a - b);
+
+            // Get distance to 2nd nearest neighbor (more stable than 1st)
+            if (distances.length >= 2) {
+                nearestDistances.push(distances[1]);
+            }
         });
 
-        distances.sort((a, b) => a - b);
+        nearestDistances.sort((a, b) => a - b);
 
-        let maxChange = 0;
-        let optimalEps = distances[Math.floor(distances.length * 0.75)];
+        // Use a more conservative approach - smaller clusters
+        const medianDistance = nearestDistances[Math.floor(nearestDistances.length / 2)] || 0.05;
 
-        for (let i = 1; i < distances.length - 1; i++) {
-            const change = distances[i + 1] - distances[i - 1];
-            if (change > maxChange) {
-                maxChange = change;
-                optimalEps = distances[i];
-            }
-        }
-
-        return Math.max(0.03, Math.min(0.12, optimalEps));
+        // Cap the epsilon to maintain distinct targets
+        return Math.max(0.025, Math.min(0.08, medianDistance * 0.8));
     }
 
     distance(a, b) {
         return Math.hypot(a.x - b.x, a.y - b.y);
     }
 
-    getNeighbors(point, eps) {
-        return this.points.filter(p =>
-            p.id !== point.id && this.distance(point, p) <= eps
-        );
-    }
-
-    cluster() {
-        if (this.points.length === 0) return [];
-
-        const eps = this.calculateOptimalEps();
-        const minPts = Math.max(2, Math.floor(this.points.length * 0.04));
-
-        let clusterId = 0;
+    // Use a grid-based pre-clustering to maintain target separation
+    gridPreCluster() {
+        const GRID_SIZE = 20; // 20x20 grid
+        const grid = new Map();
 
         this.points.forEach(point => {
+            const gridX = Math.floor(point.x * GRID_SIZE);
+            const gridY = Math.floor(point.y * GRID_SIZE);
+            const key = `${gridX},${gridY}`;
+
+            if (!grid.has(key)) {
+                grid.set(key, []);
+            }
+            grid.get(key).push(point);
+        });
+
+        // Process each grid cell separately to maintain locality
+        const preClusters = [];
+        grid.forEach(cellPoints => {
+            if (cellPoints.length === 1) {
+                preClusters.push({
+                    points: cellPoints,
+                    center: cellPoints[0]
+                });
+            } else {
+                // For multiple points in same cell, use very tight clustering
+                const tightClusters = this.tightCluster(cellPoints);
+                preClusters.push(...tightClusters);
+            }
+        });
+
+        return preClusters;
+    }
+
+    tightCluster(points) {
+        if (points.length <= 1) {
+            return points.map(p => ({ points: [p], center: p }));
+        }
+
+        const eps = 0.035; // Very tight clustering within grid cells
+        const minPts = Math.max(2, Math.floor(points.length * 0.3));
+
+        let clusterId = 0;
+        points.forEach(p => { p.visited = false; p.cluster = -1; });
+
+        points.forEach(point => {
             if (point.visited) return;
 
             point.visited = true;
-            const neighbors = this.getNeighbors(point, eps);
+            const neighbors = this.getNeighbors(point, points, eps);
 
             if (neighbors.length < minPts) {
-                point.cluster = -1;
+                point.cluster = -1; // Keep as individual point
             } else {
-                this.expandCluster(point, neighbors, clusterId, eps, minPts);
+                this.expandCluster(point, neighbors, points, clusterId, eps, minPts);
                 clusterId++;
             }
         });
 
+        // Convert to cluster format
         const clusterMap = new Map();
-        this.points.forEach(point => {
-            if (point.cluster >= 0) {
-                if (!clusterMap.has(point.cluster)) {
-                    clusterMap.set(point.cluster, []);
-                }
-                clusterMap.get(point.cluster).push(point);
+        points.forEach(point => {
+            const id = point.cluster >= 0 ? point.cluster : `noise_${point.id}`;
+            if (!clusterMap.has(id)) {
+                clusterMap.set(id, []);
             }
+            clusterMap.get(id).push(point);
         });
 
         const result = [];
         clusterMap.forEach(clusterPoints => {
-            const totalWeight = clusterPoints.length;
-            const centroid = {
-                x: clusterPoints.reduce((sum, p) => sum + p.x, 0) / totalWeight,
-                y: clusterPoints.reduce((sum, p) => sum + p.y, 0) / totalWeight,
-                count: totalWeight,
-                density: totalWeight / (Math.PI * eps * eps),
-                radius: eps,
-                points: clusterPoints
+            const center = {
+                x: clusterPoints.reduce((sum, p) => sum + p.x, 0) / clusterPoints.length,
+                y: clusterPoints.reduce((sum, p) => sum + p.y, 0) / clusterPoints.length
             };
-            result.push(centroid);
+            result.push({ points: clusterPoints, center });
         });
 
-        if (this.points.length <= 20) {
-            const noise = this.points.filter(p => p.cluster === -1);
-            noise.forEach(point => {
-                result.push({
-                    x: point.x,
-                    y: point.y,
-                    count: 1,
-                    density: 1,
-                    radius: eps * 0.6,
-                    points: [point]
-                });
-            });
-        }
-
-        return result.sort((a, b) => b.count - a.count);
+        return result;
     }
 
-    expandCluster(point, neighbors, clusterId, eps, minPts) {
+    getNeighbors(point, points, eps) {
+        return points.filter(p =>
+            p.id !== point.id && this.distance(point, p) <= eps
+        );
+    }
+
+    expandCluster(point, neighbors, points, clusterId, eps, minPts) {
         point.cluster = clusterId;
 
         for (let i = 0; i < neighbors.length; i++) {
@@ -153,7 +168,7 @@ class DensityClusterer {
 
             if (!neighbor.visited) {
                 neighbor.visited = true;
-                const newNeighbors = this.getNeighbors(neighbor, eps);
+                const newNeighbors = this.getNeighbors(neighbor, points, eps);
                 if (newNeighbors.length >= minPts) {
                     neighbors.push(...newNeighbors.filter(n =>
                         !neighbors.some(existing => existing.id === n.id)
@@ -165,6 +180,52 @@ class DensityClusterer {
                 neighbor.cluster = clusterId;
             }
         }
+    }
+
+    // Main clustering method with enhanced precision
+    cluster() {
+        if (this.points.length === 0) return [];
+
+        // Use grid pre-clustering for better target separation
+        const preClusters = this.gridPreCluster();
+
+        const result = preClusters.map(preCluster => {
+            const points = preCluster.points;
+            return {
+                x: preCluster.center.x,
+                y: preCluster.center.y,
+                count: points.length,
+                density: points.length,
+                radius: this.calculateClusterRadius(points.length),
+                points: points,
+                // Add spread metric to identify tight vs loose clusters
+                spread: this.calculateSpread(points)
+            };
+        });
+
+        // Sort by count, but prioritize tighter clusters for same count
+        return result.sort((a, b) => {
+            if (a.count !== b.count) return b.count - a.count;
+            return a.spread - b.spread; // Tighter clusters first
+        });
+    }
+
+    calculateSpread(points) {
+        if (points.length <= 1) return 0;
+
+        const centerX = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+        const centerY = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+
+        const avgDistance = points.reduce((sum, p) => {
+            return sum + this.distance(p, { x: centerX, y: centerY });
+        }, 0) / points.length;
+
+        return avgDistance;
+    }
+
+    calculateClusterRadius(count) {
+        // Smaller base radius to keep targets distinct
+        return Math.max(0.02, Math.min(0.06, 0.025 + (count * 0.008)));
     }
 }
 
@@ -211,7 +272,7 @@ app.post('/click', async (req, res) => {
             clicks.get(channelId).set(uid, clickData);
         }
 
-        // INSTANT UPDATE: Recalculate and broadcast immediately
+        // INSTANT UPDATE with precise clustering
         const updatedData = await getHeatmapData(channelId, 3);
         broadcastToChannel(channelId, updatedData);
 
@@ -221,7 +282,7 @@ app.post('/click', async (req, res) => {
     }
 });
 
-// Broadcaster controls with instant broadcast
+// Broadcaster controls
 app.post('/start', async (req, res) => {
     isRunning = true;
     if (useRedis) {
@@ -233,7 +294,6 @@ app.post('/start', async (req, res) => {
         clicks.clear();
     }
 
-    // Broadcast to all channels
     connectedClients.forEach((clients, channelId) => {
         broadcastToChannel(channelId, { running: true, clusters: [], totalClicks: 0, uniqueUsers: 0 });
     });
@@ -244,7 +304,6 @@ app.post('/start', async (req, res) => {
 app.post('/stop', async (_, res) => {
     isRunning = false;
 
-    // Broadcast to all channels
     connectedClients.forEach((clients, channelId) => {
         const data = getHeatmapData(channelId, 3);
         data.running = false;
@@ -264,7 +323,6 @@ app.post('/reset', async (req, res) => {
         clicks.clear();
     }
 
-    // Broadcast reset to all channels
     connectedClients.forEach((clients, channelId) => {
         broadcastToChannel(channelId, { running: isRunning, clusters: [], totalClicks: 0, uniqueUsers: 0 });
     });
@@ -272,7 +330,7 @@ app.post('/reset', async (req, res) => {
     res.json({ status: 'reset' });
 });
 
-// Helper function to get heatmap data
+// Enhanced heatmap data generation with precise clustering
 async function getHeatmapData(channelId, requestedThreshold = 3) {
     let points = [];
     let userCount = 0;
@@ -309,7 +367,8 @@ async function getHeatmapData(channelId, requestedThreshold = 3) {
         };
     }
 
-    const clusterer = new DensityClusterer(points);
+    // Use precise clustering algorithm
+    const clusterer = new PreciseClusterer(points);
     const rawClusters = clusterer.cluster();
 
     const formattedClusters = rawClusters
@@ -321,16 +380,23 @@ async function getHeatmapData(channelId, requestedThreshold = 3) {
             percentage: Math.round((cluster.count / points.length) * 100),
             density: cluster.density,
             radius: cluster.radius,
-            isTop: false
+            spread: cluster.spread,
+            isTop: false,
+            // Add confidence metric - tighter clusters are more confident targets
+            confidence: Math.max(0.1, Math.min(1.0, 1.0 - (cluster.spread * 10)))
         }))
         .filter(cluster => cluster.percentage >= requestedThreshold)
-        .sort((a, b) => b.percentage - a.percentage);
+        .sort((a, b) => {
+            // Sort by percentage first, then by confidence for same percentage
+            if (a.percentage !== b.percentage) return b.percentage - a.percentage;
+            return b.confidence - a.confidence;
+        });
 
     if (formattedClusters.length > 0) {
         formattedClusters[0].isTop = true;
     }
 
-    const coverage = Math.min(100, Math.round((formattedClusters.length / Math.max(1, points.length * 0.1)) * 100));
+    const coverage = Math.min(100, Math.round((formattedClusters.length / Math.max(1, points.length * 0.15)) * 100));
 
     return {
         running: isRunning,
@@ -338,11 +404,12 @@ async function getHeatmapData(channelId, requestedThreshold = 3) {
         totalClicks: points.length,
         uniqueUsers: userCount,
         coverage,
-        threshold: requestedThreshold
+        threshold: requestedThreshold,
+        algorithm: 'precise-grid-clustering'
     };
 }
 
-// Regular HTTP endpoint (fallback)
+// Regular HTTP endpoint
 app.get('/heatmap', async (req, res) => {
     const channelId = req.query.channel;
     const requestedThreshold = parseInt(req.query.threshold) || 3;
@@ -366,14 +433,18 @@ app.get('/health', (_, res) => res.json({
     status: 'ok',
     running: isRunning,
     timestamp: Date.now(),
-    version: '2.1.0',
-    websocket: true
+    version: '2.2.0',
+    clustering: 'precise-grid-based',
+    features: [
+        'websocket-realtime',
+        'grid-clustering',
+        'target-separation',
+        'confidence-scoring'
+    ]
 }));
 
-// Create HTTP server
+// Create HTTP server and WebSocket server
 const server = createServer(app);
-
-// WebSocket server for instant updates
 const wss = new WebSocketServer({
     server,
     path: '/ws'
@@ -382,14 +453,13 @@ const wss = new WebSocketServer({
 wss.on('connection', (ws, req) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathParts = url.pathname.split('/');
-    const channelId = pathParts[pathParts.length - 1]; // Extract channel from path
+    const channelId = pathParts[pathParts.length - 1];
 
     if (!channelId || channelId === 'ws') {
         ws.close(1000, 'Channel ID required');
         return;
     }
 
-    // Add client to channel
     if (!connectedClients.has(channelId)) {
         connectedClients.set(channelId, new Set());
     }
@@ -397,7 +467,6 @@ wss.on('connection', (ws, req) => {
 
     console.log(`📡 WebSocket client connected to channel: ${channelId}`);
 
-    // Send initial data
     getHeatmapData(channelId, 3).then(data => {
         if (ws.readyState === ws.OPEN) {
             ws.send(JSON.stringify(data));
@@ -421,10 +490,12 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, () => {
-    console.log('🚀 Enhanced ClickMap EBS v2.1.0 running on port', PORT);
+    console.log('🚀 Enhanced ClickMap EBS v2.2.0 running on port', PORT);
     console.log('📊 Redis:', useRedis ? 'enabled' : 'disabled');
-    console.log('📡 WebSocket server enabled for instant updates');
-    console.log('🔥 Dynamic blob rendering with fire effects');
+    console.log('📡 WebSocket server enabled');
+    console.log('🎯 Precise grid-based clustering (20x20 grid)');
+    console.log('🔍 Enhanced target separation for close interactions');
+    console.log('📈 Confidence scoring for cluster quality');
 });
 
 export default server;

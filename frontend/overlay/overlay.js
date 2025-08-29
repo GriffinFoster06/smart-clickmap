@@ -1,18 +1,15 @@
-﻿// frontend/overlay/overlay.js - Enhanced dynamic heatmap with instant updates
+﻿// frontend/overlay/overlay.js - Clean circular overlays matching the reference image
 const EBS = 'https://smart-clickmap-backend.onrender.com';
 
-class DynamicHeatmapRenderer {
+class CleanHeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
         this.clusters = [];
-        this.particles = []; // For fire effects
-        this.animationId = null;
-        this.lastTime = 0;
+        this.PERCENTAGE_THRESHOLD = 3;
 
         this.resize();
         window.addEventListener('resize', () => this.resize());
-        this.startAnimation();
     }
 
     resize() {
@@ -25,74 +22,11 @@ class DynamicHeatmapRenderer {
     }
 
     updateClusters(newClusters) {
-        // Filter clusters above 3% threshold
         this.clusters = (newClusters || [])
-            .filter(cluster => (cluster.percentage || 0) >= 3)
+            .filter(cluster => (cluster.percentage || 0) >= this.PERCENTAGE_THRESHOLD)
             .sort((a, b) => b.percentage - a.percentage);
 
-        // Generate fire particles for high-intensity clusters
-        this.generateFireParticles();
-    }
-
-    generateFireParticles() {
-        // Clear old particles
-        this.particles = [];
-
-        this.clusters.forEach(cluster => {
-            if (cluster.percentage >= 10) { // Only for significant clusters
-                const particleCount = Math.min(20, Math.floor(cluster.percentage / 3));
-                const cx = cluster.x * window.innerWidth;
-                const cy = cluster.y * window.innerHeight;
-                const radius = this.calculateRadius(cluster.percentage);
-
-                for (let i = 0; i < particleCount; i++) {
-                    this.particles.push({
-                        x: cx + (Math.random() - 0.5) * radius * 2,
-                        y: cy + (Math.random() - 0.5) * radius * 2,
-                        vx: (Math.random() - 0.5) * 2,
-                        vy: (Math.random() - 0.5) * 2,
-                        life: 1.0,
-                        maxLife: 1.0 + Math.random() * 2,
-                        size: 2 + Math.random() * 3,
-                        clusterId: cluster.id || 0,
-                        isTop: cluster.isTop
-                    });
-                }
-            }
-        });
-    }
-
-    calculateRadius(percentage) {
-        return Math.max(30, Math.min(120, 40 + Math.sqrt(percentage) * 8));
-    }
-
-    startAnimation() {
-        const animate = (currentTime) => {
-            const deltaTime = currentTime - this.lastTime;
-            this.lastTime = currentTime;
-
-            this.updateParticles(deltaTime);
-            this.render();
-
-            this.animationId = requestAnimationFrame(animate);
-        };
-
-        this.animationId = requestAnimationFrame(animate);
-    }
-
-    updateParticles(deltaTime) {
-        this.particles.forEach(particle => {
-            particle.x += particle.vx;
-            particle.y += particle.vy;
-            particle.life -= deltaTime * 0.001; // Fade over time
-
-            // Add some drift
-            particle.vx *= 0.99;
-            particle.vy *= 0.99;
-        });
-
-        // Remove dead particles
-        this.particles = this.particles.filter(p => p.life > 0);
+        this.render();
     }
 
     render() {
@@ -103,171 +37,78 @@ class DynamicHeatmapRenderer {
 
         if (this.clusters.length === 0) return;
 
-        // Render clusters from lowest to highest percentage
-        const reversedClusters = [...this.clusters].reverse();
-
-        reversedClusters.forEach((cluster, index) => {
-            const isTop = index === reversedClusters.length - 1;
-            this.renderDynamicBlob(cluster, W, H, isTop);
+        // Render clean circular overlays
+        this.clusters.forEach((cluster) => {
+            this.renderCleanCircle(cluster, W, H);
         });
-
-        // Render fire particles
-        this.renderFireParticles();
     }
 
-    renderDynamicBlob(cluster, W, H, isTop) {
+    renderCleanCircle(cluster, W, H) {
         const cx = cluster.x * W;
         const cy = cluster.y * H;
         const percentage = cluster.percentage || 0;
-        const baseRadius = this.calculateRadius(percentage);
+
+        // Precise sizing to maintain distinct targets
+        let baseRadius;
+        if (cluster.count === 1) {
+            // Single clicks get small, consistent size
+            baseRadius = 30;
+        } else if (cluster.count <= 3) {
+            // Small groups stay compact  
+            baseRadius = Math.max(34, 37 + (percentage * 0.8));
+        } else {
+            // Larger groups but capped to prevent merging visually
+            baseRadius = Math.max(37, Math.min(70, 40 + (percentage * 1.0)));
+        }
+
+        // Factor in cluster confidence for precise targets
+        if (cluster.confidence) {
+            baseRadius *= (0.9 + (cluster.confidence * 0.2));
+        }
 
         this.ctx.save();
 
-        // Create organic blob shape instead of perfect circle
+        // Clean dark circular background
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
         this.ctx.beginPath();
-        const points = 8; // Number of control points for organic shape
-        const variation = baseRadius * 0.3; // How much the shape can vary
-
-        for (let i = 0; i <= points; i++) {
-            const angle = (i / points) * Math.PI * 2;
-            const radiusVariation = baseRadius + (Math.sin(angle * 3 + Date.now() * 0.001) * variation * 0.5);
-            const x = cx + Math.cos(angle) * radiusVariation;
-            const y = cy + Math.sin(angle) * radiusVariation;
-
-            if (i === 0) {
-                this.ctx.moveTo(x, y);
-            } else {
-                this.ctx.lineTo(x, y);
-            }
-        }
-        this.ctx.closePath();
-
-        // Gradient fill with more intense colors
-        const gradient = this.ctx.createRadialGradient(cx, cy, 0, cx, cy, baseRadius);
-
-        if (isTop) {
-            // Cyan/blue intense gradient for top cluster
-            gradient.addColorStop(0, 'rgba(0, 255, 255, 0.6)');
-            gradient.addColorStop(0.4, 'rgba(0, 200, 255, 0.4)');
-            gradient.addColorStop(0.7, 'rgba(100, 150, 255, 0.2)');
-            gradient.addColorStop(1, 'rgba(0, 255, 255, 0)');
-        } else if (percentage >= 15) {
-            // Hot orange/red for high intensity
-            gradient.addColorStop(0, 'rgba(255, 100, 0, 0.5)');
-            gradient.addColorStop(0.4, 'rgba(255, 150, 0, 0.35)');
-            gradient.addColorStop(0.7, 'rgba(200, 50, 150, 0.2)');
-            gradient.addColorStop(1, 'rgba(255, 100, 0, 0)');
-        } else {
-            // Purple gradient for moderate intensity
-            gradient.addColorStop(0, 'rgba(147, 51, 234, 0.4)');
-            gradient.addColorStop(0.4, 'rgba(167, 71, 254, 0.3)');
-            gradient.addColorStop(0.7, 'rgba(120, 40, 200, 0.2)');
-            gradient.addColorStop(1, 'rgba(147, 51, 234, 0)');
-        }
-
-        this.ctx.fillStyle = gradient;
+        this.ctx.arc(cx, cy, baseRadius, 0, 2 * Math.PI);
         this.ctx.fill();
 
-        // Fiery ring effect for high-intensity clusters
-        if (percentage >= 10) {
-            this.renderFireRing(cx, cy, baseRadius, isTop, percentage);
+        // Clean white border - adaptive width
+        const borderWidth = baseRadius < 37 ? 2 : 2.5;
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+        this.ctx.lineWidth = borderWidth;
+        this.ctx.stroke();
+
+        // Subtle inner highlight for larger targets
+        if (baseRadius > 32) {
+            this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            this.ctx.lineWidth = 1;
+            this.ctx.beginPath();
+            this.ctx.arc(cx, cy, baseRadius - 4, 0, 2 * Math.PI);
+            this.ctx.stroke();
         }
 
-        // Bold percentage text with glow
-        const fontSize = Math.max(16, Math.min(32, baseRadius * 0.4));
+        // Adaptive text sizing
+        const fontSize = Math.max(16, Math.min(26, baseRadius * 0.5));
         this.ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'middle';
 
-        // Text glow effect
-        this.ctx.shadowColor = isTop ? '#00ffff' : '#9333ea';
-        this.ctx.shadowBlur = 10;
-        this.ctx.fillStyle = isTop ? '#ffffff' : '#e0e7ff';
+        // Text shadow for contrast
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        this.ctx.fillText(`${percentage}%`, cx + 1, cy + 1);
+
+        // Main white text
+        this.ctx.fillStyle = '#ffffff';
         this.ctx.fillText(`${percentage}%`, cx, cy);
 
-        // Reset shadow
-        this.ctx.shadowBlur = 0;
-
         this.ctx.restore();
     }
 
-    renderFireRing(cx, cy, radius, isTop, percentage) {
-        const ringRadius = radius * 1.2;
-        const intensity = Math.min(1, percentage / 30);
-
-        this.ctx.save();
-
-        // Animated fire ring
-        const time = Date.now() * 0.003;
-        const segments = 32;
-
-        for (let i = 0; i < segments; i++) {
-            const angle = (i / segments) * Math.PI * 2;
-            const nextAngle = ((i + 1) / segments) * Math.PI * 2;
-
-            // Animated radius variation
-            const radiusVar1 = ringRadius + Math.sin(angle * 5 + time) * 8 * intensity;
-            const radiusVar2 = ringRadius + Math.sin(nextAngle * 5 + time) * 8 * intensity;
-
-            const x1 = cx + Math.cos(angle) * radiusVar1;
-            const y1 = cy + Math.sin(angle) * radiusVar1;
-            const x2 = cx + Math.cos(nextAngle) * radiusVar2;
-            const y2 = cy + Math.sin(nextAngle) * radiusVar2;
-
-            // Fire gradient
-            const fireGradient = this.ctx.createLinearGradient(cx, cy, x1, y1);
-
-            if (isTop) {
-                fireGradient.addColorStop(0, `rgba(0, 255, 255, ${0.3 * intensity})`);
-                fireGradient.addColorStop(1, `rgba(100, 200, 255, ${0.1 * intensity})`);
-            } else {
-                fireGradient.addColorStop(0, `rgba(255, ${100 + i * 2}, 0, ${0.4 * intensity})`);
-                fireGradient.addColorStop(1, `rgba(255, ${150 + i}, ${50 + i}, ${0.1 * intensity})`);
-            }
-
-            this.ctx.strokeStyle = fireGradient;
-            this.ctx.lineWidth = 2 + Math.sin(time + i) * intensity;
-            this.ctx.beginPath();
-            this.ctx.moveTo(cx, cy);
-            this.ctx.lineTo(x1, y1);
-            this.ctx.stroke();
-        }
-
-        this.ctx.restore();
-    }
-
-    renderFireParticles() {
-        this.particles.forEach(particle => {
-            if (particle.life <= 0) return;
-
-            this.ctx.save();
-
-            const alpha = particle.life / particle.maxLife;
-            const size = particle.size * alpha;
-
-            // Particle color based on cluster
-            if (particle.isTop) {
-                this.ctx.fillStyle = `rgba(0, 255, 255, ${alpha * 0.8})`;
-            } else {
-                this.ctx.fillStyle = `rgba(255, ${100 + Math.random() * 100}, 0, ${alpha * 0.6})`;
-            }
-
-            // Glowing particle
-            this.ctx.shadowColor = particle.isTop ? '#00ffff' : '#ff6600';
-            this.ctx.shadowBlur = size * 2;
-
-            this.ctx.beginPath();
-            this.ctx.arc(particle.x, particle.y, size, 0, Math.PI * 2);
-            this.ctx.fill();
-
-            this.ctx.restore();
-        });
-    }
-
-    destroy() {
-        if (this.animationId) {
-            cancelAnimationFrame(this.animationId);
-        }
+    setThreshold(threshold) {
+        this.PERCENTAGE_THRESHOLD = threshold;
+        this.render();
     }
 }
 
@@ -289,10 +130,10 @@ class InstantOverlay {
         }
 
         this.setupRenderer();
-        this.connectWebSocket(); // Try WebSocket first for instant updates
-        this.startPolling(); // Fallback to polling
+        this.connectWebSocket();
+        this.startPolling();
 
-        console.log(`🔥 Enhanced ClickMap connected to: ${this.channelId}`);
+        console.log(`🎯 Clean ClickMap overlay connected to: ${this.channelId}`);
     }
 
     getChannelFromUrl() {
@@ -304,11 +145,16 @@ class InstantOverlay {
         const canvas = document.getElementById('overlay-canvas');
         if (!canvas) return;
 
-        this.renderer = new DynamicHeatmapRenderer(canvas);
+        this.renderer = new CleanHeatmapRenderer(canvas);
+
+        // Custom threshold from URL
+        const threshold = new URLSearchParams(window.location.search).get('threshold');
+        if (threshold) {
+            this.renderer.setThreshold(parseInt(threshold));
+        }
     }
 
     connectWebSocket() {
-        // Try to establish WebSocket connection for instant updates
         try {
             const wsUrl = EBS.replace('https://', 'wss://').replace('http://', 'ws://');
             this.websocket = new WebSocket(`${wsUrl}/ws/${this.channelId}`);
@@ -318,18 +164,17 @@ class InstantOverlay {
                     const data = JSON.parse(event.data);
                     this.updateVisualization(data);
                 } catch (e) {
-                    console.warn('WebSocket message parse error:', e);
+                    console.warn('WebSocket parse error:', e);
                 }
             };
 
             this.websocket.onerror = () => {
-                console.log('WebSocket failed, using polling');
                 this.websocket = null;
             };
 
             this.websocket.onclose = () => {
                 this.websocket = null;
-                setTimeout(() => this.connectWebSocket(), 5000); // Retry
+                setTimeout(() => this.connectWebSocket(), 5000);
             };
 
         } catch (e) {
@@ -338,14 +183,13 @@ class InstantOverlay {
     }
 
     startPolling() {
-        // Faster polling for more responsive updates
-        this.pollInterval = setInterval(() => this.poll(), 500); // 0.5 second polling
+        this.pollInterval = setInterval(() => this.poll(), 800);
         this.poll();
     }
 
     async poll() {
         if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-            return; // Skip polling if WebSocket is active
+            return;
         }
 
         try {
@@ -374,9 +218,10 @@ class InstantOverlay {
     }
 }
 
-// Initialize with error handling
+// Initialize
 try {
     new InstantOverlay();
+    console.log('🎯 Clean circular overlay loaded');
 } catch (error) {
     console.error('Failed to initialize overlay:', error);
 }

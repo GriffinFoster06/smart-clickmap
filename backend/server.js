@@ -6,7 +6,6 @@ import jwt from 'jsonwebtoken';
 import Redis from 'redis';
 
 const PORT = process.env.PORT || 8080;
-const GRID = Number(process.env.GRID_SIZE) || 100;
 const SECRET = Buffer.from(process.env.TWITCH_SECRET || '', 'base64');
 
 const useRedis = !!process.env.REDIS_URL;
@@ -16,12 +15,11 @@ if (useRedis) {
     redis = Redis.createClient({ url: process.env.REDIS_URL });
     await redis.connect();
 } else {
-    clicks = new Map();  // userId → { x, y }
+    clicks = new Map(); // channelId → Map(userId → { x, y, timestamp })
 }
 
 let isRunning = false;
 
-// --- Standard app setup ---
 const app = express();
 app.use(cors({
     origin: '*',
@@ -34,7 +32,145 @@ app.use((req, res, next) => {
     next();
 });
 
-// --- Click Handling ---
+// Enhanced clustering algorithm - density-based with adaptive parameters
+class DensityClusterer {
+    constructor(points) {
+        this.points = points.map((p, i) => ({ ...p, id: i, visited: false, cluster: -1 }));
+        this.clusters = [];
+    }
+
+    // Calculate optimal epsilon based on k-distance graph
+    calculateOptimalEps() {
+        const n = this.points.length;
+        if (n < 4) return 0.05;
+
+        const k = Math.max(3, Math.min(10, Math.floor(n * 0.1))); // Adaptive k
+        const distances = [];
+
+        this.points.forEach(point => {
+            const dists = this.points
+                .filter(p => p.id !== point.id)
+                .map(p => this.distance(point, p))
+                .sort((a, b) => a - b)
+                .slice(0, k);
+            distances.push(dists[dists.length - 1]);
+        });
+
+        distances.sort((a, b) => a - b);
+
+        // Find the "elbow" in the k-distance graph
+        let maxChange = 0;
+        let optimalEps = distances[Math.floor(distances.length * 0.8)];
+
+        for (let i = 1; i < distances.length - 1; i++) {
+            const change = distances[i + 1] - distances[i - 1];
+            if (change > maxChange) {
+                maxChange = change;
+                optimalEps = distances[i];
+            }
+        }
+
+        return Math.max(0.02, Math.min(0.15, optimalEps));
+    }
+
+    distance(a, b) {
+        return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    getNeighbors(point, eps) {
+        return this.points.filter(p =>
+            p.id !== point.id && this.distance(point, p) <= eps
+        );
+    }
+
+    cluster() {
+        if (this.points.length === 0) return [];
+
+        const eps = this.calculateOptimalEps();
+        const minPts = Math.max(2, Math.floor(this.points.length * 0.05)); // Dynamic minPts
+
+        let clusterId = 0;
+
+        this.points.forEach(point => {
+            if (point.visited) return;
+
+            point.visited = true;
+            const neighbors = this.getNeighbors(point, eps);
+
+            if (neighbors.length < minPts) {
+                point.cluster = -1; // Noise
+            } else {
+                this.expandCluster(point, neighbors, clusterId, eps, minPts);
+                clusterId++;
+            }
+        });
+
+        // Convert to cluster format
+        const clusterMap = new Map();
+        this.points.forEach(point => {
+            if (point.cluster >= 0) {
+                if (!clusterMap.has(point.cluster)) {
+                    clusterMap.set(point.cluster, []);
+                }
+                clusterMap.get(point.cluster).push(point);
+            }
+        });
+
+        // Calculate weighted centers and sizes
+        const result = [];
+        clusterMap.forEach(clusterPoints => {
+            const totalWeight = clusterPoints.length;
+            const centroid = {
+                x: clusterPoints.reduce((sum, p) => sum + p.x, 0) / totalWeight,
+                y: clusterPoints.reduce((sum, p) => sum + p.y, 0) / totalWeight,
+                count: totalWeight,
+                density: totalWeight / (Math.PI * eps * eps), // Density metric
+                radius: eps,
+                points: clusterPoints
+            };
+            result.push(centroid);
+        });
+
+        // Add significant isolated points as micro-clusters
+        const noise = this.points.filter(p => p.cluster === -1);
+        noise.forEach(point => {
+            result.push({
+                x: point.x,
+                y: point.y,
+                count: 1,
+                density: 1,
+                radius: eps * 0.5,
+                points: [point]
+            });
+        });
+
+        return result.sort((a, b) => b.count - a.count);
+    }
+
+    expandCluster(point, neighbors, clusterId, eps, minPts) {
+        point.cluster = clusterId;
+
+        for (let i = 0; i < neighbors.length; i++) {
+            const neighbor = neighbors[i];
+
+            if (!neighbor.visited) {
+                neighbor.visited = true;
+                const newNeighbors = this.getNeighbors(neighbor, eps);
+                if (newNeighbors.length >= minPts) {
+                    neighbors.push(...newNeighbors.filter(n =>
+                        !neighbors.some(existing => existing.id === n.id)
+                    ));
+                }
+            }
+
+            if (neighbor.cluster === -1 || neighbor.cluster === undefined) {
+                neighbor.cluster = clusterId;
+            }
+        }
+    }
+}
+
+// Click handling with improved data structure
 app.post('/click', (req, res) => {
     try {
         const token = (req.headers.authorization || '').replace('Bearer ', '');
@@ -43,135 +179,143 @@ app.post('/click', (req, res) => {
         const uid = payload.user_id || payload.opaque_user_id;
         const channelId = payload.channel_id;
 
-        if (typeof x !== 'number' || typeof y !== 'number')
-            return res.status(400).json({ error: 'coords' });
+        if (typeof x !== 'number' || typeof y !== 'number' ||
+            x < 0 || x > 1 || y < 0 || y > 1) {
+            return res.status(400).json({ error: 'invalid coordinates' });
+        }
+
+        const clickData = { x, y, timestamp: Date.now() };
 
         if (useRedis) {
-            redis.hSet(`click:${channelId}:${uid}`, { x, y });
+            redis.hSet(`click:${channelId}:${uid}`, clickData);
         } else {
-            if (!clicks.has(channelId)) clicks.set(channelId, new Map());
-            clicks.get(channelId).set(uid, { x, y });
+            if (!clicks.has(channelId)) {
+                clicks.set(channelId, new Map());
+            }
+            clicks.get(channelId).set(uid, clickData);
         }
 
         return res.sendStatus(200);
     } catch (e) {
-        return res.status(401).json({ error: 'jwt' });
+        return res.status(401).json({ error: 'invalid token' });
     }
 });
 
-// --- Broadcaster controls ---
-app.post('/start', (_, res) => {
+// Broadcaster controls
+app.post('/start', async (req, res) => {
     isRunning = true;
-    if (!useRedis) clicks.clear();
-    res.send('started');
+    // Clear old data when starting fresh
+    if (useRedis) {
+        const keys = await redis.keys('click:*');
+        if (keys.length > 0) {
+            await redis.del(keys);
+        }
+    } else {
+        clicks.clear();
+    }
+    res.json({ status: 'started' });
 });
 
 app.post('/stop', (_, res) => {
     isRunning = false;
-    res.send('stopped');
+    res.json({ status: 'stopped' });
 });
 
-app.post('/reset', (_, res) => {
-    if (!useRedis) clicks.clear();
-    res.send('reset');
-});
-
-app.get('/health', (_, res) => res.send('ok'));
-
-// --- Clustering Utilities ---
-function distance(a, b) {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    return Math.hypot(dx, dy);
-}
-
-function getClusterRadius(clicks) {
-    const n = clicks.length;
-    if (n === 0) return 0.05;
-
-    let avgDist = 0;
-    for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-            avgDist += distance(clicks[i], clicks[j]);
+app.post('/reset', async (req, res) => {
+    if (useRedis) {
+        const keys = await redis.keys('click:*');
+        if (keys.length > 0) {
+            await redis.del(keys);
         }
+    } else {
+        clicks.clear();
     }
-    avgDist /= (n * (n - 1) / 2);
+    res.json({ status: 'reset' });
+});
 
-    // Base it on average distance between clicks
-    if (avgDist < 0.05) return 0.01;  // Tight cluster
-    if (avgDist < 0.1) return 0.02;
-    if (avgDist < 0.2) return 0.03;
-    return 0.05;  // Very spread out
-}
-
-function clusterClicks(points, radius) {
-    if (points.length === 0) return [];
-
-    const blobs = [];
-    points.forEach(p => {
-        let found = false;
-        for (const b of blobs) {
-            if (distance(p, b) < radius) {
-                b.count++;
-                b.x = (b.x * (b.count - 1) + p.x) / b.count;
-                b.y = (b.y * (b.count - 1) + p.y) / b.count;
-                found = true;
-                break;
-            }
-        }
-        if (!found) blobs.push({ x: p.x, y: p.y, count: 1 });
-    });
-
-    return blobs;
-}
-
-// --- /heatmap dynamic clustering ---
+// Enhanced heatmap endpoint with better data processing
 app.get('/heatmap', async (req, res) => {
     const channelId = req.query.channel;
     if (!channelId) {
-        return res.json({ running: isRunning, blobs: [], totalClicks: 0 });
+        return res.json({
+            running: isRunning,
+            clusters: [],
+            totalClicks: 0,
+            uniqueUsers: 0,
+            coverage: 0
+        });
     }
 
-    let pts = [];
+    let points = [];
+    let userCount = 0;
 
     if (useRedis) {
         const keys = await redis.keys(`click:${channelId}:*`);
+        userCount = keys.length;
         for (const k of keys) {
-            const { x, y } = await redis.hGetAll(k);
-            pts.push({ x: parseFloat(x), y: parseFloat(y) });
+            const data = await redis.hGetAll(k);
+            if (data.x && data.y) {
+                points.push({
+                    x: parseFloat(data.x),
+                    y: parseFloat(data.y),
+                    timestamp: parseInt(data.timestamp) || Date.now()
+                });
+            }
         }
     } else {
-        if (clicks.has(channelId)) {
-            pts = Array.from(clicks.get(channelId).values());
+        const channelClicks = clicks.get(channelId);
+        if (channelClicks) {
+            userCount = channelClicks.size;
+            points = Array.from(channelClicks.values());
         }
     }
 
-    const totalClicks = pts.length;
-
-    if (totalClicks === 0) {
-        return res.json({ running: isRunning, blobs: [], totalClicks: 0 });
+    if (points.length === 0) {
+        return res.json({
+            running: isRunning,
+            clusters: [],
+            totalClicks: 0,
+            uniqueUsers: 0,
+            coverage: 0
+        });
     }
 
-    const radius = getClusterRadius(pts);
-    let blobs = clusterClicks(pts, radius);
+    // Use enhanced clustering
+    const clusterer = new DensityClusterer(points);
+    const clusters = clusterer.cluster();
 
-    if (blobs.length === 0 && pts.length > 0) {
-        blobs = pts.map(p => ({ x: p.x, y: p.y, count: 1 }));
-    }
+    // Calculate coverage (percentage of screen area with activity)
+    const coverage = Math.min(100, (clusters.length * 5)); // Rough estimate
 
-    blobs.sort((a, b) => b.count - a.count);
+    // Format clusters for frontend with enhanced data
+    const formattedClusters = clusters.map((cluster, index) => ({
+        id: index,
+        x: cluster.x,
+        y: cluster.y,
+        count: cluster.count,
+        percentage: Math.round((cluster.count / points.length) * 100),
+        density: cluster.density,
+        radius: cluster.radius,
+        isTop: index === 0,
+        intensity: Math.min(1, cluster.count / Math.max(1, points.length * 0.1))
+    }));
 
-    const payload = blobs
-        .map((b, i) => ({
-            x: b.x,
-            y: b.y,
-            pct: Math.round((b.count / totalClicks) * 100),
-            isTop: i === 0
-        }))
-        .filter(b => b.pct >= 5 || b.isTop);
-
-    res.json({ running: isRunning, blobs: payload, totalClicks });
+    res.json({
+        running: isRunning,
+        clusters: formattedClusters,
+        totalClicks: points.length,
+        uniqueUsers: userCount,
+        coverage: Math.round(coverage)
+    });
 });
 
-// --- WebSocket server (if needed) ---
-const server = app.listen(PORT, () => console.log('EBS on', PORT));
+app.get('/health', (_, res) => res.json({
+    status: 'ok',
+    running: isRunning,
+    timestamp: Date.now()
+}));
+
+const server = app.listen(PORT, () => {
+    console.log(`🚀 Smart ClickMap EBS running on port ${PORT}`);
+    console.log(`📊 Redis: ${useRedis ? 'enabled' : 'disabled'}`);
+});

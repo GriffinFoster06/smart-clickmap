@@ -2,275 +2,38 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Smart Click Maps Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Click Maps Control Panel</title>
+
+    <!-- Twitch Extension Helper Library -->
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
 
-        body {
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #ffffff;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            padding: 16px;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
+    <!-- Config Panel Styles -->
+    <link rel="stylesheet" href="config.css">
 
-        .header {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-
-            .header h1 {
-                font-size: 20px;
-                font-weight: 600;
-                color: #9146ff;
-                margin-bottom: 4px;
-            }
-
-            .header .subtitle {
-                font-size: 12px;
-                color: #a0a0b0;
-            }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-
-        .stat-card {
-            background: rgba(145, 70, 255, 0.1);
-            border: 1px solid rgba(145, 70, 255, 0.3);
-            border-radius: 8px;
-            padding: 12px;
-            text-align: center;
-            transition: all 0.2s ease;
-        }
-
-            .stat-card:hover {
-                background: rgba(145, 70, 255, 0.15);
-                border-color: rgba(145, 70, 255, 0.5);
-            }
-
-        .stat-value {
-            font-size: 24px;
-            font-weight: bold;
-            color: #9146ff;
-            display: block;
-        }
-
-        .stat-label {
-            font-size: 11px;
-            color: #a0a0b0;
-            margin-top: 4px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .preview-section {
-            margin-bottom: 20px;
-        }
-
-        .preview-header {
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: #ffffff;
-        }
-
-        .preview-container {
-            background: #000;
-            border: 2px solid #9146ff;
-            border-radius: 8px;
-            overflow: hidden;
-            position: relative;
-        }
-
-        #mini-canvas {
-            display: block;
-            width: 100%;
-            height: auto;
-        }
-
-        .preview-overlay {
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            background: rgba(0, 0, 0, 0.8);
-            color: #fff;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-        }
-
-        .controls {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .control-row {
-            display: flex;
-            gap: 8px;
-        }
-
-        button {
-            flex: 1;
-            background: #9146ff;
-            color: white;
-            border: none;
-            padding: 12px;
-            border-radius: 6px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            position: relative;
-            overflow: hidden;
-        }
-
-            button:hover {
-                background: #a970ff;
-                transform: translateY(-1px);
-            }
-
-            button:active {
-                transform: translateY(0);
-            }
-
-            button.secondary {
-                background: #333;
-            }
-
-                button.secondary:hover {
-                    background: #444;
-                }
-
-            button.danger {
-                background: #ff4757;
-            }
-
-                button.danger:hover {
-                    background: #ff3838;
-                }
-
-            button:disabled {
-                opacity: 0.5;
-                cursor: not-allowed;
-                transform: none;
-            }
-
-        .status-indicator {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 8px;
-            margin-bottom: 16px;
-            border-radius: 6px;
-            font-size: 13px;
-            font-weight: 500;
-        }
-
-            .status-indicator.running {
-                background: rgba(34, 197, 94, 0.1);
-                color: #22c55e;
-                border: 1px solid rgba(34, 197, 94, 0.3);
-            }
-
-            .status-indicator.stopped {
-                background: rgba(239, 68, 68, 0.1);
-                color: #ef4444;
-                border: 1px solid rgba(239, 68, 68, 0.3);
-            }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: currentColor;
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0.5;
-            }
-        }
-
-        .advanced-stats {
-            margin-top: 16px;
-            padding: 12px;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 6px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-            .advanced-stats h3 {
-                font-size: 12px;
-                color: #a0a0b0;
-                margin-bottom: 8px;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }
-
-        .stats-row {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 4px;
-            font-size: 11px;
-        }
-
-        .stats-label {
-            color: #a0a0b0;
-        }
-
-        .stats-value {
-            color: #fff;
-            font-weight: 500;
-        }
-
-        .loading {
-            opacity: 0.6;
-        }
-
-        .error-message {
-            background: rgba(239, 68, 68, 0.1);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            color: #ef4444;
-            padding: 8px 12px;
-            border-radius: 6px;
-            margin-bottom: 12px;
-            font-size: 12px;
-        }
-    </style>
+    <!-- Preload scripts -->
+    <link rel="preload" href="heatmap.js" as="script">
+    <link rel="preload" href="config.js" as="script">
 </head>
 <body>
+    <!-- Header Section -->
     <div class="header">
         <h1>Smart Click Maps</h1>
-        <div class="subtitle">Real-time viewer interaction heatmap</div>
+        <div class="subtitle">Real-time viewer interaction heatmap control panel</div>
     </div>
 
+    <!-- Status Indicator -->
     <div class="status-indicator" id="status">
         <div class="status-dot"></div>
         <span id="status-text">Initializing...</span>
     </div>
 
+    <!-- Error Display -->
     <div class="error-message" id="error" style="display: none;">
         Connection error. Retrying...
     </div>
 
+    <!-- Statistics Grid -->
     <div class="stats-grid">
         <div class="stat-card">
             <span class="stat-value" id="total-clicks">-</span>
@@ -290,6 +53,7 @@
         </div>
     </div>
 
+    <!-- Live Preview Section -->
     <div class="preview-section">
         <div class="preview-header">Live Preview</div>
         <div class="preview-container">
@@ -298,6 +62,7 @@
         </div>
     </div>
 
+    <!-- Control Buttons -->
     <div class="controls">
         <div class="control-row">
             <button id="start-btn">▶️ Start Session</button>
@@ -306,6 +71,7 @@
         <button id="reset-btn" class="danger">🗑️ Clear All Data</button>
     </div>
 
+    <!-- Advanced Statistics -->
     <div class="advanced-stats">
         <h3>Session Details</h3>
         <div class="stats-row">
@@ -320,181 +86,24 @@
             <span class="stats-label">Top Hotspot:</span>
             <span class="stats-value" id="top-hotspot">-</span>
         </div>
+        <div class="stats-row">
+            <span class="stats-label">Threshold:</span>
+            <span class="stats-value" id="threshold-info">3%</span>
+        </div>
     </div>
 
-    <script type="module">
-        import { HeatmapRenderer } from './heatmap.js';
+    <!-- Optional Threshold Control -->
+    <div class="threshold-control" id="threshold-control" style="display: none;">
+        <h3>Display Threshold</h3>
+        <div class="threshold-slider-container">
+            <label for="threshold-slider">Show clusters above:</label>
+            <input type="range" id="threshold-slider" min="1" max="20" value="3" step="1">
+            <span id="threshold-value">3%</span>
+        </div>
+    </div>
 
-        class ConfigPanel {
-            constructor() {
-                this.EBS = 'https://smart-clickmap-backend.onrender.com';
-                this.pollInterval = null;
-                this.renderer = null;
-                this.sessionStart = null;
-                this.isRunning = false;
-                this.retryCount = 0;
-                this.maxRetries = 3;
-
-                this.init();
-            }
-
-            init() {
-                this.setupCanvas();
-                this.setupEventListeners();
-                this.startPolling();
-            }
-
-            setupCanvas() {
-                const canvas = document.getElementById('mini-canvas');
-                this.renderer = new HeatmapRenderer(canvas);
-            }
-
-            setupEventListeners() {
-                document.getElementById('start-btn').addEventListener('click', () => this.startSession());
-                document.getElementById('stop-btn').addEventListener('click', () => this.stopSession());
-                document.getElementById('reset-btn').addEventListener('click', () => this.resetSession());
-            }
-
-            async startSession() {
-                try {
-                    document.getElementById('start-btn').disabled = true;
-                    const response = await fetch(`${this.EBS}/start`, { method: 'POST' });
-                    if (response.ok) {
-                        this.sessionStart = Date.now();
-                        this.updateStatus(true);
-                        this.showNotification('Session started!', 'success');
-                    }
-                } catch (error) {
-                    this.showError('Failed to start session');
-                } finally {
-                    document.getElementById('start-btn').disabled = false;
-                }
-            }
-
-            async stopSession() {
-                try {
-                    document.getElementById('stop-btn').disabled = true;
-                    const response = await fetch(`${this.EBS}/stop`, { method: 'POST' });
-                    if (response.ok) {
-                        this.updateStatus(false);
-                        this.showNotification('Session stopped', 'info');
-                    }
-                } catch (error) {
-                    this.showError('Failed to stop session');
-                } finally {
-                    document.getElementById('stop-btn').disabled = false;
-                }
-            }
-
-            async resetSession() {
-                if (!confirm('Are you sure you want to clear all click data?')) return;
-
-                try {
-                    document.getElementById('reset-btn').disabled = true;
-                    const response = await fetch(`${this.EBS}/reset`, { method: 'POST' });
-                    if (response.ok) {
-                        this.showNotification('Data cleared', 'info');
-                    }
-                } catch (error) {
-                    this.showError('Failed to reset data');
-                } finally {
-                    document.getElementById('reset-btn').disabled = false;
-                }
-            }
-
-            startPolling() {
-                this.pollInterval = setInterval(() => this.pollData(), 1000);
-                this.pollData(); // Initial poll
-            }
-
-            async pollData() {
-                try {
-                    document.body.classList.remove('loading');
-                    const response = await fetch(`${this.EBS}/heatmap`);
-
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-                    const data = await response.json();
-                    this.updateUI(data);
-                    this.hideError();
-                    this.retryCount = 0;
-
-                } catch (error) {
-                    this.retryCount++;
-                    if (this.retryCount <= this.maxRetries) {
-                        this.showError(`Connection error. Retry ${this.retryCount}/${this.maxRetries}`);
-                    } else {
-                        this.showError('Connection lost. Check your internet connection.');
-                    }
-                    document.body.classList.add('loading');
-                }
-            }
-
-            updateUI(data) {
-                this.isRunning = data.running;
-                this.updateStatus(data.running);
-
-                // Update stats
-                document.getElementById('total-clicks').textContent = data.totalClicks || 0;
-                document.getElementById('unique-users').textContent = data.uniqueUsers || 0;
-                document.getElementById('cluster-count').textContent = (data.clusters || []).length;
-                document.getElementById('coverage').textContent = `${data.coverage || 0}%`;
-
-                // Update advanced stats
-                if (this.sessionStart && data.running) {
-                    const duration = Math.floor((Date.now() - this.sessionStart) / 1000);
-                    const minutes = Math.floor(duration / 60);
-                    const seconds = duration % 60;
-                    document.getElementById('duration').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-                } else {
-                    document.getElementById('duration').textContent = '-';
-                }
-
-                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
-
-                const topCluster = data.clusters?.[0];
-                document.getElementById('top-hotspot').textContent = topCluster ?
-                    `${topCluster.percentage}% (${topCluster.count} users)` : '-';
-
-                // Update preview
-                if (this.renderer) {
-                    this.renderer.updateClusters(data.clusters || []);
-                }
-
-                document.getElementById('preview-status').textContent =
-                    data.running ? 'LIVE' : 'STOPPED';
-            }
-
-            updateStatus(isRunning) {
-                const statusEl = document.getElementById('status');
-                const statusText = document.getElementById('status-text');
-
-                if (isRunning) {
-                    statusEl.className = 'status-indicator running';
-                    statusText.textContent = 'Session Active';
-                } else {
-                    statusEl.className = 'status-indicator stopped';
-                    statusText.textContent = 'Session Stopped';
-                }
-            }
-
-            showError(message) {
-                const errorEl = document.getElementById('error');
-                errorEl.textContent = message;
-                errorEl.style.display = 'block';
-            }
-
-            hideError() {
-                document.getElementById('error').style.display = 'none';
-            }
-
-            showNotification(message, type = 'info') {
-                // Simple notification - could be enhanced with a proper toast system
-                console.log(`${type.toUpperCase()}: ${message}`);
-            }
-        }
-
-        new ConfigPanel();
-    </script>
+    <!-- Load JavaScript modules -->
+    <script type="module" src="heatmap.js"></script>
+    <script type="module" src="config.js"></script>
 </body>
 </html>

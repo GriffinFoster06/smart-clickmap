@@ -375,7 +375,7 @@
 
             // More transparent pill (so it doesn't cover content)
             ctx.save();
-            ctx.fillStyle = 'rgba(0,0,0,0.30)'; // was 0.55 -> now lighter
+            ctx.fillStyle = 'rgba(0,0,0,0.05)'; // was 0.55 -> now lighter
             this._drawRoundedRect(layout.pill.x, layout.pill.y, layout.pill.w, layout.pill.h, Math.round(fontSize * 0.45));
             ctx.fill();
             ctx.restore();

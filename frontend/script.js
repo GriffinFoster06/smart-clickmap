@@ -105,9 +105,12 @@ class ClickMapExtension {
     }
 
     setupUI() {
-        // Show loading initially
-        this.showLoading(true);
-        this.updateStatusBadge('Connecting...', 'inactive');
+        // Show loading initially (hidden by default in clean version)
+        // Only enable status updates in debug mode
+        if (window.debugManager?.isDebugMode) {
+            this.showLoading(true);
+            this.updateStatusBadge('Connecting...', 'inactive');
+        }
     }
 
     handleClick(event) {
@@ -248,7 +251,9 @@ class ClickMapExtension {
     startPolling() {
         if (this.pollInterval) return;
 
-        this.showLoading(false);
+        if (window.debugManager?.isDebugMode) {
+            this.showLoading(false);
+        }
         this.stats.status = 'polling';
 
         this.pollInterval = setInterval(() => {
@@ -291,17 +296,22 @@ class ClickMapExtension {
             this.stats.lastPollTime = `${(performance.now() - pollStart).toFixed(1)}ms`;
             this.stats.status = this.running ? 'active' : 'inactive';
 
-            // Update UI
-            this.updateStatusBadge(
-                this.running ? 'Session Active' : 'Session Stopped',
-                this.running ? 'active' : 'inactive'
-            );
+            // Update UI only in debug mode
+            if (window.debugManager?.isDebugMode) {
+                this.updateStatusBadge(
+                    this.running ? 'Session Active' : 'Session Stopped',
+                    this.running ? 'active' : 'inactive'
+                );
+            }
             this.hideError();
 
         } catch (error) {
             console.error('❌ Heatmap polling error:', error);
             this.showError('Connection lost. Retrying...');
-            this.updateStatusBadge('Connection Error', 'inactive');
+
+            if (window.debugManager?.isDebugMode) {
+                this.updateStatusBadge('Connection Error', 'inactive');
+            }
 
             if (window.analytics) {
                 window.analytics.trackError();
@@ -370,8 +380,16 @@ class ClickMapExtension {
         const errorEl = document.getElementById('error-overlay');
         const messageEl = document.getElementById('error-message');
 
-        if (errorEl && messageEl) {
-            messageEl.textContent = message;
+        if (errorEl) {
+            if (messageEl) {
+                messageEl.textContent = message;
+            } else {
+                // Fallback: find any paragraph in error element
+                const paragraphs = errorEl.querySelectorAll('p');
+                if (paragraphs.length > 0) {
+                    paragraphs[0].textContent = message;
+                }
+            }
             errorEl.style.display = 'block';
         }
 

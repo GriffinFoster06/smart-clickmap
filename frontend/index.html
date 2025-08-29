@@ -17,41 +17,21 @@
     <link rel="preload" href="debug.js" as="script">
 </head>
 <body>
-    <!-- Main heatmap canvas - HUD-style overlay -->
+    <!-- Main heatmap canvas - clean HUD-style overlay -->
     <canvas id="heat" width="1920" height="1080" aria-label="Interactive click heatmap overlay"></canvas>
 
-    <!-- Loading indicator (hidden by default) -->
-    <div class="loading-overlay" id="loading-overlay">
+    <!-- Hidden elements for functionality -->
+    <div class="loading-overlay" id="loading-overlay" style="display: none;">
         <div class="loading-spinner"></div>
         <span>Connecting...</span>
     </div>
 
-    <!-- Status badge for user feedback -->
-    <div class="status-badge" id="status-badge">
-        <span id="status-text">Initializing...</span>
-    </div>
-
-    <!-- Error display (hidden by default) -->
     <div class="error-overlay" id="error-overlay" style="display: none;">
         <div class="error-content">
             <h3>⚠️ Connection Issue</h3>
             <p id="error-message">Unable to connect to ClickMap server.</p>
             <button id="retry-button">🔄 Retry</button>
         </div>
-    </div>
-
-    <!-- Debug panel (only visible in development) -->
-    <div class="debug-panel" id="debug-panel" style="display: none;">
-        <div class="debug-header">🐛 Debug Info</div>
-        <div class="debug-stats">
-            <div>Status: <span id="debug-status">-</span></div>
-            <div>Channel: <span id="debug-channel">-</span></div>
-            <div>Clicks: <span id="debug-clicks">0</span></div>
-            <div>Clusters: <span id="debug-clusters">0</span></div>
-            <div>Polls: <span id="debug-polls">0</span></div>
-            <div>Last Poll: <span id="debug-last-poll">-</span></div>
-        </div>
-        <button id="debug-toggle">×</button>
     </div>
 
     <!-- Accessibility announcements -->

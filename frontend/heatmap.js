@@ -1,126 +1,195 @@
-﻿// frontend/heatmap.js - Precise area-based clustering with accurate coverage representation
+﻿// frontend/heatmap.js - Smooth, spring-animated precise area-based clustering
 export class HeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
-        this.clusters = [];
+
         this.PERCENTAGE_THRESHOLD = 3;
-        this.MIN_RADIUS = 80; // Much larger minimum for readability
-        this.MAX_RADIUS = 160; // Larger maximum for better coverage
+        this.MIN_RADIUS = 80;
+        this.MAX_RADIUS = 160;
+
+        // Animation state
+        this.springs = new Map(); // key -> {x,y,r,p,seed}
+        this.targets = new Map(); // key -> {x,y,r,p,count}
+        this.animationId = null;
+        this.lastTs = 0;
+        this.reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
         this.resize();
+        this.start();
     }
 
     resize() {
         const rect = this.canvas.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
 
-        this.canvas.width = rect.width * dpr;
-        this.canvas.height = rect.height * dpr;
+        this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+        this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
         this.canvas.style.width = rect.width + 'px';
         this.canvas.style.height = rect.height + 'px';
 
-        this.ctx.scale(dpr, dpr);
-        this.render();
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        this.render(performance.now() / 1000);
+    }
+
+    // --- helpers ---
+    hashSeed(x, y, pct, count) {
+        let h = 2166136261 >>> 0;
+        const mix = (n) => { h ^= (n | 0); h = Math.imul(h, 16777619); };
+        mix((x * 1e6) | 0);
+        mix((y * 1e6) | 0);
+        mix(((pct || 0) * 100) | 0);
+        mix(count | 0);
+        return (h >>> 0) / 4294967295;
+    }
+    wobble(t, seed, base = 1.0, amp = 0.10) {
+        const a1 = Math.sin(t * 0.7 + seed * 6.28318);
+        const a2 = Math.sin(t * 1.1 + seed * 12.56636);
+        const a3 = Math.sin(t * 0.43 + seed * 3.14159);
+        const n = (a1 * 0.5 + a2 * 0.35 + a3 * 0.15);
+        return base * (1.0 + amp * n);
+    }
+    spring(value = 0, omega = 10, zeta = 1) {
+        return { x: value, v: 0, o: omega, z: zeta, t: value };
+    }
+    stepSpring(s, dt) {
+        const f = -s.o * s.o * (s.x - s.t) - 2 * s.z * s.o * s.v;
+        s.v += f * dt;
+        s.x += s.v * dt;
+        return s.x;
+    }
+
+    start() {
+        if (this.reduced) return;
+        if (this.animationId) return;
+        const loop = (ts) => {
+            if (!this.lastTs) this.lastTs = ts;
+            const dt = Math.min(0.05, Math.max(0.001, (ts - this.lastTs) / 1000));
+            this.lastTs = ts;
+
+            for (const [key, s] of this.springs.entries()) {
+                const t = this.targets.get(key);
+                if (!t) continue;
+                s.x.t = t.x; s.y.t = t.y; s.r.t = t.r; s.p.t = t.p;
+                this.stepSpring(s.x, dt);
+                this.stepSpring(s.y, dt);
+                this.stepSpring(s.r, dt);
+                this.stepSpring(s.p, dt);
+            }
+
+            this.render(ts / 1000);
+            this.animationId = requestAnimationFrame(loop);
+        };
+        this.animationId = requestAnimationFrame(loop);
+    }
+
+    stop() {
+        if (this.animationId) cancelAnimationFrame(this.animationId);
+        this.animationId = null;
     }
 
     updateClusters(newClusters) {
-        // Process clusters with better area representation
-        this.clusters = (newClusters || [])
-            .filter(cluster => (cluster.percentage || 0) >= this.PERCENTAGE_THRESHOLD)
-            .map(cluster => this.processClusterArea(cluster))
-            .sort((a, b) => b.percentage - a.percentage);
+        const filtered = (newClusters || [])
+            .filter(c => (c.percentage || 0) >= this.PERCENTAGE_THRESHOLD);
 
-        this.render();
+        const nextTargets = new Map();
+        for (const c of filtered) {
+            const baseArea = this.MIN_RADIUS + (c.percentage * 2.5);
+            const densityFactor = c.density ? Math.sqrt(c.density) : 1;
+            const spreadRadius = c.radius || 0.05;
+            const rEff = Math.max(
+                this.MIN_RADIUS,
+                Math.min(this.MAX_RADIUS, baseArea * densityFactor + (spreadRadius * 200))
+            );
+
+            const key = c.id ?? `${(c.x * 10000 | 0)}_${(c.y * 10000 | 0)}_${c.count | 0}`;
+            nextTargets.set(key, { x: c.x, y: c.y, r: rEff, p: c.percentage || 0, count: c.count || 1 });
+
+            if (!this.springs.has(key)) {
+                const seed = this.hashSeed(c.x, c.y, c.percentage || 0, c.count || 1);
+                this.springs.set(key, {
+                    x: this.spring(c.x, 9, 0.95),
+                    y: this.spring(c.y, 9, 0.95),
+                    r: this.spring(rEff, 12, 0.9),
+                    p: this.spring(c.percentage || 0, 7, 1.0),
+                    seed
+                });
+            }
+        }
+
+        for (const key of this.springs.keys()) {
+            if (!nextTargets.has(key)) this.springs.delete(key);
+        }
+
+        this.targets = nextTargets;
+
+        if (this.reduced) {
+            for (const [key, s] of this.springs.entries()) {
+                const t = this.targets.get(key);
+                s.x.x = s.x.t = t.x; s.x.v = 0;
+                s.y.x = s.y.t = t.y; s.y.v = 0;
+                s.r.x = s.r.t = t.r; s.r.v = 0;
+                s.p.x = s.p.t = t.p; s.p.v = 0;
+            }
+            this.render(performance.now() / 1000);
+        }
     }
 
-    processClusterArea(cluster) {
-        // Calculate actual coverage area based on click density and spread
-        const baseArea = this.MIN_RADIUS + (cluster.percentage * 2.5);
-        const densityFactor = cluster.density ? Math.sqrt(cluster.density) : 1;
-        const spreadRadius = cluster.radius || 0.05;
-
-        // Calculate effective radius representing true coverage
-        const effectiveRadius = Math.max(
-            this.MIN_RADIUS,
-            Math.min(this.MAX_RADIUS, baseArea * densityFactor + (spreadRadius * 200))
-        );
-
-        return {
-            ...cluster,
-            effectiveRadius,
-            needsPolygon: this.shouldUsePolygon(cluster)
-        };
-    }
-
-    shouldUsePolygon(cluster) {
-        // Use polygon for high-density clusters or those with specific patterns
-        return cluster.density > 3 || cluster.count > 8 || (cluster.radius && cluster.radius < 0.03);
-    }
-
-    render() {
+    render(tSec = 0) {
         const W = this.canvas.width / (window.devicePixelRatio || 1);
         const H = this.canvas.height / (window.devicePixelRatio || 1);
-
         this.ctx.clearRect(0, 0, W, H);
 
-        if (this.clusters.length === 0) return;
+        const drawables = [];
+        for (const [key, s] of this.springs.entries()) {
+            drawables.push({
+                key,
+                cx: s.x.x * W,
+                cy: s.y.x * H,
+                radius: s.r.x,
+                percentage: s.p.x,
+                seed: s.seed
+            });
+        }
+        drawables.sort((a, b) => a.percentage - b.percentage);
 
-        // Render from lowest to highest percentage (highest on top)
-        const reversedClusters = [...this.clusters].reverse();
+        for (let i = 0; i < drawables.length; i++) {
+            const d = drawables[i];
+            const isTop = i === drawables.length - 1;
 
-        reversedClusters.forEach((cluster, index) => {
-            const isTop = index === reversedClusters.length - 1;
-            this.renderAreaCluster(cluster, W, H, isTop);
-        });
+            const wobbleAmp = Math.min(0.12, 0.06 + (d.percentage / 100) * 0.08);
+            const r = this.reduced ? d.radius : d.radius * this.wobble(tSec, d.seed, 1.0, wobbleAmp);
+
+            let fillColor, borderColor;
+            if (isTop) {
+                fillColor = 'rgba(0, 255, 255, 0.2)';
+                borderColor = 'rgba(0, 255, 255, 0.85)';
+            } else if (d.percentage >= 15) {
+                fillColor = 'rgba(147, 51, 234, 0.25)';
+                borderColor = 'rgba(147, 51, 234, 0.9)';
+            } else {
+                fillColor = 'rgba(147, 51, 234, 0.2)';
+                borderColor = 'rgba(147, 51, 234, 0.7)';
+            }
+
+            const usePoly = (d.percentage >= 20) && !this.reduced;
+            if (usePoly) this.renderPolygonArea(d.cx, d.cy, r, fillColor, borderColor, tSec, d.seed, d.percentage);
+            else this.renderCircularArea(d.cx, d.cy, r, fillColor, borderColor);
+
+            this.renderPercentageText(d.cx, d.cy, Math.round(d.percentage), r, isTop);
+        }
     }
 
-    renderAreaCluster(cluster, W, H, isTop) {
-        const cx = cluster.x * W;
-        const cy = cluster.y * H;
-        const percentage = cluster.percentage || 0;
-        const radius = cluster.effectiveRadius;
-
-        this.ctx.save();
-
-        // Color scheme: purple base, cyan for top
-        let fillColor, borderColor;
-        if (isTop) {
-            fillColor = 'rgba(0, 255, 255, 0.2)';
-            borderColor = 'rgba(0, 255, 255, 0.8)';
-        } else if (percentage >= 15) {
-            fillColor = 'rgba(147, 51, 234, 0.25)';
-            borderColor = 'rgba(147, 51, 234, 0.9)';
-        } else {
-            fillColor = 'rgba(147, 51, 234, 0.2)';
-            borderColor = 'rgba(147, 51, 234, 0.7)';
-        }
-
-        if (cluster.needsPolygon) {
-            this.renderPolygonArea(cx, cy, radius, fillColor, borderColor, percentage);
-        } else {
-            this.renderCircularArea(cx, cy, radius, fillColor, borderColor, percentage);
-        }
-
-        // Enhanced percentage text with better visibility
-        this.renderPercentageText(cx, cy, percentage, radius, isTop);
-
-        this.ctx.restore();
-    }
-
-    renderCircularArea(cx, cy, radius, fillColor, borderColor, percentage) {
-        // Main area fill
+    renderCircularArea(cx, cy, radius, fillColor, borderColor) {
         this.ctx.fillStyle = fillColor;
         this.ctx.beginPath();
         this.ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
         this.ctx.fill();
 
-        // Clean border
         this.ctx.strokeStyle = borderColor;
         this.ctx.lineWidth = 3;
         this.ctx.stroke();
 
-        // Inner highlight for depth
         this.ctx.strokeStyle = borderColor.replace(/[\d\.]+\)$/g, '0.3)');
         this.ctx.lineWidth = 1.5;
         this.ctx.beginPath();
@@ -128,31 +197,19 @@ export class HeatmapRenderer {
         this.ctx.stroke();
     }
 
-    renderPolygonArea(cx, cy, radius, fillColor, borderColor, percentage) {
-        // Create irregular polygon to represent actual click area
-        const sides = 6 + Math.floor(percentage / 10); // More sides for higher percentages
-        const time = Date.now() * 0.001;
-
+    renderPolygonArea(cx, cy, radius, fillColor, borderColor, tSec, seed, pct) {
+        const sides = Math.max(8, Math.min(16, 6 + Math.floor(pct / 7)));
         this.ctx.beginPath();
-
         for (let i = 0; i <= sides; i++) {
-            const angle = (i / sides) * Math.PI * 2;
-            // Add variation but keep it reasonable for coverage accuracy
-            const variation = Math.sin(angle * 2 + time * 0.5) * 0.15;
-            const currentRadius = radius * (0.9 + variation);
-            const x = cx + Math.cos(angle) * currentRadius;
-            const y = cy + Math.sin(angle) * currentRadius;
-
-            if (i === 0) {
-                this.ctx.moveTo(x, y);
-            } else {
-                this.ctx.lineTo(x, y);
-            }
+            const a = (i / sides) * Math.PI * 2;
+            const local = this.wobble(tSec + i * 0.07, seed * 0.73, 1.0, 0.06);
+            const rr = radius * (0.94 + 0.08 * local);
+            const x = cx + Math.cos(a) * rr;
+            const y = cy + Math.sin(a) * rr;
+            if (i === 0) this.ctx.moveTo(x, y); else this.ctx.lineTo(x, y);
         }
-
         this.ctx.closePath();
 
-        // Fill and stroke
         this.ctx.fillStyle = fillColor;
         this.ctx.fill();
 
@@ -162,28 +219,23 @@ export class HeatmapRenderer {
     }
 
     renderPercentageText(cx, cy, percentage, radius, isTop) {
-        // Larger text for better readability
         const fontSize = Math.max(24, Math.min(40, radius * 0.35));
         this.ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'middle';
 
-        // Strong text shadow for visibility
         this.ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
         this.ctx.shadowBlur = 8;
         this.ctx.shadowOffsetX = 2;
         this.ctx.shadowOffsetY = 2;
 
-        // Main text color
-        this.ctx.fillStyle = isTop ? '#ffffff' : '#ffffff';
+        this.ctx.fillStyle = '#ffffff';
         this.ctx.fillText(`${percentage}%`, cx, cy);
 
-        // Reset shadow
         this.ctx.shadowBlur = 0;
         this.ctx.shadowOffsetX = 0;
         this.ctx.shadowOffsetY = 0;
 
-        // Add subtle outline for extra visibility
         this.ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.8)' : 'rgba(147, 51, 234, 0.8)';
         this.ctx.lineWidth = 1;
         this.ctx.strokeText(`${percentage}%`, cx, cy);
@@ -191,25 +243,25 @@ export class HeatmapRenderer {
 
     setThreshold(threshold) {
         this.PERCENTAGE_THRESHOLD = threshold;
-        this.render();
+        // No immediate redraw needed; animation loop will pick it up
     }
 
     destroy() {
-        // Clean up if needed
+        this.stop();
     }
 }
 
 // Legacy compatibility
 export function drawBlobs(ctx, blobs) {
     const renderer = new HeatmapRenderer(ctx.canvas);
-    const clusters = blobs.map(blob => ({
+    const clusters = (blobs || []).map(blob => ({
         x: blob.x,
         y: blob.y,
         percentage: blob.pct || blob.percentage,
         count: blob.count || 1,
-        isTop: blob.isTop,
         density: blob.density || 1,
-        radius: blob.radius || 0.05
+        radius: blob.radius || 0.05,
+        id: blob.id
     }));
     renderer.updateClusters(clusters);
 }

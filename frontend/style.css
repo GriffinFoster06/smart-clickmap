@@ -1,212 +1,50 @@
-/* Ex Machina Smart Click Maps Styles */
-
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}
+/* Enhanced overlay styles with smooth transitions and better UX */
 
 html, body {
     margin: 0;
     padding: 0;
     background: transparent;
     overflow: hidden;
-    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+    user-select: none;
 }
 
-/* Main canvas for heatmap overlay */
+/* Heat canvas - main visualization */
 #heat {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    pointer-events: auto;
+    pointer-events: none;
     z-index: 1000;
-    cursor: crosshair;
-    /* High quality canvas rendering */
     image-rendering: -webkit-optimize-contrast;
+    image-rendering: optimize-contrast;
     image-rendering: crisp-edges;
 }
 
-    /* When system is not running, show different cursor */
-    #heat.inactive {
-        cursor: not-allowed;
-        opacity: 0.8;
-    }
-
-/* Notification styles */
-.ex-machina-notification {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: rgba(30, 30, 46, 0.95);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 12px 20px;
-    color: white;
-    font-size: 14px;
-    font-weight: 500;
-    z-index: 2000;
-    opacity: 0;
-    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    transform: translateX(110%);
-    max-width: 300px;
-    word-wrap: break-word;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+/* Body state classes for dynamic styling */
+body.clickmap-active {
+    cursor: crosshair;
 }
 
-    .ex-machina-notification.show {
-        opacity: 1;
-        transform: translateX(0);
+    body.clickmap-active:hover {
+        cursor: crosshair;
     }
 
-    .ex-machina-notification.success {
-        border-left: 4px solid #48bb78;
-        background: rgba(30, 46, 30, 0.95);
-    }
-
-    .ex-machina-notification.error {
-        border-left: 4px solid #f56565;
-        background: rgba(46, 30, 30, 0.95);
-    }
-
-    .ex-machina-notification.info {
-        border-left: 4px solid #4299e1;
-        background: rgba(30, 39, 46, 0.95);
-    }
-
-    .ex-machina-notification.warning {
-        border-left: 4px solid #ed8936;
-        background: rgba(46, 39, 30, 0.95);
-    }
-
-/* Status indicator */
-.ex-machina-status {
-    position: fixed;
-    top: 15px;
-    left: 15px;
-    background: rgba(30, 30, 46, 0.9);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    padding: 8px 12px;
-    color: white;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    z-index: 1800;
-    opacity: 0;
-    transition: all 0.3s ease;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+body.clickmap-has-data #heat {
+    opacity: 1;
+    transition: opacity 0.3s ease-in-out;
 }
 
-    .ex-machina-status.visible {
-        opacity: 1;
-    }
-
-    .ex-machina-status.running {
-        border-left: 3px solid #48bb78;
-        color: #48bb78;
-    }
-
-    .ex-machina-status.stopped {
-        border-left: 3px solid #f56565;
-        color: #f56565;
-    }
-
-.ex-machina-status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    animation: status-pulse 2s ease-in-out infinite;
+body:not(.clickmap-has-data) #heat {
+    opacity: 0.7;
 }
 
-.ex-machina-status.running .ex-machina-status-dot {
-    background: #48bb78;
-}
-
-.ex-machina-status.stopped .ex-machina-status-dot {
-    background: #f56565;
-}
-
-@keyframes status-pulse {
-    0%, 100% {
-        opacity: 1;
-        transform: scale(1);
-        box-shadow: 0 0 0 0 rgba(72, 187, 120, 0.7);
-    }
-
-    50% {
-        opacity: 0.7;
-        transform: scale(1.1);
-        box-shadow: 0 0 0 8px rgba(72, 187, 120, 0);
-    }
-}
-
-/* Debug info overlay */
-.ex-machina-debug {
-    position: fixed;
-    bottom: 15px;
-    left: 15px;
-    background: rgba(0, 0, 0, 0.9);
-    color: #00ff00;
-    padding: 10px 12px;
-    border-radius: 6px;
-    font-family: 'Courier New', 'Monaco', 'Menlo', monospace;
-    font-size: 11px;
-    z-index: 1900;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-    max-width: 280px;
-    border: 1px solid #333;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-    .ex-machina-debug.visible {
-        opacity: 0.9;
-    }
-
-.ex-machina-debug-line {
-    margin: 2px 0;
-    font-size: 10px;
-}
-
-.ex-machina-debug-label {
-    color: #61dafb;
-}
-
-.ex-machina-debug-value {
-    color: #f7df1e;
-}
-
-/* Loading states */
-.loading {
-    opacity: 0.6;
-    pointer-events: none;
-    cursor: wait;
-}
-
-/* Click ripple effect */
-.click-ripple {
-    position: absolute;
-    border: 2px solid rgba(255, 255, 255, 0.8);
-    border-radius: 50%;
-    pointer-events: none;
-    z-index: 1500;
-    animation: ripple-expand 0.6s ease-out forwards;
-}
-
-@keyframes ripple-expand {
+/* Click feedback animation */
+@keyframes click-ripple {
     0% {
         transform: scale(0);
         opacity: 1;
@@ -218,157 +56,209 @@ html, body {
     }
 }
 
-/* Responsive design for mobile */
-@media (max-width: 768px) {
-    .ex-machina-notification {
-        top: 10px;
-        right: 10px;
-        left: 10px;
-        transform: translateY(-110%);
-        max-width: none;
-        font-size: 13px;
-        padding: 10px 16px;
+/* Temporary click indicator */
+.click-indicator {
+    position: fixed;
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(145, 70, 255, 0.8);
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 1001;
+    animation: click-ripple 0.6s ease-out forwards;
+    margin: -10px 0 0 -10px;
+}
+
+/* Loading states */
+.loading-overlay {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    z-index: 1002;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: all 0.3s ease;
+    pointer-events: none;
+}
+
+    .loading-overlay.visible {
+        opacity: 1;
+        transform: translateY(0);
     }
 
-        .ex-machina-notification.show {
-            transform: translateY(0);
-        }
+.loading-spinner {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid #333;
+    border-radius: 50%;
+    border-top-color: #9146ff;
+    animation: spin 1s ease-in-out infinite;
+    margin-right: 8px;
+}
 
-    .ex-machina-status {
-        top: 10px;
-        left: 10px;
-        font-size: 10px;
-        padding: 6px 10px;
-    }
-
-    .ex-machina-debug {
-        bottom: 10px;
-        left: 10px;
-        right: 10px;
-        max-width: none;
-        font-size: 9px;
-    }
-
-    #heat {
-        cursor: pointer; /* Better for touch devices */
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
     }
 }
 
-/* Tablet landscape adjustments */
-@media (min-width: 769px) and (max-width: 1024px) {
-    .ex-machina-notification {
-        top: 15px;
-        right: 15px;
-        max-width: 280px;
+/* Status indicator */
+.status-badge {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: rgba(20, 20, 20, 0.9);
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 1002;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: all 0.3s ease;
+    pointer-events: none;
+}
+
+    .status-badge.visible {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .status-badge.active {
+        background: rgba(34, 197, 94, 0.2);
+        border-color: rgba(34, 197, 94, 0.5);
+        color: #22c55e;
+    }
+
+    .status-badge.inactive {
+        background: rgba(107, 114, 128, 0.2);
+        border-color: rgba(107, 114, 128, 0.5);
+        color: #9ca3af;
+    }
+
+/* Accessibility improvements */
+@media (prefers-reduced-motion: reduce) {
+    .click-indicator {
+        animation-duration: 0.1s;
+    }
+
+    .loading-overlay,
+    .status-badge,
+    #heat {
+        transition: none;
+    }
+
+    @keyframes spin {
+        to {
+            transform: none;
+        }
     }
 }
 
 /* High contrast mode support */
 @media (prefers-contrast: high) {
-    .ex-machina-notification,
-    .ex-machina-status,
-    .ex-machina-debug {
-        background: rgba(0, 0, 0, 0.95) !important;
-        border: 2px solid white !important;
-        color: white !important;
+    .click-indicator {
+        border-color: #fff;
+        border-width: 3px;
     }
 
-        .ex-machina-notification.success {
-            border-color: #90EE90 !important;
-        }
-
-        .ex-machina-notification.error {
-            border-color: #FFB6C1 !important;
-        }
-}
-
-/* Reduced motion support */
-@media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: 0.01ms !important;
+    .loading-overlay {
+        background: #000;
+        border: 2px solid #fff;
     }
 
-    .ex-machina-status-dot {
-        animation: none !important;
-    }
-
-    .click-ripple {
-        display: none;
+    .status-badge {
+        background: #000;
+        border: 2px solid #fff;
+        color: #fff;
     }
 }
 
-/* Dark mode enhancements */
-@media (prefers-color-scheme: dark) {
-    .ex-machina-notification {
-        background: rgba(20, 20, 30, 0.95);
-        border-color: rgba(255, 255, 255, 0.15);
-    }
-
-    .ex-machina-status {
-        background: rgba(20, 20, 30, 0.9);
-        border-color: rgba(255, 255, 255, 0.15);
-    }
-}
-
-/* Print styles (hide overlay completely) */
-@media print {
+/* Mobile optimizations */
+@media (max-width: 768px) {
     body {
-        display: none !important;
+        cursor: pointer;
+    }
+
+        body.clickmap-active {
+            cursor: pointer;
+        }
+
+    .loading-overlay,
+    .status-badge {
+        font-size: 10px;
+        padding: 4px 8px;
+    }
+
+    .loading-overlay {
+        top: 10px;
+        right: 10px;
+    }
+
+    .status-badge {
+        bottom: 10px;
+        right: 10px;
+    }
+
+    .click-indicator {
+        width: 30px;
+        height: 30px;
+        margin: -15px 0 0 -15px;
     }
 }
 
-/* Focus styles for accessibility */
-#heat:focus {
-    outline: 2px solid #4299e1;
-    outline-offset: -2px;
-}
-
-/* Selection styles */
-::selection {
-    background: rgba(66, 153, 225, 0.3);
-    color: white;
-}
-
-::-moz-selection {
-    background: rgba(66, 153, 225, 0.3);
-    color: white;
-}
-
-/* Scrollbar styles (for debug overlay) */
-.ex-machina-debug::-webkit-scrollbar {
-    width: 6px;
-}
-
-.ex-machina-debug::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.1);
-}
-
-.ex-machina-debug::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.3);
-    border-radius: 3px;
-}
-
-    .ex-machina-debug::-webkit-scrollbar-thumb:hover {
-        background: rgba(255, 255, 255, 0.5);
+/* Touch device optimizations */
+@media (hover: none) and (pointer: coarse) {
+    body {
+        cursor: default;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
     }
 
-/* Backdrop blur fallback */
-@supports not (backdrop-filter: blur(10px)) {
-    .ex-machina-notification,
-    .ex-machina-status {
-        background: rgba(30, 30, 46, 0.98) !important;
+    .click-indicator {
+        border-color: rgba(145, 70, 255, 1);
+        border-width: 3px;
     }
 }
 
-/* GPU acceleration hints */
-#heat,
-.ex-machina-notification,
-.ex-machina-status,
-.click-ripple {
-    will-change: transform;
+/* Performance optimizations */
+#heat {
+    will-change: opacity;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
     transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+}
+
+/* Smooth scrolling prevention on mobile */
+body {
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    overscroll-behavior: none;
+}
+
+/* Canvas rendering optimizations */
+canvas {
+    image-rendering: -moz-crisp-edges;
+    image-rendering: -webkit-crisp-edges;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
 }

@@ -2,7 +2,6 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Click Maps Control</title>
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
     <style>
@@ -13,133 +12,108 @@
         }
 
         body {
-            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #ffffff;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 16px;
             min-height: 100vh;
-            overflow-y: auto;
-        }
-
-        .container {
-            max-width: 450px;
-            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
         }
 
         .header {
             text-align: center;
-            margin-bottom: 25px;
+            margin-bottom: 20px;
         }
 
             .header h1 {
-                font-size: 26px;
+                font-size: 20px;
                 font-weight: 600;
-                background: linear-gradient(45deg, #00FFFF, #9D4EDD);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-                background-clip: text;
-                margin-bottom: 5px;
+                color: #9146ff;
+                margin-bottom: 4px;
             }
 
             .header .subtitle {
-                font-size: 13px;
-                color: #a0aec0;
-                font-weight: 500;
+                font-size: 12px;
+                color: #a0a0b0;
             }
 
-        .status-card {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 12px;
-            padding: 20px;
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
             margin-bottom: 20px;
-            backdrop-filter: blur(10px);
-            transition: all 0.3s ease;
         }
 
-            .status-card:hover {
-                background: rgba(255, 255, 255, 0.12);
-                border-color: rgba(255, 255, 255, 0.3);
+        .stat-card {
+            background: rgba(145, 70, 255, 0.1);
+            border: 1px solid rgba(145, 70, 255, 0.3);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+            transition: all 0.2s ease;
+        }
+
+            .stat-card:hover {
+                background: rgba(145, 70, 255, 0.15);
+                border-color: rgba(145, 70, 255, 0.5);
             }
 
-        .status-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #9146ff;
+            display: block;
         }
 
-            .status-row:last-child {
-                margin-bottom: 0;
-            }
-
-        .status-label {
-            font-size: 14px;
-            color: #b3b3b3;
-            font-weight: 500;
+        .stat-label {
+            font-size: 11px;
+            color: #a0a0b0;
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-
-        .status-value {
-            font-size: 16px;
-            font-weight: 600;
-            color: #ffffff;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .status-indicator {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            transition: all 0.3s ease;
-        }
-
-            .status-indicator.running {
-                background: #48bb78;
-                box-shadow: 0 0 8px rgba(72, 187, 120, 0.6);
-            }
-
-            .status-indicator.stopped {
-                background: #f56565;
-                box-shadow: 0 0 8px rgba(245, 101, 101, 0.6);
-            }
 
         .preview-section {
             margin-bottom: 20px;
         }
 
-        .preview-label {
+        .preview-header {
             font-size: 14px;
-            font-weight: 500;
-            margin-bottom: 10px;
-            color: #e2e8f0;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #ffffff;
         }
 
         .preview-container {
-            position: relative;
-            border: 2px solid #6441a5;
+            background: #000;
+            border: 2px solid #9146ff;
             border-radius: 8px;
             overflow: hidden;
-            background: rgba(0, 0, 0, 0.3);
-            aspect-ratio: 16/9;
+            position: relative;
         }
 
-        #mini {
+        #mini-canvas {
             display: block;
             width: 100%;
-            height: 100%;
-            object-fit: cover;
+            height: auto;
         }
 
-        .controls-section {
+        .preview-overlay {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+
+        .controls {
             display: flex;
             flex-direction: column;
-            gap: 12px;
-            margin-bottom: 20px;
+            gap: 8px;
         }
 
         .control-row {
@@ -147,295 +121,380 @@
             gap: 8px;
         }
 
-        .btn {
+        button {
             flex: 1;
-            padding: 14px 18px;
+            background: #9146ff;
+            color: white;
             border: none;
-            border-radius: 8px;
+            padding: 12px;
+            border-radius: 6px;
             font-size: 14px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s ease;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
             position: relative;
             overflow: hidden;
         }
 
-            .btn:disabled {
-                opacity: 0.6;
+            button:hover {
+                background: #a970ff;
+                transform: translateY(-1px);
+            }
+
+            button:active {
+                transform: translateY(0);
+            }
+
+            button.secondary {
+                background: #333;
+            }
+
+                button.secondary:hover {
+                    background: #444;
+                }
+
+            button.danger {
+                background: #ff4757;
+            }
+
+                button.danger:hover {
+                    background: #ff3838;
+                }
+
+            button:disabled {
+                opacity: 0.5;
                 cursor: not-allowed;
-                transform: none !important;
+                transform: none;
             }
 
-            .btn:not(:disabled):hover {
-                transform: translateY(-2px);
-            }
-
-        .btn-primary {
-            background: linear-gradient(135deg, #48bb78, #38a169);
-            color: white;
-            box-shadow: 0 4px 12px rgba(72, 187, 120, 0.3);
-        }
-
-            .btn-primary:hover:not(:disabled) {
-                background: linear-gradient(135deg, #38a169, #2f855a);
-                box-shadow: 0 6px 16px rgba(72, 187, 120, 0.4);
-            }
-
-        .btn-secondary {
-            background: linear-gradient(135deg, #f56565, #e53e3e);
-            color: white;
-            box-shadow: 0 4px 12px rgba(245, 101, 101, 0.3);
-        }
-
-            .btn-secondary:hover:not(:disabled) {
-                background: linear-gradient(135deg, #e53e3e, #c53030);
-                box-shadow: 0 6px 16px rgba(245, 101, 101, 0.4);
-            }
-
-        .btn-tertiary {
-            background: linear-gradient(135deg, #6441a5, #553c9a);
-            color: white;
-            box-shadow: 0 4px 12px rgba(100, 65, 165, 0.3);
-        }
-
-            .btn-tertiary:hover:not(:disabled) {
-                background: linear-gradient(135deg, #553c9a, #44337a);
-                box-shadow: 0 6px 16px rgba(100, 65, 165, 0.4);
-            }
-
-        .info-section {
-            background: rgba(255, 255, 255, 0.08);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 20px;
-        }
-
-        .info-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: #00FFFF;
-            margin-bottom: 8px;
+        .status-indicator {
             display: flex;
             align-items: center;
-            gap: 6px;
+            justify-content: center;
+            gap: 8px;
+            padding: 8px;
+            margin-bottom: 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
         }
 
-        .info-text {
-            font-size: 12px;
-            color: #cbd5e0;
-            line-height: 1.4;
+            .status-indicator.running {
+                background: rgba(34, 197, 94, 0.1);
+                color: #22c55e;
+                border: 1px solid rgba(34, 197, 94, 0.3);
+            }
+
+            .status-indicator.stopped {
+                background: rgba(239, 68, 68, 0.1);
+                color: #ef4444;
+                border: 1px solid rgba(239, 68, 68, 0.3);
+            }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s infinite;
         }
 
-        .footer {
-            text-align: center;
-            font-size: 11px;
-            color: #718096;
-            margin-top: 20px;
-            padding-top: 15px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .pulse {
-            animation: pulse-effect 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse-effect {
+        @keyframes pulse {
             0%, 100% {
                 opacity: 1;
-                box-shadow: 0 0 0 0 rgba(72, 187, 120, 0.7);
             }
 
             50% {
-                opacity: 0.8;
-                box-shadow: 0 0 0 8px rgba(72, 187, 120, 0);
+                opacity: 0.5;
             }
+        }
+
+        .advanced-stats {
+            margin-top: 16px;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+            .advanced-stats h3 {
+                font-size: 12px;
+                color: #a0a0b0;
+                margin-bottom: 8px;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+
+        .stats-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+
+        .stats-label {
+            color: #a0a0b0;
+        }
+
+        .stats-value {
+            color: #fff;
+            font-weight: 500;
         }
 
         .loading {
-            opacity: 0.7;
-            pointer-events: none;
+            opacity: 0.6;
         }
 
-            .loading .btn {
-                position: relative;
-            }
-
-                .loading .btn::after {
-                    content: '';
-                    position: absolute;
-                    top: 50%;
-                    left: 50%;
-                    width: 16px;
-                    height: 16px;
-                    margin: -8px 0 0 -8px;
-                    border: 2px solid transparent;
-                    border-top-color: currentColor;
-                    border-radius: 50%;
-                    animation: spin 1s linear infinite;
-                }
-
-        @keyframes spin {
-            to {
-                transform: rotate(360deg);
-            }
-        }
-
-        /* Notification styles */
-        .notification {
-            position: fixed;
-            top: 15px;
-            right: 15px;
-            background: rgba(30, 30, 46, 0.95);
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            padding: 12px 20px;
-            color: white;
-            font-family: 'Segoe UI', Arial, sans-serif;
-            font-size: 14px;
-            font-weight: 500;
-            z-index: 10000;
-            transform: translateX(110%);
-            transition: transform 0.3s ease;
-            max-width: 300px;
-            word-wrap: break-word;
-        }
-
-            .notification.show {
-                transform: translateX(0);
-            }
-
-            .notification.success {
-                border-left: 4px solid #48bb78;
-                background: rgba(30, 46, 30, 0.95);
-            }
-
-            .notification.error {
-                border-left: 4px solid #f56565;
-                background: rgba(46, 30, 30, 0.95);
-            }
-
-            .notification.info {
-                border-left: 4px solid #4299e1;
-                background: rgba(30, 39, 46, 0.95);
-            }
-
-        /* Responsive design */
-        @media (max-width: 500px) {
-            body {
-                padding: 15px;
-            }
-
-            .container {
-                max-width: 100%;
-            }
-
-            .header h1 {
-                font-size: 22px;
-            }
-
-            .btn {
-                padding: 12px 16px;
-                font-size: 13px;
-            }
-
-            .notification {
-                top: 10px;
-                right: 10px;
-                left: 10px;
-                max-width: none;
-                transform: translateY(-110%);
-            }
-
-                .notification.show {
-                    transform: translateY(0);
-                }
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #ef4444;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-size: 12px;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>Ex Machina Smart Click Maps</h1>
-            <div class="subtitle">Real-time polygon clustering system</div>
-        </div>
+    <div class="header">
+        <h1>Smart Click Maps</h1>
+        <div class="subtitle">Real-time viewer interaction heatmap</div>
+    </div>
 
-        <div class="status-card">
-            <div class="status-row">
-                <span class="status-label">System Status</span>
-                <div class="status-value">
-                    <span id="status-text">Stopped</span>
-                    <div class="status-indicator stopped" id="status-indicator"></div>
-                </div>
-            </div>
-            <div class="status-row">
-                <span class="status-label">Total Clicks</span>
-                <span class="status-value" id="clicks">0</span>
-            </div>
-            <div class="status-row">
-                <span class="status-label">Unique Users</span>
-                <span class="status-value" id="users">0</span>
-            </div>
-            <div class="status-row">
-                <span class="status-label">Active Clusters</span>
-                <span class="status-value" id="blobs">0</span>
-            </div>
-        </div>
+    <div class="status-indicator" id="status">
+        <div class="status-dot"></div>
+        <span id="status-text">Initializing...</span>
+    </div>
 
-        <div class="preview-section">
-            <div class="preview-label">
-                <span>Live Preview</span>
-                <span style="font-size: 12px; opacity: 0.7;">Ex Machina Style</span>
-            </div>
-            <div class="preview-container">
-                <canvas id="mini" width="400" height="225"></canvas>
-            </div>
-        </div>
+    <div class="error-message" id="error" style="display: none;">
+        Connection error. Retrying...
+    </div>
 
-        <div class="controls-section">
-            <div class="control-row">
-                <button class="btn btn-primary" id="start">
-                    🚀 Start Mapping
-                </button>
-                <button class="btn btn-secondary" id="stop">
-                    🛑 Stop Mapping
-                </button>
-            </div>
-            <div class="control-row">
-                <button class="btn btn-tertiary" id="reset">
-                    🗑️ Clear All Data
-                </button>
-            </div>
+    <div class="stats-grid">
+        <div class="stat-card">
+            <span class="stat-value" id="total-clicks">-</span>
+            <div class="stat-label">Total Clicks</div>
         </div>
-
-        <div class="info-section">
-            <div class="info-title">
-                ℹ️ How It Works
-            </div>
-            <div class="info-text">
-                Ex Machina Smart Click Maps uses advanced DBSCAN clustering to create organic polygon shapes around viewer clicks. Each viewer gets one click that they can move around. The system automatically groups nearby clicks into clusters and displays the percentage of viewers in each area.
-            </div>
+        <div class="stat-card">
+            <span class="stat-value" id="unique-users">-</span>
+            <div class="stat-label">Active Users</div>
         </div>
-
-        <div class="info-section">
-            <div class="info-title">
-                🎬 OBS Integration
-            </div>
-            <div class="info-text">
-                Add as Browser Source: <strong>/overlay/overlay.html?channel=YOUR_CHANNEL_ID</strong><br>
-                Recommended size: 1920x1080 for full overlay or custom size for specific areas.
-            </div>
+        <div class="stat-card">
+            <span class="stat-value" id="cluster-count">-</span>
+            <div class="stat-label">Hot Spots</div>
         </div>
-
-        <div class="footer">
-            Ex Machina Smart Click Maps v2.0 - Advanced polygon clustering for Twitch streams<br>
-            <span style="opacity: 0.6;">Powered by DBSCAN algorithm with real-time WebSocket updates</span>
+        <div class="stat-card">
+            <span class="stat-value" id="coverage">-</span>
+            <div class="stat-label">Coverage</div>
         </div>
     </div>
 
-    <script type="module" src="config.js"></script>
+    <div class="preview-section">
+        <div class="preview-header">Live Preview</div>
+        <div class="preview-container">
+            <canvas id="mini-canvas" width="320" height="180"></canvas>
+            <div class="preview-overlay" id="preview-status">Preview</div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <div class="control-row">
+            <button id="start-btn">▶️ Start Session</button>
+            <button id="stop-btn" class="secondary">⏹️ Stop Session</button>
+        </div>
+        <button id="reset-btn" class="danger">🗑️ Clear All Data</button>
+    </div>
+
+    <div class="advanced-stats">
+        <h3>Session Details</h3>
+        <div class="stats-row">
+            <span class="stats-label">Session Duration:</span>
+            <span class="stats-value" id="duration">-</span>
+        </div>
+        <div class="stats-row">
+            <span class="stats-label">Last Update:</span>
+            <span class="stats-value" id="last-update">-</span>
+        </div>
+        <div class="stats-row">
+            <span class="stats-label">Top Hotspot:</span>
+            <span class="stats-value" id="top-hotspot">-</span>
+        </div>
+    </div>
+
+    <script type="module">
+        import { HeatmapRenderer } from './heatmap.js';
+
+        class ConfigPanel {
+            constructor() {
+                this.EBS = 'https://smart-clickmap-backend.onrender.com';
+                this.pollInterval = null;
+                this.renderer = null;
+                this.sessionStart = null;
+                this.isRunning = false;
+                this.retryCount = 0;
+                this.maxRetries = 3;
+
+                this.init();
+            }
+
+            init() {
+                this.setupCanvas();
+                this.setupEventListeners();
+                this.startPolling();
+            }
+
+            setupCanvas() {
+                const canvas = document.getElementById('mini-canvas');
+                this.renderer = new HeatmapRenderer(canvas);
+            }
+
+            setupEventListeners() {
+                document.getElementById('start-btn').addEventListener('click', () => this.startSession());
+                document.getElementById('stop-btn').addEventListener('click', () => this.stopSession());
+                document.getElementById('reset-btn').addEventListener('click', () => this.resetSession());
+            }
+
+            async startSession() {
+                try {
+                    document.getElementById('start-btn').disabled = true;
+                    const response = await fetch(`${this.EBS}/start`, { method: 'POST' });
+                    if (response.ok) {
+                        this.sessionStart = Date.now();
+                        this.updateStatus(true);
+                        this.showNotification('Session started!', 'success');
+                    }
+                } catch (error) {
+                    this.showError('Failed to start session');
+                } finally {
+                    document.getElementById('start-btn').disabled = false;
+                }
+            }
+
+            async stopSession() {
+                try {
+                    document.getElementById('stop-btn').disabled = true;
+                    const response = await fetch(`${this.EBS}/stop`, { method: 'POST' });
+                    if (response.ok) {
+                        this.updateStatus(false);
+                        this.showNotification('Session stopped', 'info');
+                    }
+                } catch (error) {
+                    this.showError('Failed to stop session');
+                } finally {
+                    document.getElementById('stop-btn').disabled = false;
+                }
+            }
+
+            async resetSession() {
+                if (!confirm('Are you sure you want to clear all click data?')) return;
+
+                try {
+                    document.getElementById('reset-btn').disabled = true;
+                    const response = await fetch(`${this.EBS}/reset`, { method: 'POST' });
+                    if (response.ok) {
+                        this.showNotification('Data cleared', 'info');
+                    }
+                } catch (error) {
+                    this.showError('Failed to reset data');
+                } finally {
+                    document.getElementById('reset-btn').disabled = false;
+                }
+            }
+
+            startPolling() {
+                this.pollInterval = setInterval(() => this.pollData(), 1000);
+                this.pollData(); // Initial poll
+            }
+
+            async pollData() {
+                try {
+                    document.body.classList.remove('loading');
+                    const response = await fetch(`${this.EBS}/heatmap`);
+
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                    const data = await response.json();
+                    this.updateUI(data);
+                    this.hideError();
+                    this.retryCount = 0;
+
+                } catch (error) {
+                    this.retryCount++;
+                    if (this.retryCount <= this.maxRetries) {
+                        this.showError(`Connection error. Retry ${this.retryCount}/${this.maxRetries}`);
+                    } else {
+                        this.showError('Connection lost. Check your internet connection.');
+                    }
+                    document.body.classList.add('loading');
+                }
+            }
+
+            updateUI(data) {
+                this.isRunning = data.running;
+                this.updateStatus(data.running);
+
+                // Update stats
+                document.getElementById('total-clicks').textContent = data.totalClicks || 0;
+                document.getElementById('unique-users').textContent = data.uniqueUsers || 0;
+                document.getElementById('cluster-count').textContent = (data.clusters || []).length;
+                document.getElementById('coverage').textContent = `${data.coverage || 0}%`;
+
+                // Update advanced stats
+                if (this.sessionStart && data.running) {
+                    const duration = Math.floor((Date.now() - this.sessionStart) / 1000);
+                    const minutes = Math.floor(duration / 60);
+                    const seconds = duration % 60;
+                    document.getElementById('duration').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                } else {
+                    document.getElementById('duration').textContent = '-';
+                }
+
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+                const topCluster = data.clusters?.[0];
+                document.getElementById('top-hotspot').textContent = topCluster ?
+                    `${topCluster.percentage}% (${topCluster.count} users)` : '-';
+
+                // Update preview
+                if (this.renderer) {
+                    this.renderer.updateClusters(data.clusters || []);
+                }
+
+                document.getElementById('preview-status').textContent =
+                    data.running ? 'LIVE' : 'STOPPED';
+            }
+
+            updateStatus(isRunning) {
+                const statusEl = document.getElementById('status');
+                const statusText = document.getElementById('status-text');
+
+                if (isRunning) {
+                    statusEl.className = 'status-indicator running';
+                    statusText.textContent = 'Session Active';
+                } else {
+                    statusEl.className = 'status-indicator stopped';
+                    statusText.textContent = 'Session Stopped';
+                }
+            }
+
+            showError(message) {
+                const errorEl = document.getElementById('error');
+                errorEl.textContent = message;
+                errorEl.style.display = 'block';
+            }
+
+            hideError() {
+                document.getElementById('error').style.display = 'none';
+            }
+
+            showNotification(message, type = 'info') {
+                // Simple notification - could be enhanced with a proper toast system
+                console.log(`${type.toUpperCase()}: ${message}`);
+            }
+        }
+
+        new ConfigPanel();
+    </script>
 </body>
 </html>

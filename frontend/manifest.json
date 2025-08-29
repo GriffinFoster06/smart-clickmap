@@ -2,61 +2,52 @@
   "manifest_version": 2,
   "version": "2.0.0",
   "author_name": "PhummyLW",
-  "description": "Smart Click Maps - Real-time interactive heatmaps with advanced clustering and visual effects for engaging Twitch streams",
+  "description": "Advanced real-time click heatmap overlay with smart clustering and beautiful visualizations for interactive streaming experiences",
+  "support_email": "support@example.com",
+  "icon_urls": {
+    "24x24": "https://your-cdn.com/icon-24.png",
+    "100x100": "https://your-cdn.com/icon-100.png"
+  },
+  "screenshots": [
+    {
+      "url": "https://your-cdn.com/screenshot1.png",
+      "description": "Real-time heatmap visualization"
+    },
+    {
+      "url": "https://your-cdn.com/screenshot2.png",
+      "description": "Control panel interface"
+    }
+  ],
   "permissions": [
     "EXTENSION_BACKEND"
   ],
+  "vendor_code": "smart-clickmap-v2",
+  "bits_enabled": false,
+  "request_identity_link": false,
+  "allowlisted_config_urls": [],
+  "allowlisted_panel_urls": [],
   "views": {
     "video_overlay": {
       "viewer_url": "index.html",
       "width": 1920,
-      "height": 1080
+      "height": 1080,
+      "can_link_external_content": false,
+      "zoom": true,
+      "zoom_pixels": 1024
     },
     "config": {
       "viewer_url": "config.html",
       "content_type": "application/html",
-      "height": 600,
-      "width": 450
+      "height": 450,
+      "width": 400,
+      "can_link_external_content": false
     }
   },
-  "content_security_policy": "default-src 'self'; script-src 'self' https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js 'unsafe-inline'; connect-src 'self' https://smart-clickmap-backend.onrender.com wss://smart-clickmap-backend.onrender.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors https://www.twitch.tv https://dashboard.twitch.tv; worker-src 'self' blob:",
-  "extension_manifest_version": "2.0",
-  "privacy_policy_url": "https://example.com/privacy",
-  "panel_height": 600,
-  "configuration_location": "hosted",
-  "mobile": {
-    "video_overlay": {
-      "viewer_url": "index.html"
-    },
-    "config": {
-      "viewer_url": "config.html"
-    }
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self' https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js; connect-src 'self' https://smart-clickmap-backend.onrender.com wss://smart-clickmap-backend.onrender.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' data: blob:; worker-src 'self' blob:; frame-ancestors https://www.twitch.tv https://*.twitch.tv; base-uri 'self'; form-action 'none'; upgrade-insecure-requests"
   },
-  "installation_lifecycle": {
-    "on_install": {
-      "webhook_url": "https://smart-clickmap-backend.onrender.com/webhook/install"
-    },
-    "on_uninstall": {
-      "webhook_url": "https://smart-clickmap-backend.onrender.com/webhook/uninstall"
-    }
-  },
-  "capabilities": [
-    "realtime_updates",
-    "click_tracking",
-    "visual_effects",
-    "mobile_support"
-  ],
-  "categories": [
-    "Games",
-    "Analytics",
-    "Interactive"
-  ],
-  "tags": [
-    "heatmap",
-    "clicks",
-    "analytics",
-    "interactive",
-    "visualization",
-    "real-time"
-  ]
+  "installation_requirements": {
+    "follow_redirect": false,
+    "whitelist_required": false
+  }
 }

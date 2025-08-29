@@ -97,485 +97,519 @@
 
     <!-- Debug info -->
     <div id="debug-info" class="debug-info">
-        <div> Smart Click Maps</div>
+        <div> Smart Click Maps v2.0</div>
         <div>Status: <span id="debug-status">Loading...</span></div>
         <div>Auth: <span id="debug-auth">Waiting...</span></div>
         <div>Channel: <span id="debug-channel">Unknown</span></div>
         <div>Clicks: <span id="debug-clicks">0</span></div>
+        <div>Clusters: <span id="debug-clusters">0</span></div>
         <div>WebSocket: <span id="debug-ws">Disconnected</span></div>
     </div>
 
+    <!-- Load our dedicated  modules -->
     <script type="module">
-        // Enable debug mode with ?debug=true
+        // Debug mode check
         const DEBUG = new URLSearchParams(location.search).has('debug');
 
         if (DEBUG) {
             document.getElementById('debug-info').classList.add('visible');
-            console.log('🐛 Debug mode enabled');
+            console.log('🐛  Debug Mode Enabled');
         }
 
-        // Global state
-        let authToken = '';
-        let channelId = '';
-        let running = false;
-        let currentClusters = [];
+        // Import our dedicated modules
+        import { ExMachinaRenderer, ExMachinaClusterer } from './heatmap.js';
 
-        // Backend configuration
-        const EBS = 'https://smart-clickmap-backend.onrender.com';
-        const wsUrl = EBS.replace('https://', 'wss://');
+        console.log('🚀  modules loaded');
 
-        // WebSocket and polling
-        let ws = null;
-        let pollInterval = null;
-        let reconnectAttempts = 0;
+        // Initialize the system
+        class ExMachinaClickMap {
+            constructor() {
+                this.authToken = '';
+                this.channelId = '';
+                this.running = false;
 
-        // Canvas and rendering
-        const canvas = document.getElementById('heat');
-        const ctx = canvas.getContext('2d');
-
-        // Setup high DPI canvas
-        function setupCanvas() {
-            const dpr = window.devicePixelRatio || 1;
-            const rect = canvas.getBoundingClientRect();
-
-            canvas.width = rect.width * dpr;
-            canvas.height = rect.height * dpr;
-            ctx.scale(dpr, dpr);
-
-            canvas.style.width = rect.width + 'px';
-            canvas.style.height = rect.height + 'px';
-
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-        }
-
-        setupCanvas();
-
-        //  style rendering
-        function renderClusters(clusters) {
-            const W = canvas.width / (window.devicePixelRatio || 1);
-            const H = canvas.height / (window.devicePixelRatio || 1);
-
-            ctx.clearRect(0, 0, W, H);
-
-            if (!clusters || clusters.length === 0) return;
-
-            clusters.forEach(cluster => {
-                // Convert to pixel coordinates
-                const cx = cluster.x * W;
-                const cy = cluster.y * H;
-
-                // Determine colors ( style)
-                const isTop = cluster.isTop || cluster.rank === 1;
-                const outlineColor = isTop ? '#00FFFF' : '#9D4EDD'; // Cyan or Purple
-                const glowColor = outlineColor;
-
-                // Draw glow effect
-                ctx.save();
-                ctx.shadowColor = glowColor;
-                ctx.shadowBlur = isTop ? 15 : 10;
-
-                // Draw polygon or circle
-                const radius = 30 + Math.sqrt(cluster.pct || cluster.percentage || 10) * 2;
-
-                ctx.strokeStyle = outlineColor;
-                ctx.lineWidth = isTop ? 4 : 3;
-                ctx.fillStyle = outlineColor + '10'; // Very transparent fill
-
-                ctx.beginPath();
-                ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                ctx.restore();
-
-                // Draw percentage text
-                const fontSize = isTop ? 28 : 24;
-                const text = `${cluster.pct || cluster.percentage || 0}%`;
-
-                ctx.font = `bold ${fontSize}px "Segoe UI", Arial, sans-serif`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-
-                // Text outline for readability
-                ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-                ctx.lineWidth = 4;
-                ctx.strokeText(text, cx, cy);
-
-                // Main text
-                ctx.fillStyle = '#FFFFFF';
-                ctx.fillText(text, cx, cy);
-            });
-        }
-
-        // Simple clustering for fallback
-        function createSimpleClusters(rawClicks) {
-            if (!rawClicks || rawClicks.length === 0) return [];
-
-            const totalClicks = rawClicks.length;
-            const clusters = [];
-
-            // Group nearby clicks (simple approach)
-            const processed = new Set();
-
-            rawClicks.forEach((click, i) => {
-                if (processed.has(i)) return;
-
-                const cluster = {
-                    x: click.x,
-                    y: click.y,
-                    count: 1,
-                    clicks: [click]
-                };
-
-                // Find nearby clicks
-                for (let j = i + 1; j < rawClicks.length; j++) {
-                    if (processed.has(j)) continue;
-
-                    const distance = Math.sqrt(
-                        Math.pow(click.x - rawClicks[j].x, 2) +
-                        Math.pow(click.y - rawClicks[j].y, 2)
-                    );
-
-                    if (distance < 0.08) { // Cluster threshold
-                        cluster.clicks.push(rawClicks[j]);
-                        cluster.count++;
-                        processed.add(j);
-                    }
+                // Get canvas
+                this.canvas = document.getElementById('heat');
+                if (!this.canvas) {
+                    console.error('❌ Canvas not found');
+                    return;
                 }
 
-                // Recalculate center
-                if (cluster.count > 1) {
-                    cluster.x = cluster.clicks.reduce((sum, c) => sum + c.x, 0) / cluster.count;
-                    cluster.y = cluster.clicks.reduce((sum, c) => sum + c.y, 0) / cluster.count;
-                }
+                console.log('🎯 Canvas found, initializing...');
 
-                cluster.percentage = Math.round((cluster.count / totalClicks) * 100);
+                // Initialize renderer and clusterer
+                this.renderer = new ExMachinaRenderer(this.canvas);
+                this.clusterer = new ExMachinaClusterer({
+                    epsilon: 0.08,
+                    minPts: 1,  // Allow single clicks!
+                    maxClusters: 8,
+                    minPercentage: 1 // Show even 1% clusters
+                });
 
-                if (cluster.percentage >= 8) { // Only show clusters with 8%+
-                    clusters.push(cluster);
-                    processed.add(i);
-                }
-            });
+                // Backend connection
+                this.EBS = 'https://smart-clickmap-backend.onrender.com';
+                this.wsUrl = this.EBS.replace('https://', 'wss://');
+                this.ws = null;
+                this.pollInterval = null;
+                this.reconnectAttempts = 0;
 
-            // Sort by percentage and mark top
-            clusters.sort((a, b) => b.percentage - a.percentage);
-            clusters.forEach((cluster, index) => {
-                cluster.rank = index + 1;
-                cluster.isTop = index === 0;
-            });
+                // Data
+                this.currentClusters = [];
+                this.stats = { totalClicks: 0, uniqueUsers: 0 };
 
-            return clusters.slice(0, 8); // Max 8 clusters
-        }
+                this.setupEventListeners();
+                this.setupResizeHandler();
 
-        // Update debug info
-        function updateDebugInfo(key, value) {
-            if (DEBUG) {
-                const element = document.getElementById(`debug-${key}`);
-                if (element) element.textContent = value;
+                console.log('✅ ExMachinaClickMap constructed');
             }
-        }
 
-        // Show notification
-        function showNotification(message, type = 'info') {
-            console.log(`📢 ${type.toUpperCase()}: ${message}`);
+            async initialize() {
+                console.log('🔐 Starting authorization...');
 
-            const notification = document.createElement('div');
-            notification.className = `notification ${type}`;
-            notification.textContent = message;
-            document.body.appendChild(notification);
+                return new Promise((resolve) => {
+                    // Set timeout to prevent hanging
+                    let authTimeout = setTimeout(() => {
+                        console.log('⏰ Auth timeout - using test mode');
+                        this.channelId = 'test_channel';
+                        this.updateDebugInfo('auth', 'Timeout');
+                        this.updateDebugInfo('channel', this.channelId);
+                        this.startDataConnection();
+                        resolve();
+                    }, 3000); // 3 second timeout
 
-            setTimeout(() => notification.classList.add('show'), 10);
-            setTimeout(() => {
-                notification.classList.remove('show');
-                setTimeout(() => {
-                    if (notification.parentNode) {
-                        notification.parentNode.removeChild(notification);
+                    if (window.Twitch && window.Twitch.ext) {
+                        console.log('✅ Twitch Extension API found');
+
+                        Twitch.ext.onAuthorized((auth) => {
+                            clearTimeout(authTimeout);
+
+                            this.authToken = auth.token;
+                            this.channelId = auth.channelId;
+
+                            console.log(`🎪 Authorized for channel: ${this.channelId}`);
+                            console.log(`🎫 Token: ${this.authToken ? 'Present' : 'Missing'}`);
+
+                            this.updateDebugInfo('auth', 'Yes');
+                            this.updateDebugInfo('channel', this.channelId);
+                            this.updateDebugInfo('status', 'Authorized');
+
+                            this.startDataConnection();
+                            resolve();
+                        });
+
+                        Twitch.ext.onContext((context) => {
+                            console.log('📱 Context changed:', context);
+                            this.handleContextChange(context);
+                        });
+                    } else {
+                        clearTimeout(authTimeout);
+                        console.log('⚠️ No Twitch Extension API - test mode');
+                        this.channelId = 'test_channel';
+                        this.updateDebugInfo('auth', 'Test Mode');
+                        this.updateDebugInfo('channel', this.channelId);
+                        this.startDataConnection();
+                        resolve();
                     }
-                }, 300);
-            }, 3000);
-        }
+                });
+            }
 
-        // WebSocket connection
-        function connectWebSocket() {
-            if (!channelId) return;
+            startDataConnection() {
+                console.log('📡 Starting data connections...');
+                this.connectWebSocket();
+                this.startPolling();
+                this.updateDebugInfo('status', 'Connected');
+            }
 
-            try {
-                const url = `${wsUrl}?channel=${encodeURIComponent(channelId)}`;
-                console.log('🔌 Connecting WebSocket:', url);
+            connectWebSocket() {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
 
-                ws = new WebSocket(url);
+                try {
+                    const wsUrl = `${this.wsUrl}?channel=${encodeURIComponent(this.channelId)}`;
+                    console.log(`🔌 Connecting WebSocket: ${wsUrl}`);
 
-                ws.onopen = () => {
-                    console.log('✅ WebSocket connected');
-                    updateDebugInfo('ws', 'Connected');
-                    reconnectAttempts = 0;
-                };
+                    this.ws = new WebSocket(wsUrl);
 
-                ws.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        console.log('📨 WebSocket message:', data);
+                    this.ws.onopen = () => {
+                        console.log('✅ WebSocket connected');
+                        this.reconnectAttempts = 0;
+                        this.updateDebugInfo('ws', 'Connected');
+                    };
 
-                        if (data.type === 'status') {
-                            running = data.data.running;
-                            updateDebugInfo('status', running ? 'Running' : 'Stopped');
-                            canvas.className = running ? '' : 'inactive';
-                        } else if (data.type === 'reset') {
-                            currentClusters = [];
-                            renderClusters(currentClusters);
+                    this.ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            console.log('📨 WebSocket message:', data);
+                            this.handleWebSocketMessage(data);
+                        } catch (e) {
+                            console.error('❌ WebSocket message error:', e);
                         }
-                    } catch (e) {
-                        console.error('WebSocket message error:', e);
+                    };
+
+                    this.ws.onclose = (event) => {
+                        console.log('🔌 WebSocket disconnected:', event.code);
+                        this.updateDebugInfo('ws', 'Disconnected');
+                        this.scheduleReconnect();
+                    };
+
+                    this.ws.onerror = (error) => {
+                        console.error('❌ WebSocket error:', error);
+                        this.updateDebugInfo('ws', 'Error');
+                    };
+
+                } catch (error) {
+                    console.error('❌ WebSocket connection failed:', error);
+                    this.scheduleReconnect();
+                }
+            }
+
+            handleWebSocketMessage(data) {
+                switch (data.type) {
+                    case 'click':
+                        console.log('👆 Real-time click received');
+                        setTimeout(() => this.requestDataUpdate(), 100);
+                        break;
+
+                    case 'status':
+                        const wasRunning = this.running;
+                        this.running = data.data.running;
+
+                        console.log(`📊 Status update: ${this.running ? 'RUNNING' : 'STOPPED'}`);
+                        this.updateDebugInfo('status', this.running ? 'Running' : 'Stopped');
+                        this.canvas.className = this.running ? '' : 'inactive';
+                        break;
+
+                    case 'reset':
+                        console.log('🗑️ Reset received');
+                        this.currentClusters = [];
+                        this.stats = { totalClicks: 0, uniqueUsers: 0 };
+                        this.renderClusters();
+                        break;
+                }
+            }
+
+            startPolling() {
+                if (this.pollInterval) return;
+
+                console.log('⏰ Starting data polling...');
+
+                this.pollInterval = setInterval(() => {
+                    this.requestDataUpdate();
+                }, 1500);
+
+                // Initial fetch
+                this.requestDataUpdate();
+            }
+
+            async requestDataUpdate() {
+                try {
+                    const url = this.channelId ?
+                        `${this.EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}` :
+                        `${this.EBS}/heatmap`;
+
+                    const response = await fetch(url, {
+                        headers: this.authToken ? {
+                            'Authorization': `Bearer ${this.authToken}`
+                        } : {},
+                        cache: 'no-cache'
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
                     }
-                };
 
-                ws.onclose = () => {
-                    console.log('🔌 WebSocket disconnected');
-                    updateDebugInfo('ws', 'Disconnected');
-                    scheduleReconnect();
-                };
+                    const data = await response.json();
+                    this.processServerData(data);
 
-                ws.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                    updateDebugInfo('ws', 'Error');
-                };
-
-            } catch (error) {
-                console.error('WebSocket connection failed:', error);
-                scheduleReconnect();
-            }
-        }
-
-        // Schedule WebSocket reconnection
-        function scheduleReconnect() {
-            if (reconnectAttempts < 5) {
-                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-                reconnectAttempts++;
-
-                setTimeout(() => {
-                    if (navigator.onLine && channelId) {
-                        console.log(`🔄 Reconnecting WebSocket (attempt ${reconnectAttempts})`);
-                        connectWebSocket();
+                } catch (error) {
+                    if (DEBUG) {
+                        console.error('❌ Failed to fetch data:', error);
                     }
-                }, delay);
-            }
-        }
-
-        // Fetch data from server
-        async function fetchData() {
-            if (!channelId) return;
-
-            try {
-                const url = `${EBS}/heatmap?channel=${encodeURIComponent(channelId)}`;
-                const response = await fetch(url, {
-                    headers: authToken ? { 'Authorization': `Bearer ${authToken}` } : {},
-                    cache: 'no-cache'
-                });
-
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-                const data = await response.json();
-
-                // Update running state
-                const wasRunning = running;
-                running = data.running;
-
-                if (wasRunning !== running) {
-                    console.log(`📊 Status changed: ${running ? 'RUNNING' : 'STOPPED'}`);
-                    updateDebugInfo('status', running ? 'Running' : 'Stopped');
-                    canvas.className = running ? '' : 'inactive';
-                }
-
-                // Process click data
-                if (data.rawClicks && data.rawClicks.length > 0) {
-                    console.log(`📊 Processing ${data.rawClicks.length} clicks`);
-                    currentClusters = createSimpleClusters(data.rawClicks);
-                    updateDebugInfo('clicks', data.rawClicks.length);
-                } else if (data.blobs) {
-                    currentClusters = data.blobs;
-                    updateDebugInfo('clicks', data.totalClicks || 0);
-                }
-
-                // Render clusters
-                renderClusters(currentClusters);
-
-            } catch (error) {
-                if (DEBUG) {
-                    console.error('Fetch data error:', error);
                 }
             }
-        }
 
-        // Send click to server
-        async function sendClick(x, y) {
-            if (!authToken) {
-                console.log('❌ No auth token, cannot send click');
-                showNotification('Not authorized', 'error');
-                return;
-            }
+            processServerData(data) {
+                const wasRunning = this.running;
+                this.running = data.running;
 
-            if (!running) {
-                console.log('❌ System not running, cannot send click');
-                showNotification('Click mapping not active', 'info');
-                return;
-            }
-
-            try {
-                console.log(`📤 Sending click: (${x.toFixed(3)}, ${y.toFixed(3)})`);
-
-                const response = await fetch(`${EBS}/click`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${authToken}`
-                    },
-                    body: JSON.stringify({ x, y })
-                });
-
-                if (response.ok) {
-                    console.log('✅ Click sent successfully');
-                    showNotification('Click registered!', 'success');
-
-                    // Immediate data refresh
-                    setTimeout(fetchData, 200);
-                } else {
-                    const errorData = await response.json().catch(() => ({}));
-                    console.log(`❌ Click failed: ${response.status} - ${errorData.error || 'Unknown'}`);
-                    showNotification(errorData.error || 'Click failed', 'error');
+                // Update status
+                if (wasRunning !== this.running) {
+                    console.log(`📊 Status changed: ${this.running ? 'RUNNING' : 'STOPPED'}`);
+                    this.updateDebugInfo('status', this.running ? 'Running' : 'Stopped');
+                    this.canvas.className = this.running ? '' : 'inactive';
                 }
 
-            } catch (error) {
-                console.error('Click send error:', error);
-                showNotification('Network error', 'error');
+                // Update statistics
+                this.stats = {
+                    totalClicks: data.totalClicks || 0,
+                    uniqueUsers: data.uniqueUsers || 0
+                };
+
+                this.updateDebugInfo('clicks', this.stats.totalClicks);
+
+                // Process raw clicks using our dedicated clusterer
+                if (data.rawClicks && Array.isArray(data.rawClicks)) {
+                    console.log(`📊 Processing ${data.rawClicks.length} raw clicks with dedicated clusterer`);
+                    this.updateClusters(data.rawClicks);
+                } else if (data.blobs && Array.isArray(data.blobs)) {
+                    // Fallback to server-provided blobs
+                    this.currentClusters = this.convertServerBlobs(data.blobs);
+                    this.renderClusters();
+                }
             }
-        }
 
-        // Handle canvas clicks
-        canvas.addEventListener('click', (event) => {
-            console.log('👆 Canvas clicked!');
+            updateClusters(rawClicks) {
+                const startTime = performance.now();
 
-            const rect = canvas.getBoundingClientRect();
-            const x = (event.clientX - rect.left) / rect.width;
-            const y = (event.clientY - rect.top) / rect.height;
+                try {
+                    // Use our dedicated ExMachinaClusterer
+                    this.currentClusters = this.clusterer.clusterPoints(rawClicks);
 
-            console.log(`📍 Click coordinates: (${x.toFixed(3)}, ${y.toFixed(3)})`);
+                    const clusterTime = performance.now() - startTime;
 
-            if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-                sendClick(x, y);
+                    console.log(`🧮 Generated ${this.currentClusters.length} clusters in ${clusterTime.toFixed(1)}ms`);
+                    console.log('Clusters:', this.currentClusters);
+
+                    this.updateDebugInfo('clusters', this.currentClusters.length);
+
+                    // Render using our dedicated renderer
+                    this.renderClusters();
+
+                } catch (error) {
+                    console.error('❌ Clustering error:', error);
+                }
             }
-        });
 
-        // Touch support
-        canvas.addEventListener('touchend', (event) => {
-            event.preventDefault();
+            convertServerBlobs(serverBlobs) {
+                return serverBlobs.map((blob, index) => ({
+                    id: `server_${index}`,
+                    points: [{ x: blob.x, y: blob.y }],
+                    polygon: this.createCirclePolygon({ x: blob.x, y: blob.y }, 0.05),
+                    centroid: { x: blob.x, y: blob.y },
+                    count: blob.count || 1,
+                    percentage: blob.pct || 0,
+                    isTop: blob.isTop || false,
+                    rank: blob.rank || null
+                }));
+            }
 
-            if (event.changedTouches.length === 1) {
-                const touch = event.changedTouches[0];
-                const rect = canvas.getBoundingClientRect();
-                const x = (touch.clientX - rect.left) / rect.width;
-                const y = (touch.clientY - rect.top) / rect.height;
+            renderClusters() {
+                // Use our dedicated ExMachinaRenderer
+                this.renderer.renderClusters(this.currentClusters);
+            }
+
+            handleCanvasClick(event) {
+                console.log('👆 Canvas clicked!');
+
+                if (!this.running) {
+                    console.log('⚠️ Click ignored - system not running');
+                    this.showNotification('Click mapping is not active', 'info');
+                    return;
+                }
+
+                if (!this.authToken) {
+                    console.log('⚠️ Click ignored - not authorized');
+                    this.showNotification('Not authorized to click', 'error');
+                    return;
+                }
+
+                const rect = this.canvas.getBoundingClientRect();
+                const x = (event.clientX - rect.left) / rect.width;
+                const y = (event.clientY - rect.top) / rect.height;
+
+                console.log(`📍 Click coordinates: (${x.toFixed(3)}, ${y.toFixed(3)})`);
 
                 if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-                    console.log('📱 Touch click:', x.toFixed(3), y.toFixed(3));
-                    sendClick(x, y);
+                    this.sendClick(x, y);
                 }
             }
-        });
 
-        // Prevent context menu
-        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+            async sendClick(x, y) {
+                try {
+                    console.log(`📤 Sending click: (${x.toFixed(3)}, ${y.toFixed(3)})`);
 
-        // Handle resize
-        window.addEventListener('resize', () => {
-            setTimeout(() => {
-                setupCanvas();
-                renderClusters(currentClusters);
-            }, 100);
-        });
+                    const response = await fetch(`${this.EBS}/click`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${this.authToken}`
+                        },
+                        body: JSON.stringify({ x, y })
+                    });
 
-        // Initialize with Twitch Extension
-        function initializeSystem() {
-            console.log('🚀 Initializing  Smart Click Maps...');
-            updateDebugInfo('status', 'Initializing...');
+                    if (response.ok) {
+                        console.log('✅ Click sent successfully');
+                        this.showNotification('Click registered!', 'success');
+                        setTimeout(() => this.requestDataUpdate(), 200);
+                    } else {
+                        const errorData = await response.json().catch(() => ({}));
+                        console.log(`❌ Click failed: ${response.status} - ${errorData.error}`);
+                        this.showNotification(errorData.error || 'Click failed', 'error');
+                    }
 
-            if (window.Twitch && window.Twitch.ext) {
-                console.log('✅ Twitch Extension API found');
-
-                // Set up authorization with timeout
-                let authTimeout = setTimeout(() => {
-                    console.log('⏰ Twitch auth timeout - continuing without auth');
-                    updateDebugInfo('auth', 'Timeout');
-                    channelId = 'test_channel';
-                    updateDebugInfo('channel', channelId);
-                    startDataSystem();
-                }, 5000); // 5 second timeout
-
-                Twitch.ext.onAuthorized((auth) => {
-                    clearTimeout(authTimeout);
-
-                    authToken = auth.token;
-                    channelId = auth.channelId;
-
-                    console.log(`🎪 Authorized for channel: ${channelId}`);
-                    console.log(`🎫 Token present: ${!!authToken}`);
-
-                    updateDebugInfo('auth', 'Yes');
-                    updateDebugInfo('channel', channelId);
-
-                    startDataSystem();
-                });
-
-                Twitch.ext.onContext((context) => {
-                    console.log('📱 Context changed:', context);
-                });
-
-            } else {
-                console.log('⚠️ No Twitch Extension API - running in standalone mode');
-                updateDebugInfo('auth', 'Standalone');
-                channelId = 'test_channel';
-                updateDebugInfo('channel', channelId);
-                startDataSystem();
+                } catch (error) {
+                    console.error('❌ Failed to send click:', error);
+                    this.showNotification('Network error', 'error');
+                }
             }
-        }
 
-        // Start data system
-        function startDataSystem() {
-            console.log('📡 Starting data system...');
-            updateDebugInfo('status', 'Connected');
+            setupEventListeners() {
+                console.log('🖱️ Setting up event listeners...');
 
-            // Start WebSocket connection
-            connectWebSocket();
+                this.canvas.addEventListener('click', (e) => this.handleCanvasClick(e));
 
-            // Start polling
-            fetchData(); // Initial fetch
-            pollInterval = setInterval(fetchData, 2000);
+                this.canvas.addEventListener('touchend', (e) => {
+                    e.preventDefault();
 
-            console.log('✅  system ready!');
+                    if (e.changedTouches.length === 1) {
+                        const touch = e.changedTouches[0];
+                        const rect = this.canvas.getBoundingClientRect();
+                        const x = (touch.clientX - rect.left) / rect.width;
+                        const y = (touch.clientY - rect.top) / rect.height;
 
-            if (DEBUG) {
-                showNotification(' Debug Mode Active', 'info');
+                        if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+                            console.log('📱 Touch click');
+                            this.handleCanvasClick({
+                                clientX: touch.clientX,
+                                clientY: touch.clientY
+                            });
+                        }
+                    }
+                });
 
-                // Expose for debugging
-                window.exMachina = {
-                    sendTestClick: () => sendClick(0.5, 0.5),
-                    getStats: () => ({ running, clusters: currentClusters.length, channelId, hasAuth: !!authToken }),
-                    clearCanvas: () => renderClusters([])
+                this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+                window.addEventListener('online', () => this.handleOnline());
+                window.addEventListener('offline', () => this.handleOffline());
+
+                console.log('✅ Event listeners setup complete');
+            }
+
+            setupResizeHandler() {
+                let resizeTimeout;
+                window.addEventListener('resize', () => {
+                    clearTimeout(resizeTimeout);
+                    resizeTimeout = setTimeout(() => {
+                        this.renderer.handleResize();
+                        this.renderClusters();
+                    }, 250);
+                });
+            }
+
+            handleContextChange(context) {
+                setTimeout(() => {
+                    this.renderer.handleResize();
+                    this.renderClusters();
+                }, 100);
+            }
+
+            scheduleReconnect() {
+                if (this.reconnectAttempts < 5) {
+                    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+                    this.reconnectAttempts++;
+
+                    setTimeout(() => {
+                        if (navigator.onLine) {
+                            console.log(`🔄 Reconnecting (attempt ${this.reconnectAttempts})`);
+                            this.connectWebSocket();
+                        }
+                    }, delay);
+                }
+            }
+
+            handleOnline() {
+                console.log('🌐 Connection restored');
+                this.connectWebSocket();
+                this.requestDataUpdate();
+            }
+
+            handleOffline() {
+                console.log('📴 Connection lost');
+            }
+
+            createCirclePolygon(center, radius, segments = 8) {
+                const polygon = [];
+                for (let i = 0; i < segments; i++) {
+                    const angle = (i / segments) * 2 * Math.PI;
+                    polygon.push({
+                        x: center.x + Math.cos(angle) * radius,
+                        y: center.y + Math.sin(angle) * radius
+                    });
+                }
+                return polygon;
+            }
+
+            updateDebugInfo(key, value) {
+                if (DEBUG) {
+                    const element = document.getElementById(`debug-${key}`);
+                    if (element) element.textContent = value;
+                }
+            }
+
+            showNotification(message, type = 'info') {
+                console.log(`📢 ${type.toUpperCase()}: ${message}`);
+
+                const notification = document.createElement('div');
+                notification.className = `notification ${type}`;
+                notification.textContent = message;
+                document.body.appendChild(notification);
+
+                setTimeout(() => notification.classList.add('show'), 10);
+                setTimeout(() => {
+                    notification.classList.remove('show');
+                    setTimeout(() => {
+                        if (notification.parentNode) {
+                            notification.parentNode.removeChild(notification);
+                        }
+                    }, 300);
+                }, 3000);
+            }
+
+            getStats() {
+                return {
+                    running: this.running,
+                    clusters: this.currentClusters.length,
+                    totalClicks: this.stats.totalClicks,
+                    uniqueUsers: this.stats.uniqueUsers,
+                    wsConnected: this.ws && this.ws.readyState === WebSocket.OPEN,
+                    channelId: this.channelId,
+                    hasAuth: !!this.authToken
                 };
             }
+
+            destroy() {
+                if (this.pollInterval) {
+                    clearInterval(this.pollInterval);
+                    this.pollInterval = null;
+                }
+
+                if (this.ws) {
+                    this.ws.close();
+                    this.ws = null;
+                }
+
+                this.renderer.clearCanvas();
+                this.currentClusters = [];
+            }
         }
 
-        // Cleanup
-        window.addEventListener('beforeunload', () => {
-            if (ws) ws.close();
-            if (pollInterval) clearInterval(pollInterval);
+        // Initialize the system
+        const exMachinaInstance = new ExMachinaClickMap();
+
+        exMachinaInstance.initialize().then(() => {
+            console.log('✅  initialization complete');
+
+            if (DEBUG) {
+                window.exMachinaClickMap = exMachinaInstance;
+                console.log('🐛 Debug: window.exMachinaClickMap available');
+            }
+        }).catch(error => {
+            console.error('❌ Failed to initialize:', error);
         });
 
-        // Start initialization
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initializeSystem);
-        } else {
-            initializeSystem();
-        }
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            exMachinaInstance.destroy();
+        });
 
         console.log('🎯  Smart Click Maps v2.0 loaded');
     </script>

@@ -1,4 +1,4 @@
-/* Enhanced styles for Smart Click Maps overlay */
+/* Ex Machina Smart Click Maps - Complete Styles */
 
 * {
     box-sizing: border-box;
@@ -11,46 +11,35 @@ html, body {
     padding: 0;
     background: transparent;
     overflow: hidden;
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
 
+/* Main heatmap canvas */
 #heat {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    pointer-events: none;
+    pointer-events: auto;
     z-index: 1000;
-    /* Enhance canvas rendering */
+    cursor: crosshair;
+    /* High quality canvas rendering */
     image-rendering: -webkit-optimize-contrast;
     image-rendering: crisp-edges;
     image-rendering: pixelated;
 }
 
-/* Optional: Add a subtle overlay pattern for testing */
-body::before {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: radial-gradient(circle at 20% 20%, rgba(120, 119, 198, 0.1) 0%, transparent 50%), radial-gradient(circle at 80% 80%, rgba(255, 119, 198, 0.1) 0%, transparent 50%), radial-gradient(circle at 40% 60%, rgba(120, 219, 255, 0.1) 0%, transparent 50%);
-    pointer-events: none;
-    z-index: -1;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-}
+    /* When system is not running, show different cursor */
+    #heat.inactive {
+        cursor: not-allowed;
+        opacity: 0.7;
+        filter: grayscale(0.3);
+    }
 
-/* Show pattern when no content (for debugging) */
-body.debug::before {
-    opacity: 1;
-}
-
-/* Notification styles (for the main overlay notifications) */
+/* Notification styles for the overlay */
 .notification {
     position: fixed;
     top: 20px;
@@ -59,7 +48,7 @@ body.debug::before {
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 12px 20px;
     color: white;
     font-size: 14px;
@@ -91,62 +80,12 @@ body.debug::before {
         background: rgba(30, 39, 46, 0.95);
     }
 
-/* Click ripple effect styles */
-.click-ripple {
-    position: absolute;
-    border: 2px solid rgba(255, 255, 255, 0.8);
-    border-radius: 50%;
-    pointer-events: none;
-    z-index: 1500;
-    animation: ripple-effect 0.6s ease-out forwards;
-}
-
-@keyframes ripple-effect {
-    0% {
-        transform: scale(0);
-        opacity: 1;
+    .notification.warning {
+        border-left: 4px solid #ed8936;
+        background: rgba(46, 39, 30, 0.95);
     }
 
-    100% {
-        transform: scale(4);
-        opacity: 0;
-    }
-}
-
-/* Particle system container */
-.particles-container {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    z-index: 1200;
-}
-
-.particle {
-    position: absolute;
-    width: 4px;
-    height: 4px;
-    background: radial-gradient(circle, rgba(255, 255, 255, 0.8) 0%, transparent 70%);
-    border-radius: 50%;
-    pointer-events: none;
-    animation: particle-float 2s ease-out forwards;
-}
-
-@keyframes particle-float {
-    0% {
-        transform: scale(1) translateY(0);
-        opacity: 1;
-    }
-
-    100% {
-        transform: scale(0.2) translateY(-50px);
-        opacity: 0;
-    }
-}
-
-/* Status indicator */
+/* Status overlay */
 .status-overlay {
     position: fixed;
     top: 20px;
@@ -164,6 +103,9 @@ body.debug::before {
     z-index: 1800;
     opacity: 0;
     transition: opacity 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
     .status-overlay.visible {
@@ -180,9 +122,8 @@ body.debug::before {
         color: #f56565;
     }
 
-/* Pulsing dot animation */
+/* Pulsing status dot */
 .status-dot {
-    display: inline-block;
     width: 8px;
     height: 8px;
     border-radius: 50%;
@@ -229,49 +170,113 @@ body.debug::before {
     position: fixed;
     bottom: 20px;
     left: 20px;
-    background: rgba(0, 0, 0, 0.8);
-    color: white;
-    padding: 10px;
+    background: rgba(0, 0, 0, 0.85);
+    color: #00ff00;
+    padding: 12px;
     border-radius: 6px;
-    font-family: 'Courier New', monospace;
+    border: 1px solid #333;
+    font-family: 'Courier New', 'Consolas', monospace;
     font-size: 11px;
     z-index: 2000;
     opacity: 0;
     transition: opacity 0.3s ease;
-    max-width: 300px;
+    max-width: 320px;
+    min-width: 280px;
 }
 
     .debug-overlay.visible {
+        opacity: 0.9;
+    }
+
+.debug-line {
+    margin: 3px 0;
+    display: flex;
+    justify-content: space-between;
+}
+
+    .debug-line span {
+        color: #ffff00;
+        font-weight: bold;
+        margin-left: 10px;
+    }
+
+/* Loading indicator */
+.loading-indicator {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(30, 30, 46, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 20px 30px;
+    color: white;
+    font-size: 16px;
+    z-index: 3000;
+    text-align: center;
+    backdrop-filter: blur(10px);
+}
+
+.loading-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: #48bb78;
+    animation: spin 1s ease-in-out infinite;
+    margin-right: 10px;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Click ripple effect */
+.click-ripple {
+    position: absolute;
+    border: 2px solid rgba(255, 255, 255, 0.8);
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 1500;
+    animation: ripple-effect 0.6s ease-out forwards;
+}
+
+@keyframes ripple-effect {
+    0% {
+        transform: scale(0);
         opacity: 1;
     }
 
-    .debug-overlay .debug-line {
-        margin: 2px 0;
+    100% {
+        transform: scale(4);
+        opacity: 0;
     }
+}
 
-    .debug-overlay .debug-label {
-        color: #61dafb;
-    }
-
-    .debug-overlay .debug-value {
-        color: #f7df1e;
-    }
-
-/* Responsive design */
+/* Responsive design for mobile */
 @media (max-width: 768px) {
     .notification {
         top: 10px;
         right: 10px;
         left: 10px;
+        transform: translateY(-110%);
         max-width: none;
         font-size: 13px;
         padding: 10px 16px;
     }
 
+        .notification.show {
+            transform: translateY(0);
+        }
+
     .status-overlay {
         top: 10px;
         left: 10px;
-        font-size: 11px;
+        font-size: 10px;
         padding: 6px 12px;
     }
 
@@ -280,24 +285,40 @@ body.debug::before {
         left: 10px;
         right: 10px;
         max-width: none;
+        min-width: auto;
         font-size: 10px;
+    }
+
+    #heat {
+        cursor: pointer; /* Better for touch devices */
+    }
+
+        #heat.inactive {
+            cursor: default;
+        }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .notification,
+    .status-overlay,
+    .debug-overlay,
+    .loading-indicator {
+        background: rgba(0, 0, 0, 0.95) !important;
+        border: 2px solid white !important;
+        color: white !important;
+    }
+
+    .debug-overlay {
+        color: white !important;
+    }
+
+    .debug-line span {
+        color: yellow !important;
     }
 }
 
-/* Smooth transitions for all interactive elements */
-* {
-    transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-/* Performance optimizations */
-#heat,
-.particles-container,
-.notification {
-    will-change: transform;
-    transform: translateZ(0);
-}
-
-/* Accessibility improvements */
+/* Reduced motion support */
 @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -308,27 +329,43 @@ body.debug::before {
     }
 
     .click-ripple,
-    .particle {
-        display: none;
+    .loading-spinner {
+        display: none !important;
+    }
+
+    .status-dot {
+        animation: none !important;
     }
 }
 
-/* High contrast mode support */
-@media (prefers-contrast: high) {
-    .notification {
-        background: rgba(0, 0, 0, 0.95);
-        border: 2px solid white;
-    }
-
-    .status-overlay {
-        background: rgba(0, 0, 0, 0.95);
-        border: 2px solid white;
-    }
-}
-
-/* Print styles (hide overlay) */
+/* Print styles (hide overlay completely) */
 @media print {
     body {
-        display: none;
+        display: none !important;
+    }
+}
+
+/* Focus styles for accessibility */
+#heat:focus {
+    outline: 3px solid #4299e1;
+    outline-offset: 2px;
+}
+
+/* Performance optimizations */
+#heat,
+.notification,
+.debug-overlay {
+    will-change: transform;
+    transform: translateZ(0);
+}
+
+/* Smooth canvas scaling */
+#heat {
+    image-rendering: optimizeQuality;
+}
+
+@supports (image-rendering: -webkit-optimize-contrast) {
+    #heat {
+        image-rendering: -webkit-optimize-contrast;
     }
 }

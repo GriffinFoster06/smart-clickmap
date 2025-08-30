@@ -222,8 +222,16 @@ function broadcastToChannel(channelId, data) {
 // Enhanced click handling with instant broadcast
 app.post('/click', async (req, res) => {
     try {
+        // DEBUG: Log the state
+        console.log(`🔍 Click received - isRunning: ${isRunning}`);
+
         // THE ONLY CHANGE - ADD THIS ONE LINE:
-        if (!isRunning) return res.status(423).json({ error: 'system is stopped' });
+        if (!isRunning) {
+            console.log('❌ Click REJECTED - system stopped');
+            return res.status(423).json({ error: 'system is stopped' });
+        }
+
+        console.log('✅ Click ACCEPTED - processing...');
 
         const token = (req.headers.authorization || '').replace('Bearer ', '');
         const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
@@ -259,7 +267,10 @@ app.post('/click', async (req, res) => {
 
 // Broadcaster controls
 app.post('/start', async (req, res) => {
+    console.log('🎯 START endpoint called');
     isRunning = true;
+    console.log(`🎯 Set isRunning to: ${isRunning}`);
+
     if (useRedis) {
         const keys = await redis.keys('click:*');
         if (keys.length > 0) {
@@ -273,11 +284,14 @@ app.post('/start', async (req, res) => {
         broadcastToChannel(channelId, { running: true, clusters: [], totalClicks: 0, uniqueUsers: 0 });
     });
 
+    console.log('🎯 Start complete');
     res.json({ status: 'started', running: true });
 });
 
 app.post('/stop', async (_, res) => {
+    console.log('🛑 STOP endpoint called');
     isRunning = false;
+    console.log(`🛑 Set isRunning to: ${isRunning}`);
 
     connectedClients.forEach(async (clients, channelId) => {
         const data = await getHeatmapData(channelId, 3);
@@ -285,6 +299,7 @@ app.post('/stop', async (_, res) => {
         broadcastToChannel(channelId, data);
     });
 
+    console.log('🛑 Stop complete');
     res.json({ status: 'stopped', running: false });
 });
 

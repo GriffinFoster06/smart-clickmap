@@ -413,39 +413,50 @@ const wss = new WebSocketServer({
 });
 
 wss.on('connection', (ws, req) => {
+    // Parse robustly
     const url = new URL(req.url, `http://${req.headers.host}`);
-    const pathParts = url.pathname.split('/');
-    const channelId = pathParts[pathParts.length - 1];
+    let channelId = url.searchParams.get('channel');
 
-    if (!channelId || channelId === 'ws') {
-        ws.close(1000, 'Channel ID required');
+    // Also support /ws/<id> style
+    if (!channelId) {
+        const parts = url.pathname.split('/').filter(Boolean); // e.g. ["ws","167556274"]
+        if (parts[0] === 'ws' && parts[1]) channelId = parts[1];
+    }
+
+    if (!channelId) {
+        ws.close(1008, 'Channel ID required'); // policy violation (1008) is clearer than 1000
         return;
     }
 
-    if (!connectedClients.has(channelId)) {
-        connectedClients.set(channelId, new Set());
-    }
+    // Track client
+    if (!connectedClients.has(channelId)) connectedClients.set(channelId, new Set());
     connectedClients.get(channelId).add(ws);
 
     console.log(`📡 WebSocket client connected to channel: ${channelId}`);
 
+    // Send initial snapshot
     getHeatmapData(channelId, 3).then(data => {
-        if (ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify(data));
-        }
+        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(data));
     });
 
+    // Optional: keep-alive to survive proxies
+    const interval = setInterval(() => {
+        if (ws.readyState === ws.OPEN) {
+            try { ws.ping(); } catch { }
+        }
+    }, 30000);
+
     ws.on('close', () => {
-        const clients = connectedClients.get(channelId);
-        if (clients) {
-            clients.delete(ws);
-            if (clients.size === 0) {
-                connectedClients.delete(channelId);
-            }
+        clearInterval(interval);
+        const set = connectedClients.get(channelId);
+        if (set) {
+            set.delete(ws);
+            if (set.size === 0) connectedClients.delete(channelId);
         }
         console.log(`📡 WebSocket client disconnected from: ${channelId}`);
     });
 });
+
 
 server.listen(PORT, () => {
     console.log('🚀 Precise ClickMap EBS v2.2.0 running on port', PORT);

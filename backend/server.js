@@ -219,13 +219,11 @@ function broadcastToChannel(channelId, data) {
     }
 }
 
-// Enhanced click handling with running state check
+// Enhanced click handling with instant broadcast
 app.post('/click', async (req, res) => {
     try {
-        // CHECK IF SYSTEM IS RUNNING FIRST!
-        if (!isRunning) {
-            return res.status(423).json({ error: 'system is stopped' });
-        }
+        // THE ONLY CHANGE - ADD THIS ONE LINE:
+        if (!isRunning) return res.status(423).json({ error: 'system is stopped' });
 
         const token = (req.headers.authorization || '').replace('Bearer ', '');
         const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
@@ -259,7 +257,7 @@ app.post('/click', async (req, res) => {
     }
 });
 
-// Broadcaster controls - MINIMAL AND FAST
+// Broadcaster controls
 app.post('/start', async (req, res) => {
     isRunning = true;
     if (useRedis) {
@@ -281,8 +279,10 @@ app.post('/start', async (req, res) => {
 app.post('/stop', async (_, res) => {
     isRunning = false;
 
-    connectedClients.forEach((clients, channelId) => {
-        broadcastToChannel(channelId, { running: false });
+    connectedClients.forEach(async (clients, channelId) => {
+        const data = await getHeatmapData(channelId, 3);
+        data.running = false;
+        broadcastToChannel(channelId, data);
     });
 
     res.json({ status: 'stopped', running: false });

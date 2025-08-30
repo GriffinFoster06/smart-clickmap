@@ -93,6 +93,16 @@ async function ensureRenderer() {
     }
     if (!renderer && els.miniCanvas) {
         renderer = new HeatmapRenderer(els.miniCanvas);
+
+        // 🔑 Preview should show ALL clusters (even <3%)
+        renderer.setThreshold(0);
+        renderer.updateClusters([]); // paint once so it's not blank
+
+        // Make sure initial layout is respected
+        renderer.resize();
+        // One more resize on next tick in case layout just changed
+        setTimeout(() => renderer && renderer.resize(), 0);
+
         try {
             const ro = new ResizeObserver(() => renderer.resize());
             ro.observe(els.miniCanvas.parentElement || els.miniCanvas);
@@ -239,6 +249,12 @@ async function pollOnce() {
     const clusters = normalizeClustersForPreview(payload, canvasW, canvasH);
 
     await ensureRenderer();
+
+    // helpful debug: see exactly what preview receives
+    console.debug('[preview→renderer]', clusters.map(c => ({
+        x: +c.x.toFixed(3), y: +c.y.toFixed(3), pct: c.percentage
+    })));
+
     renderer?.updateClusters(clusters);
 
     const stats = extractStats(payload, clusters);

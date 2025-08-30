@@ -46,16 +46,12 @@ class ClickMapExtension {
     // Convert client coords to normalized coords inside the 16:9 viewport
     // Clicks outside the viewport (letterbox) are clamped to the closest edge
     clientToNormalized(clientX, clientY) {
-        const w = window.innerWidth;
-        const h = window.innerHeight;
-        // current viewport
         const vp = this.viewport;
         // Clamp to viewport edges
         const px = Math.max(vp.x, Math.min(vp.x + vp.width, clientX));
         const py = Math.max(vp.y, Math.min(vp.y + vp.height, clientY));
         const nx = (px - vp.x) / (vp.width || 1);
         const ny = (py - vp.y) / (vp.height || 1);
-        // Normalize to [0,1]
         return { x: Math.max(0, Math.min(1, nx)), y: Math.max(0, Math.min(1, ny)) };
     }
 
@@ -89,7 +85,7 @@ class ClickMapExtension {
                 .loading-overlay, .error-overlay { pointer-events: none; } /* overlays remain passive */
             `;
             document.head.appendChild(style);
-        } catch { }
+        } catch { /* noop */ }
 
         this.renderer = new HeatmapRenderer(canvas);
         this.resizeCanvas();
@@ -117,7 +113,8 @@ class ClickMapExtension {
 
         // Main click handler (does NOT stop propagation; Twitch player still receives clicks)
         document.addEventListener('click', (event) => {
-            if (!this.running || !this.authToken) return;
+            // ✅ Do NOT gate on this.running; only require auth
+            if (!this.authToken) return;
 
             // Debounce a tad to bundle double-clicks
             if (clickTimeout) clearTimeout(clickTimeout);
@@ -126,7 +123,7 @@ class ClickMapExtension {
 
         // Touch support — passive and NO preventDefault, so native gestures/controls work
         document.addEventListener('touchstart', (event) => {
-            if (!this.running || !this.authToken || event.touches.length > 1) return;
+            if (!this.authToken || event.touches.length > 1) return;
 
             const touch = event.touches[0];
             const syntheticEvent = { clientX: touch.clientX, clientY: touch.clientY };
@@ -190,7 +187,10 @@ class ClickMapExtension {
                 body: JSON.stringify({ x, y }) // x,y are normalized to 16:9 viewport
             });
             if (!response.ok) {
-                console.warn('⚠️ Click submission failed:', response.status);
+                const text = await response.text().catch(() => '');
+                console.warn('⚠️ Click submission failed:', response.status, text);
+            } else {
+                console.debug('✅ click sent', { x: +x.toFixed(3), y: +y.toFixed(3) });
             }
         } catch (error) {
             console.error('❌ Click submission error:', error);
@@ -212,6 +212,10 @@ class ClickMapExtension {
             console.log('✅ Extension authorized for channel:', this.channelId);
             this.stats.status = 'authorized';
             this.updateDebugStats();
+
+            // Optional: tell backend to consider session "running"
+            fetch(`${this.EBS}/start`, { method: 'POST' }).catch(() => { });
+
             this.startPolling();
         });
 
@@ -321,7 +325,6 @@ class ClickMapExtension {
 
         // If your backend returns absolute pixel coords, convert to normalized before passing along:
         // Here we assume server already sends normalized coords [0..1] relative to the same 16:9 projection.
-        // If not, you can normalize here by inspecting data.width/height.
         this.renderer.updateClusters(data.clusters || []);
         this.stats.renders++;
 

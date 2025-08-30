@@ -1,179 +1,204 @@
-﻿// frontend/script.js - Main Twitch extension script with HUD-style visualization (click-through + 16:9 projection)
+﻿// frontend/script.js - Bulletproof main extension script
 import { HeatmapRenderer } from './heatmap.js';
 
-class ClickMapExtension {
+class BulletproofExtension {
     constructor() {
         this.authToken = '';
         this.channelId = '';
         this.running = false;
         this.renderer = null;
         this.pollInterval = null;
+        this.websocket = null;
         this.isVisible = true;
         this.lastDataHash = '';
-
-        // 16:9 projection viewport (updated on resize)
-        this.targetAspect = 16 / 9;
-        this.viewport = { x: 0, y: 0, width: 0, height: 0 };
-
-        // Statistics for debug mode
-        this.stats = {
-            clicks: 0,
-            polls: 0,
-            renders: 0,
-            lastPollTime: '-',
-            status: 'initializing'
-        };
+        this.consecutiveErrors = 0;
+        this.maxRetries = 5;
 
         this.EBS = 'https://smart-clickmap-backend.onrender.com';
-        this.POLL_RATE = 1000; // 1 second polling
+        this.POLL_RATE = 1000;
 
+        // Debug logging
+        this.debug = true;
+
+        this.log('🎯 Bulletproof ClickMap Extension v3.0.0 initializing...');
         this.init();
     }
 
-    // ---------- helpers (same math as overlay) ----------
-    fitViewport(containerW, containerH, targetAspect) {
-        let vw = containerW;
-        let vh = Math.round(vw / targetAspect);
-        if (vh > containerH) {
-            vh = containerH;
-            vw = Math.round(vh * targetAspect);
+    log(message) {
+        if (this.debug) {
+            console.log(`[EXTENSION] ${message}`);
         }
-        const vx = Math.floor((containerW - vw) / 2);
-        const vy = Math.floor((containerH - vh) / 2);
-        return { x: vx, y: vy, width: vw, height: vh };
     }
 
-    // Convert client coords to normalized coords inside the 16:9 viewport
-    // Clicks outside the viewport (letterbox) are clamped to the closest edge
-    clientToNormalized(clientX, clientY) {
-        const vp = this.viewport;
-        // Clamp to viewport edges
-        const px = Math.max(vp.x, Math.min(vp.x + vp.width, clientX));
-        const py = Math.max(vp.y, Math.min(vp.y + vp.height, clientY));
-        const nx = (px - vp.x) / (vp.width || 1);
-        const ny = (py - vp.y) / (vp.height || 1);
-        return { x: Math.max(0, Math.min(1, nx)), y: Math.max(0, Math.min(1, ny)) };
+    error(message, err = null) {
+        console.error(`[EXTENSION ERROR] ${message}`, err || '');
     }
 
-    init() {
-        this.setupCanvas();
-        this.setupEventListeners();
-        this.setupTwitchExtension();
-        this.setupVisibilityOptimization();
-        this.setupUI();
+    async init() {
+        try {
+            this.log('Setting up canvas...');
+            this.setupCanvas();
 
-        console.log('🎯 Smart ClickMap Extension v2.0.0 initialized');
-        this.stats.status = 'initialized';
-        this.updateDebugStats();
+            this.log('Setting up event listeners...');
+            this.setupEventListeners();
+
+            this.log('Setting up Twitch extension...');
+            this.setupTwitchExtension();
+
+            this.log('Setting up visibility optimization...');
+            this.setupVisibilityOptimization();
+
+            this.log('Testing backend connection...');
+            await this.testConnection();
+
+            this.log('✅ Extension ready!');
+
+        } catch (error) {
+            this.error('Failed to initialize extension', error);
+        }
+    }
+
+    async testConnection() {
+        try {
+            const response = await fetch(`${this.EBS}/health`, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (!response.ok) {
+                throw new Error(`Health check failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+            this.log(`✅ Backend connection OK - Version: ${data.version}`);
+            return data;
+
+        } catch (error) {
+            this.error('Backend connection failed', error);
+            throw error;
+        }
     }
 
     setupCanvas() {
         const canvas = document.getElementById('heat');
         if (!canvas) {
-            console.error('❌ Heat canvas not found');
-            this.showError('Canvas element not found');
+            this.error('Heat canvas not found!');
             return;
         }
-
-        // Absolutely never capture clicks
-        try {
-            canvas.style.pointerEvents = 'none';
-            // safety for any injected CSS
-            const style = document.createElement('style');
-            style.textContent = `
-                #heat { pointer-events: none !important; }
-                .loading-overlay, .error-overlay { pointer-events: none; } /* overlays remain passive */
-            `;
-            document.head.appendChild(style);
-        } catch { /* noop */ }
 
         this.renderer = new HeatmapRenderer(canvas);
         this.resizeCanvas();
 
-        // Handle window resize
         window.addEventListener('resize', () => {
             clearTimeout(this.resizeTimeout);
             this.resizeTimeout = setTimeout(() => this.resizeCanvas(), 100);
         });
+
+        this.log('✅ Canvas setup complete');
     }
 
     resizeCanvas() {
-        if (!this.renderer) return;
-        // Update renderer’s internal size
-        this.renderer.resize();
-
-        // Recompute 16:9 viewport for this iframe size
-        const cssW = window.innerWidth;
-        const cssH = window.innerHeight;
-        this.viewport = this.fitViewport(cssW, cssH, this.targetAspect);
+        if (this.renderer) {
+            this.renderer.resize();
+        }
     }
 
     setupEventListeners() {
         let clickTimeout = null;
+        let clickCount = 0;
 
-        // Main click handler (does NOT stop propagation; Twitch player still receives clicks)
-        document.addEventListener('click', (event) => {
-            // ✅ Do NOT gate on this.running; only require auth
-            if (!this.authToken) return;
+        // Click handler with debouncing and validation
+        const handleClick = (event) => {
+            if (!this.running || !this.authToken || !this.channelId) {
+                this.log('Click ignored - not ready');
+                return;
+            }
 
-            // Debounce a tad to bundle double-clicks
-            if (clickTimeout) clearTimeout(clickTimeout);
-            clickTimeout = setTimeout(() => this.handleClick(event), 40);
-        }, { passive: true });
+            // Prevent spam clicking
+            clearTimeout(clickTimeout);
+            clickCount++;
 
-        // Touch support — passive and NO preventDefault, so native gestures/controls work
+            clickTimeout = setTimeout(() => {
+                this.processClick(event);
+                clickCount = 0;
+            }, 50);
+        };
+
+        // Mouse clicks
+        document.addEventListener('click', handleClick);
+
+        // Touch support
         document.addEventListener('touchstart', (event) => {
-            if (!this.authToken || event.touches.length > 1) return;
+            if (event.touches.length === 1) {
+                event.preventDefault();
+                const touch = event.touches[0];
+                const syntheticEvent = {
+                    clientX: touch.clientX,
+                    clientY: touch.clientY
+                };
+                handleClick(syntheticEvent);
+            }
+        }, { passive: false });
 
-            const touch = event.touches[0];
-            const syntheticEvent = { clientX: touch.clientX, clientY: touch.clientY };
-
-            if (clickTimeout) clearTimeout(clickTimeout);
-            clickTimeout = setTimeout(() => this.handleClick(syntheticEvent), 40);
-        }, { passive: true });
+        this.log('✅ Event listeners setup complete');
     }
 
-    setupUI() {
-        if (window.debugManager?.isDebugMode) {
-            this.showLoading(true);
-            this.updateStatusBadge('Connecting...', 'inactive');
+    processClick(event) {
+        try {
+            const rect = document.body.getBoundingClientRect();
+            const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+            const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+
+            this.log(`Processing click at (${x.toFixed(3)}, ${y.toFixed(3)})`);
+
+            // Visual feedback
+            this.showClickFeedback(event.clientX, event.clientY);
+
+            // Send to backend
+            this.sendClick(x, y);
+
+        } catch (error) {
+            this.error('Failed to process click', error);
         }
-    }
-
-    handleClick(event) {
-        // Visual feedback (non-blocking, pointer-events: none)
-        this.showClickFeedback(event.clientX, event.clientY);
-
-        // Normalize into 16:9 viewport
-        const { x, y } = this.clientToNormalized(event.clientX, event.clientY);
-
-        // Send click to backend
-        this.sendClick(x, y);
-
-        // Update stats
-        this.stats.clicks++;
-        this.updateDebugStats();
     }
 
     showClickFeedback(clientX, clientY) {
         const feedback = document.createElement('div');
-        feedback.className = 'click-feedback';
         feedback.style.cssText = `
             position: fixed;
             left: ${clientX}px;
             top: ${clientY}px;
             width: 20px;
             height: 20px;
-            border: 2px solid rgba(147, 51, 234, 0.8);
+            border: 2px solid rgba(255, 255, 255, 0.8);
             border-radius: 50%;
             pointer-events: none;
-            z-index: 2147483647;
+            z-index: 10001;
             margin: -10px 0 0 -10px;
-            animation: clickPulse 0.6s ease-out forwards;
+            animation: clickPulse 0.5s ease-out forwards;
+            background: rgba(255, 255, 255, 0.1);
         `;
+
+        // Add animation if not exists
+        if (!document.getElementById('click-animation-style')) {
+            const style = document.createElement('style');
+            style.id = 'click-animation-style';
+            style.textContent = `
+                @keyframes clickPulse {
+                    0% { transform: scale(0); opacity: 1; }
+                    100% { transform: scale(3); opacity: 0; }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
         document.body.appendChild(feedback);
-        setTimeout(() => feedback.remove(), 650);
-        this.announceToScreenReader('Click registered');
+
+        setTimeout(() => {
+            if (feedback.parentNode) {
+                feedback.parentNode.removeChild(feedback);
+            }
+        }, 500);
     }
 
     async sendClick(x, y) {
@@ -184,24 +209,29 @@ class ClickMapExtension {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.authToken}`
                 },
-                body: JSON.stringify({ x, y }) // x,y are normalized to 16:9 viewport
+                body: JSON.stringify({ x, y })
             });
+
             if (!response.ok) {
-                const text = await response.text().catch(() => '');
-                console.warn('⚠️ Click submission failed:', response.status, text);
-            } else {
-                console.debug('✅ click sent', { x: +x.toFixed(3), y: +y.toFixed(3) });
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
             }
+
+            const data = await response.json();
+            if (data.success) {
+                this.log(`✅ Click sent successfully`);
+            } else {
+                throw new Error(data.error || 'Click failed');
+            }
+
         } catch (error) {
-            console.error('❌ Click submission error:', error);
-            if (window.analytics) window.analytics.trackError?.();
+            this.error('Failed to send click', error);
         }
     }
 
     setupTwitchExtension() {
         if (typeof Twitch === 'undefined' || !Twitch.ext) {
-            console.error('❌ Twitch Extension Helper not loaded');
-            this.showError('Twitch Extension Helper not available');
+            this.error('Twitch Extension Helper not available');
             return;
         }
 
@@ -209,200 +239,180 @@ class ClickMapExtension {
             this.authToken = auth.token;
             this.channelId = auth.channelId;
 
-            console.log('✅ Extension authorized for channel:', this.channelId);
-            this.stats.status = 'authorized';
-            this.updateDebugStats();
+            this.log(`✅ Twitch auth: Channel ${this.channelId}`);
 
-            // Optional: tell backend to consider session "running"
-            fetch(`${this.EBS}/start`, { method: 'POST' }).catch(() => { });
-
+            // Start polling and WebSocket
+            this.connectWebSocket();
             this.startPolling();
         });
 
         Twitch.ext.onVisibilityChanged((isVisible) => {
             this.isVisible = isVisible;
+            this.log(`Visibility changed: ${isVisible}`);
+
             if (isVisible) {
+                this.connectWebSocket();
                 this.startPolling();
-                this.updateStatusBadge('Reconnecting...', 'inactive');
             } else {
                 this.stopPolling();
+                this.disconnectWebSocket();
             }
         });
 
-        Twitch.ext.onContext((context, changed) => {
-            if (changed.includes('theme')) this.handleThemeChange(context.theme);
-        });
+        this.log('✅ Twitch extension setup complete');
     }
 
-    handleThemeChange(theme) {
-        document.body.classList.toggle('twitch-light', theme === 'light');
-        document.body.classList.toggle('twitch-dark', theme === 'dark');
-    }
+    connectWebSocket() {
+        if (this.websocket || !this.channelId) return;
 
-    setupVisibilityOptimization() {
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) this.stopPolling();
-            else if (this.isVisible) this.startPolling();
-        });
+        try {
+            const wsUrl = this.EBS.replace('https://', 'wss://').replace('http://', 'ws://');
+            this.websocket = new WebSocket(`${wsUrl}/ws/${this.channelId}`);
 
-        if ('IntersectionObserver' in window) {
-            const observer = new IntersectionObserver((entries) => {
-                const entry = entries[0];
-                if (entry.intersectionRatio === 0) this.stopPolling();
-                else if (this.isVisible) this.startPolling();
-            }, { threshold: 0 });
-            observer.observe(document.body);
+            this.websocket.onopen = () => {
+                this.log('📡 WebSocket connected');
+            };
+
+            this.websocket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    this.updateVisualization(data);
+                } catch (e) {
+                    this.error('WebSocket message parse error', e);
+                }
+            };
+
+            this.websocket.onerror = (error) => {
+                this.error('WebSocket error', error);
+                this.websocket = null;
+            };
+
+            this.websocket.onclose = () => {
+                this.log('📡 WebSocket disconnected');
+                this.websocket = null;
+
+                // Retry connection after delay
+                if (this.isVisible) {
+                    setTimeout(() => this.connectWebSocket(), 5000);
+                }
+            };
+
+        } catch (error) {
+            this.error('WebSocket connection failed', error);
         }
     }
 
-    startPolling() {
-        if (this.pollInterval) return;
+    disconnectWebSocket() {
+        if (this.websocket) {
+            this.websocket.close();
+            this.websocket = null;
+            this.log('📡 WebSocket disconnected manually');
+        }
+    }
 
-        if (window.debugManager?.isDebugMode) this.showLoading(false);
-        this.stats.status = 'polling';
+    setupVisibilityOptimization() {
+        // Pause when tab is not visible
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                this.stopPolling();
+                this.disconnectWebSocket();
+            } else if (this.isVisible) {
+                this.connectWebSocket();
+                this.startPolling();
+            }
+        });
+
+        this.log('✅ Visibility optimization setup complete');
+    }
+
+    startPolling() {
+        if (this.pollInterval || !this.channelId) return;
 
         this.pollInterval = setInterval(() => this.pollHeatmapData(), this.POLL_RATE);
-        this.pollHeatmapData(); // initial
+        this.pollHeatmapData(); // Initial poll
+
+        this.log('✅ Polling started');
     }
 
     stopPolling() {
         if (this.pollInterval) {
             clearInterval(this.pollInterval);
             this.pollInterval = null;
-            this.stats.status = 'stopped';
-            this.updateDebugStats();
+            this.log('⏸️ Polling stopped');
         }
     }
 
     async pollHeatmapData() {
-        const pollStart = performance.now();
-        try {
-            const response = await fetch(`${this.EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-            const data = await response.json();
-            const dataHash = this.hashData(data);
-
-            if (dataHash !== this.lastDataHash) {
-                this.lastDataHash = dataHash;
-                this.updateVisualization(data);
-            }
-
-            this.stats.polls++;
-            this.stats.lastPollTime = `${(performance.now() - pollStart).toFixed(1)}ms`;
-            this.stats.status = this.running ? 'active' : 'inactive';
-
-            if (window.debugManager?.isDebugMode) {
-                this.updateStatusBadge(this.running ? 'Session Active' : 'Session Stopped',
-                    this.running ? 'active' : 'inactive');
-            }
-            this.hideError();
-
-        } catch (error) {
-            console.error('❌ Heatmap polling error:', error);
-            this.showError('Connection lost. Retrying...');
-            if (window.debugManager?.isDebugMode) this.updateStatusBadge('Connection Error', 'inactive');
-            if (window.analytics) window.analytics.trackError?.();
+        // Skip polling if WebSocket is active
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+            return;
         }
 
-        this.updateDebugStats();
-    }
+        try {
+            const response = await fetch(`${this.EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
 
-    hashData(data) {
-        return JSON.stringify({
-            running: data.running,
-            clusters: data.clusters?.map(c => ({
-                x: Math.round((c.x || 0) * 1000),
-                y: Math.round((c.y || 0) * 1000),
-                p: c.percentage
-            })) || []
-        });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            this.updateVisualization(data);
+            this.consecutiveErrors = 0;
+
+        } catch (error) {
+            this.consecutiveErrors++;
+            this.error(`Polling failed (${this.consecutiveErrors}/${this.maxRetries})`, error);
+        }
     }
 
     updateVisualization(data) {
-        this.running = !!data.running;
-        if (!this.renderer) return;
+        try {
+            this.running = data.running;
 
-        // If your backend returns absolute pixel coords, convert to normalized before passing along:
-        // Here we assume server already sends normalized coords [0..1] relative to the same 16:9 projection.
-        this.renderer.updateClusters(data.clusters || []);
-        this.stats.renders++;
-
-        document.body.classList.toggle('clickmap-active', this.running);
-        document.body.classList.toggle('clickmap-has-data', (data.clusters || []).length > 0);
-
-        this.stats.clusters = (data.clusters || []).filter(c => (c.percentage || 0) >= 3).length;
-
-        const visibleClusters = (data.clusters || []).filter(c => (c.percentage || 0) >= 3);
-        if (visibleClusters.length > 0 && this.running) {
-            const top = visibleClusters[0];
-            if (top && (top.percentage || 0) >= 20) {
-                this.announceToScreenReader(`Hot spot detected: ${top.percentage}% of clicks`);
+            if (this.renderer) {
+                this.renderer.updateClusters(data.clusters || []);
             }
-        }
-    }
 
-    updateDebugStats() {
-        if (window.debugManager) {
-            window.debugManager.updateDebugStats({
-                ...this.stats,
-                channel: this.channelId || 'not connected'
-            });
-        }
-    }
+            // Update body classes
+            document.body.classList.toggle('clickmap-active', this.running);
+            document.body.classList.toggle('clickmap-has-data', (data.clusters || []).length > 0);
 
-    // UI Helper Methods
-    showLoading(show) {
-        const el = document.getElementById('loading-overlay');
-        if (el) el.classList.toggle('visible', !!show);
-    }
+            // Debug info
+            if ((data.clusters || []).length > 0) {
+                this.log(`Updated: ${data.clusters.length} clusters, running: ${data.running}`);
+            }
 
-    showError(message) {
-        const errorEl = document.getElementById('error-overlay');
-        const messageEl = document.getElementById('error-message');
-        if (errorEl) {
-            if (messageEl) messageEl.textContent = message;
-            errorEl.style.display = 'block';
-        }
-        console.error('🔴 Extension Error:', message);
-    }
-
-    hideError() {
-        const errorEl = document.getElementById('error-overlay');
-        if (errorEl) errorEl.style.display = 'none';
-    }
-
-    updateStatusBadge(text, status) {
-        const badge = document.getElementById('status-badge');
-        const statusText = document.getElementById('status-text');
-        if (badge && statusText) {
-            statusText.textContent = text;
-            badge.className = `status-badge visible ${status}`;
-        }
-    }
-
-    announceToScreenReader(message) {
-        const announcer = document.getElementById('announcements');
-        if (announcer) {
-            announcer.textContent = message;
-            setTimeout(() => { announcer.textContent = ''; }, 1000);
+        } catch (error) {
+            this.error('Failed to update visualization', error);
         }
     }
 
     destroy() {
         this.stopPolling();
-        if (this.renderer) this.renderer.destroy();
-        if (this.resizeTimeout) clearTimeout(this.resizeTimeout);
-        console.log('🧹 ClickMap Extension destroyed');
+        this.disconnectWebSocket();
+
+        if (this.renderer) {
+            this.renderer.destroy();
+        }
+
+        if (this.resizeTimeout) {
+            clearTimeout(this.resizeTimeout);
+        }
+
+        this.log('🧹 Extension destroyed');
     }
 }
 
-// Initialize extension when DOM is ready
-let extensionInstance = null;
-
+// Initialize extension with error handling
 function initializeExtension() {
-    if (extensionInstance) extensionInstance.destroy();
-    extensionInstance = new ClickMapExtension();
+    try {
+        window.clickMapExtension = new BulletproofExtension();
+    } catch (error) {
+        console.error('❌ Failed to initialize ClickMap extension:', error);
+    }
 }
 
 if (document.readyState === 'loading') {
@@ -411,7 +421,5 @@ if (document.readyState === 'loading') {
     initializeExtension();
 }
 
-// Global reference for debugging
-window.ClickMapExtension = extensionInstance;
-
-export default ClickMapExtension;
+// Global reference
+window.BulletproofExtension = BulletproofExtension;

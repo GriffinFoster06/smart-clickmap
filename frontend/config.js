@@ -1,238 +1,415 @@
-﻿// frontend/config.js
-const EBS = 'https://smart-clickmap-backend.onrender.com';
-const POLL_MS = 1000;
+﻿// frontend/config.js - Bulletproof configuration panel
+import { HeatmapRenderer } from './heatmap.js';
 
-let channel = null;        // what we will actually use for polling
-let channelSource = null;  // 'query','storage','twitch'
-let pollTimer = null;
-let running = false;
+class BulletproofConfigPanel {
+    constructor() {
+        this.EBS = 'https://smart-clickmap-backend.onrender.com';
+        this.pollInterval = null;
+        this.renderer = null;
+        this.sessionStart = null;
+        this.isRunning = false;
+        this.consecutiveErrors = 0;
+        this.maxRetries = 5;
 
-// ---------- DOM ----------
-const $ = (s) => document.querySelector(s);
-const els = {
-    status: $('#status'),
-    statusText: $('#status-text'),
-    totalClicks: $('#total-clicks'),
-    uniqueUsers: $('#unique-users'),
-    clusterCount: $('#cluster-count'),
-    coverage: $('#coverage'),
-    lastUpdate: $('#last-update'),
-    error: $('#error'),
-    startBtn: $('#start-btn'),
-    stopBtn: $('#stop-btn'),
-    resetBtn: $('#reset-btn'),
-    serverStatus: $('#server-status'),
-    overlayStatus: $('#overlay-status'),
-    thresholdVal: $('#threshold-value'),
-};
+        // Debug logging
+        this.debug = true;
 
-// Add a small channel badge in the status row so you can see what we’re using
-(function addChannelBadge() {
-    const badge = document.createElement('span');
-    badge.id = 'channel-badge';
-    badge.style.cssText = 'margin-left:auto;font-size:12px;color:#aaa;font-family:SFMono-Regular,Consolas,monospace;';
-    badge.textContent = '(channel: —)';
-    const container = document.querySelector('.status-section .status-indicator');
-    if (container) container.appendChild(badge);
-})();
-
-function updateChannelBadge() {
-    const b = $('#channel-badge');
-    if (!b) return;
-    if (channel) b.textContent = `(channel: ${channel} • ${channelSource || 'unknown'})`;
-    else b.textContent = '(channel: —)';
-}
-
-// ---------- UI helpers ----------
-function setRunningState(isRunning) {
-    running = isRunning;
-    els.status.classList.toggle('running', isRunning);
-    els.status.classList.toggle('stopped', !isRunning);
-    els.statusText.textContent = isRunning ? 'Running' : 'Stopped';
-    els.startBtn.disabled = isRunning;
-    els.stopBtn.disabled = !isRunning;
-}
-
-function setServerUp(up) {
-    els.serverStatus.textContent = up ? 'Connected' : 'Disconnected';
-    els.serverStatus.style.color = up ? '#4ade80' : '#ef4444';
-}
-
-function setOverlayUp(up) {
-    els.overlayStatus.textContent = up ? 'Ready' : 'Unavailable';
-    els.overlayStatus.style.color = up ? '#4ade80' : '#ef4444';
-}
-
-function setError(msg) {
-    if (!msg) { els.error.style.display = 'none'; return; }
-    els.error.textContent = msg;
-    els.error.style.display = 'block';
-}
-
-const coerceNumber = (n, f = 0) => {
-    const x = typeof n === 'string' ? parseFloat(n) : n;
-    return Number.isFinite(x) ? x : f;
-};
-const fmtPercent = (n) => (n == null || isNaN(n)) ? '-' : `${Math.round(n)}%`;
-
-// ---------- Channel resolution ----------
-function getQueryChannel() {
-    const q = new URLSearchParams(location.search);
-    return q.get('channel') || q.get('c') || q.get('login'); // accept /?login=ljvke too
-}
-function setChannel(ch, src) {
-    if (!ch) return;
-    channel = String(ch);
-    channelSource = src;
-    localStorage.setItem('clickmap.channel', channel);
-    updateChannelBadge();
-}
-function initChannel() {
-    // Priority: query param > localStorage > Twitch auth
-    const qp = getQueryChannel();
-    if (qp) { setChannel(qp, 'query'); return; }
-
-    const stored = localStorage.getItem('clickmap.channel');
-    if (stored) { setChannel(stored, 'storage'); return; }
-
-    // Twitch helper (numeric broadcaster ID usually)
-    try {
-        if (window.Twitch && window.Twitch.ext) {
-            window.Twitch.ext.onAuthorized((auth) => {
-                if (auth?.channelId) {
-                    setChannel(auth.channelId, 'twitch');
-                }
-            });
-        }
-    } catch (e) {
-        console.warn('[channel] Twitch.ext not available', e);
+        this.log('🎛️ Bulletproof Config Panel v3.0.0 initializing...');
+        this.init();
     }
-}
 
-// ---------- Payload normalization ----------
-function normalizePayload(raw) {
-    if (!raw) return { clusters: [] };
-    if (Array.isArray(raw)) return { clusters: raw };
-    if (Array.isArray(raw.clusters)) return { clusters: raw.clusters };
-    if (Array.isArray(raw.blobs)) return { clusters: raw.blobs };
-    if (Array.isArray(raw.data)) return { clusters: raw.data };
-    return { clusters: [raw] };
-}
+    log(message) {
+        if (this.debug) {
+            console.log(`[CONFIG] ${message}`);
+        }
+    }
 
-function extractStats(raw, clusters) {
-    const total = coerceNumber(raw?.totals?.clicks ?? raw?.totalClicks, NaN);
-    const users = coerceNumber(raw?.totals?.users ?? raw?.uniqueUsers, NaN);
-    const coverage = coerceNumber(raw?.coverage, NaN);
-    const fallbackCoverage = clusters.length ? Math.max(...clusters.map(c => coerceNumber(c.percentage, 0))) : 0;
-    return {
-        totalClicks: Number.isFinite(total) ? total : clusters.reduce((a, c) => a + (c.count || 0), 0),
-        users: Number.isFinite(users) ? users : NaN,
-        coverage: Number.isFinite(coverage) ? coverage : fallbackCoverage
-    };
-}
+    error(message, err = null) {
+        console.error(`[CONFIG ERROR] ${message}`, err || '');
+    }
 
-// ---------- Polling with smart fallback keys ----------
-async function fetchHeatmapWithFallbacks(chan) {
-    const base = `${EBS}/heatmap`;
-    const tries = [
-        `${base}?channel=${encodeURIComponent(chan)}`,
-        `${base}?login=${encodeURIComponent(chan)}`,
-        `${base}?id=${encodeURIComponent(chan)}`
-    ];
-
-    for (let i = 0; i < tries.length; i++) {
-        const url = tries[i];
+    async init() {
         try {
-            const resp = await fetch(url, { cache: 'no-store' });
-            if (!resp.ok) { console.warn('[poll] HTTP', resp.status, url); continue; }
-            const json = await resp.json();
-            const payload = normalizePayload(json);
-            const clusters = payload.clusters || [];
-            if (clusters.length > 0) {
-                console.log('[poll] using', url, `(${clusters.length} clusters)`);
-                return { url, payload };
-            }
-            console.log('[poll] empty clusters from', url);
-            if (i === tries.length - 1) return { url, payload }; // last try, return anyway
-        } catch (e) {
-            console.warn('[poll] failed', url, e);
+            this.log('Setting up canvas...');
+            this.setupCanvas();
+
+            this.log('Setting up event listeners...');
+            this.setupEventListeners();
+
+            this.log('Testing backend connection...');
+            await this.testConnection();
+
+            this.log('Starting polling...');
+            this.startPolling();
+
+            this.log('✅ Configuration panel ready!');
+
+        } catch (error) {
+            this.error('Failed to initialize config panel', error);
+            this.showError('Failed to initialize. Check console for details.');
         }
     }
-    return null;
-}
 
-async function pollOnce() {
-    if (!channel) { console.warn('[poll] No channel resolved yet'); return; }
+    async testConnection() {
+        try {
+            const response = await fetch(`${this.EBS}/health`, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
 
-    const result = await fetchHeatmapWithFallbacks(channel);
-    if (!result) {
-        setServerUp(false);
-        setError('Connection error. Retrying...');
-        return;
+            if (!response.ok) {
+                throw new Error(`Health check failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+            this.log(`✅ Backend connection OK - Version: ${data.version}, Running: ${data.running}`);
+            return data;
+
+        } catch (error) {
+            this.error('Backend connection failed', error);
+            throw error;
+        }
     }
 
-    const { payload } = result;
-    const clusters = payload.clusters || [];
-
-    const stats = extractStats(payload, clusters);
-    els.totalClicks.textContent = Number.isFinite(stats.totalClicks) ? stats.totalClicks : '-';
-    els.uniqueUsers.textContent = Number.isFinite(stats.users) ? stats.users : '-';
-    els.clusterCount.textContent = clusters.length;
-    els.coverage.textContent = fmtPercent(stats.coverage);
-    els.lastUpdate.textContent = new Date().toLocaleTimeString();
-
-    setServerUp(true);
-    setError('');
-}
-
-function startPolling() {
-    if (pollTimer) return;
-    pollOnce(); // immediate
-    pollTimer = setInterval(pollOnce, POLL_MS);
-}
-function stopPolling() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-}
-
-// ---------- Buttons ----------
-async function onStart() {
-    const qp = getQueryChannel();
-    if (qp && qp !== channel) setChannel(qp, 'query');
-    if (!channel) {
-        const entered = prompt('Enter channel (login or broadcaster ID):', 'ljvke');
-        if (entered) setChannel(entered, 'prompt');
+    setupCanvas() {
+        const canvas = document.getElementById('mini-canvas');
+        if (canvas) {
+            this.renderer = new HeatmapRenderer(canvas);
+            this.log('✅ Canvas setup complete');
+        } else {
+            this.log('⚠️ Mini canvas not found');
+        }
     }
-    setRunningState(true);
-    startPolling();
+
+    setupEventListeners() {
+        // Get all buttons
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const resetBtn = document.getElementById('reset-btn');
+
+        this.log(`Found buttons: Start=${!!startBtn}, Stop=${!!stopBtn}, Reset=${!!resetBtn}`);
+
+        // START button
+        if (startBtn) {
+            startBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                this.log('🚀 START button clicked');
+                await this.handleStart();
+            });
+            this.log('✅ Start button listener attached');
+        } else {
+            this.error('Start button not found!');
+        }
+
+        // STOP button  
+        if (stopBtn) {
+            stopBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                this.log('⏹️ STOP button clicked');
+                await this.handleStop();
+            });
+            this.log('✅ Stop button listener attached');
+        } else {
+            this.error('Stop button not found!');
+        }
+
+        // RESET button
+        if (resetBtn) {
+            resetBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                this.log('🗑️ RESET button clicked');
+                await this.handleReset();
+            });
+            this.log('✅ Reset button listener attached');
+        } else {
+            this.error('Reset button not found!');
+        }
+    }
+
+    async handleStart() {
+        try {
+            this.log('Sending START request...');
+            this.setButtonDisabled('start-btn', true);
+            this.showStatus('Starting...', 'running');
+
+            const response = await fetch(`${this.EBS}/start`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({})
+            });
+
+            this.log(`START response: ${response.status} ${response.statusText}`);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const data = await response.json();
+            this.log('START response data:', data);
+
+            if (data.success) {
+                this.sessionStart = Date.now();
+                this.isRunning = true;
+                this.showStatus('Session Active', 'running');
+                this.showSuccess('✅ Session started successfully!');
+                this.log('✅ Start successful');
+            } else {
+                throw new Error(data.error || 'Start failed');
+            }
+
+        } catch (error) {
+            this.error('START failed', error);
+            this.showStatus('Start Failed', 'stopped');
+            this.showError(`Failed to start: ${error.message}`);
+        } finally {
+            this.setButtonDisabled('start-btn', false);
+        }
+    }
+
+    async handleStop() {
+        try {
+            this.log('Sending STOP request...');
+            this.setButtonDisabled('stop-btn', true);
+            this.showStatus('Stopping...', 'stopped');
+
+            const response = await fetch(`${this.EBS}/stop`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({})
+            });
+
+            this.log(`STOP response: ${response.status} ${response.statusText}`);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const data = await response.json();
+            this.log('STOP response data:', data);
+
+            if (data.success) {
+                this.sessionStart = null;
+                this.isRunning = false;
+                this.showStatus('Session Stopped', 'stopped');
+                this.showSuccess('⏹️ Session stopped successfully!');
+                this.log('✅ Stop successful');
+            } else {
+                throw new Error(data.error || 'Stop failed');
+            }
+
+        } catch (error) {
+            this.error('STOP failed', error);
+            this.showStatus('Stop Failed', 'stopped');
+            this.showError(`Failed to stop: ${error.message}`);
+        } finally {
+            this.setButtonDisabled('stop-btn', false);
+        }
+    }
+
+    async handleReset() {
+        if (!confirm('⚠️ Clear all click data? This cannot be undone.')) {
+            this.log('Reset cancelled by user');
+            return;
+        }
+
+        try {
+            this.log('Sending RESET request...');
+            this.setButtonDisabled('reset-btn', true);
+
+            const response = await fetch(`${this.EBS}/reset`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({})
+            });
+
+            this.log(`RESET response: ${response.status} ${response.statusText}`);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const data = await response.json();
+            this.log('RESET response data:', data);
+
+            if (data.success) {
+                this.showSuccess('🗑️ Data cleared successfully!');
+                this.log('✅ Reset successful');
+
+                // Clear preview
+                if (this.renderer) {
+                    this.renderer.updateClusters([]);
+                }
+            } else {
+                throw new Error(data.error || 'Reset failed');
+            }
+
+        } catch (error) {
+            this.error('RESET failed', error);
+            this.showError(`Failed to reset: ${error.message}`);
+        } finally {
+            this.setButtonDisabled('reset-btn', false);
+        }
+    }
+
+    startPolling() {
+        if (this.pollInterval) {
+            clearInterval(this.pollInterval);
+        }
+
+        this.pollInterval = setInterval(() => this.pollData(), 1000);
+        this.pollData(); // Initial poll
+        this.log('✅ Polling started');
+    }
+
+    async pollData() {
+        try {
+            const response = await fetch(`${this.EBS}/heatmap`, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            this.updateUI(data);
+            this.consecutiveErrors = 0;
+            this.hideError();
+
+        } catch (error) {
+            this.consecutiveErrors++;
+            this.error(`Polling failed (${this.consecutiveErrors}/${this.maxRetries})`, error);
+
+            if (this.consecutiveErrors >= this.maxRetries) {
+                this.showError(`Connection lost after ${this.maxRetries} attempts. Check server.`);
+            }
+        }
+    }
+
+    updateUI(data) {
+        try {
+            // Update running state
+            this.isRunning = data.running;
+
+            // Update stats
+            this.updateElement('total-clicks', data.totalClicks || 0);
+            this.updateElement('unique-users', data.uniqueUsers || 0);
+            this.updateElement('cluster-count', (data.clusters || []).length);
+            this.updateElement('coverage', `${data.coverage || 0}%`);
+
+            // Update status
+            if (data.running) {
+                this.showStatus('Session Active', 'running');
+            } else {
+                this.showStatus('Session Stopped', 'stopped');
+            }
+
+            // Update preview
+            if (this.renderer) {
+                this.renderer.updateClusters(data.clusters || []);
+            }
+
+            // Update last update time
+            this.updateElement('last-update', new Date().toLocaleTimeString());
+
+            // Update server status
+            this.updateElement('server-status', 'Connected');
+            this.updateElement('overlay-status', data.running ? 'Active' : 'Stopped');
+
+        } catch (error) {
+            this.error('Failed to update UI', error);
+        }
+    }
+
+    // UI Helper methods
+    updateElement(id, value) {
+        const element = document.getElementById(id);
+        if (element) {
+            element.textContent = value;
+        }
+    }
+
+    setButtonDisabled(buttonId, disabled) {
+        const button = document.getElementById(buttonId);
+        if (button) {
+            button.disabled = disabled;
+            this.log(`Button ${buttonId} disabled: ${disabled}`);
+        }
+    }
+
+    showStatus(text, type) {
+        const statusEl = document.getElementById('status');
+        const statusText = document.getElementById('status-text');
+
+        if (statusEl && statusText) {
+            statusEl.className = `status-indicator ${type}`;
+            statusText.textContent = text;
+        }
+
+        const previewStatus = document.getElementById('preview-status');
+        if (previewStatus) {
+            previewStatus.textContent = type === 'running' ? 'Live' : 'Stopped';
+            previewStatus.className = `preview-status ${type === 'running' ? 'live' : 'stopped'}`;
+        }
+    }
+
+    showError(message) {
+        const errorEl = document.getElementById('error');
+        if (errorEl) {
+            errorEl.textContent = message;
+            errorEl.style.display = 'block';
+        }
+        this.error(message);
+    }
+
+    hideError() {
+        const errorEl = document.getElementById('error');
+        if (errorEl) {
+            errorEl.style.display = 'none';
+        }
+    }
+
+    showSuccess(message) {
+        this.log(`SUCCESS: ${message}`);
+        // Could add a success toast here
+        console.log(`✅ ${message}`);
+    }
+
+    destroy() {
+        if (this.pollInterval) {
+            clearInterval(this.pollInterval);
+        }
+        if (this.renderer) {
+            this.renderer.destroy();
+        }
+        this.log('🧹 Config panel destroyed');
+    }
 }
-async function onStop() { setRunningState(false); stopPolling(); }
-async function onReset() {
+
+// Initialize when DOM is ready with error handling
+function initializeConfig() {
     try {
-        const url = `${EBS}/reset?channel=${encodeURIComponent(channel || '')}`;
-        const resp = await fetch(url, { method: 'POST' });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-        els.totalClicks.textContent = '0';
-        els.clusterCount.textContent = '0';
-        els.coverage.textContent = '0%';
-        els.lastUpdate.textContent = new Date().toLocaleTimeString();
-        setError('');
-    } catch (e) {
-        console.warn('Reset failed', e);
-        setError('Reset failed. Check console for details.');
+        window.configPanel = new BulletproofConfigPanel();
+    } catch (error) {
+        console.error('❌ Failed to initialize config panel:', error);
     }
 }
 
-// ---------- Boot ----------
-document.addEventListener('DOMContentLoaded', async () => {
-    els.startBtn?.addEventListener('click', onStart);
-    els.stopBtn?.addEventListener('click', onStop);
-    els.resetBtn?.addEventListener('click', onReset);
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeConfig);
+} else {
+    initializeConfig();
+}
 
-    setRunningState(false);
-    setOverlayUp(true);
-    els.thresholdVal.textContent = '3%';
-
-    initChannel();
-    updateChannelBadge();
-});
+// Global reference for debugging
+window.BulletproofConfigPanel = BulletproofConfigPanel;

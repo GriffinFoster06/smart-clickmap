@@ -1,553 +1,325 @@
-﻿// frontend/overlay/overlay.js - Aspect-correct 16:9 projection, smooth animation, click-through everywhere
-(function () {
-    'use strict';
+﻿// frontend/overlay/overlay.js - Bulletproof OBS overlay
+const EBS = 'https://smart-clickmap-backend.onrender.com';
 
-    const EBS = 'https://smart-clickmap-backend.onrender.com';
-    const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+class BulletproofHeatmapRenderer {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.clusters = [];
+        this.PERCENTAGE_THRESHOLD = 3;
 
-    // --- Overlay root so nothing in our subtree can ever eat clicks ---
-    let overlayRoot = document.getElementById('overlay-root');
-    if (!overlayRoot) {
-        overlayRoot = document.createElement('div');
-        overlayRoot.id = 'overlay-root';
-        document.body.appendChild(overlayRoot);
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+
+        console.log('🎨 Heatmap renderer initialized');
     }
 
-    // Global safety: make page transparent and ensure our overlay never captures input
-    try {
-        document.documentElement.style.background = 'transparent';
-        document.body.style.background = 'transparent';
-        const style = document.createElement('style');
-        style.textContent = `
-      html, body { background: transparent !important; }
-      /* Our overlay subtree can never capture events */
-      #overlay-root, #overlay-root * { pointer-events: none !important; }
-      /* Fullscreen, on top, but inert to input */
-      #overlay-root {
-        position: fixed; inset: 0;
-        z-index: 2147483647; /* above twitch chrome, still inert */
-      }
-      /* The canvas is a direct child */
-      #overlay-canvas {
-        position: absolute; left: 0; top: 0; right: 0; bottom: 0;
-        width: 100vw; height: 100vh; display: block;
-        background: transparent !important;
-        touch-action: none; /* avoid touch panning capture on mobile */
-      }
-    `;
-        document.head.appendChild(style);
-    } catch { }
+    resize() {
+        const dpr = window.devicePixelRatio || 1;
+        this.canvas.width = window.innerWidth * dpr;
+        this.canvas.height = window.innerHeight * dpr;
+        this.canvas.style.width = window.innerWidth + 'px';
+        this.canvas.style.height = window.innerHeight + 'px';
+        this.ctx.scale(dpr, dpr);
 
-    // Ensure we have a canvas inside our root
-    let canvas = document.getElementById('overlay-canvas');
-    if (!canvas) {
-        canvas = document.createElement('canvas');
-        canvas.id = 'overlay-canvas';
-        overlayRoot.appendChild(canvas);
+        console.log(`🔄 Canvas resized: ${window.innerWidth}x${window.innerHeight} (DPR: ${dpr})`);
     }
 
-    // ---------- helpers ----------
-    function parseAspectFromURL() {
-        const params = new URLSearchParams(window.location.search);
+    updateClusters(newClusters) {
+        this.clusters = (newClusters || [])
+            .filter(cluster => (cluster.percentage || 0) >= this.PERCENTAGE_THRESHOLD)
+            .sort((a, b) => b.percentage - a.percentage);
 
-        const bw = parseInt(params.get('base_w') || params.get('bw') || '', 10);
-        const bh = parseInt(params.get('base_h') || params.get('bh') || '', 10);
-        if (Number.isFinite(bw) && bw > 0 && Number.isFinite(bh) && bh > 0) {
-            return bw / bh; // OBS base canvas hint
-        }
+        this.render();
 
-        const aspectStr = params.get('aspect');
-        if (aspectStr) {
-            const parts = aspectStr.split(/[:/]/).map(Number);
-            if (parts.length === 2 && parts.every(n => Number.isFinite(n) && n > 0)) {
-                return parts[0] / parts[1];
-            }
-            const asFloat = parseFloat(aspectStr);
-            if (Number.isFinite(asFloat) && asFloat > 0) return asFloat;
-        }
-
-        return 16 / 9; // default: works for ANY 16:9 size (720p/900p/936p/1080p/etc)
+        console.log(`📊 Updated clusters: ${this.clusters.length} visible`);
     }
 
-    // Center a target aspect inside the window using "contain" fit.
-    function fitViewport(containerW, containerH, targetAspect) {
-        let vw = containerW;
-        let vh = Math.round(vw / targetAspect);
-        if (vh > containerH) {
-            vh = containerH;
-            vw = Math.round(vh * targetAspect);
-        }
-        const vx = Math.floor((containerW - vw) / 2);
-        const vy = Math.floor((containerH - vh) / 2);
-        return { x: vx, y: vy, width: vw, height: vh };
+    render() {
+        const W = window.innerWidth;
+        const H = window.innerHeight;
+
+        this.ctx.clearRect(0, 0, W, H);
+
+        if (this.clusters.length === 0) return;
+
+        this.clusters.forEach((cluster) => {
+            this.renderCleanCircle(cluster, W, H);
+        });
     }
 
-    function hashSeed(x, y, pct, count) {
-        let h = 2166136261 >>> 0;
-        function mix(n) { h ^= (n | 0); h = Math.imul(h, 16777619); }
-        mix((x * 1e6) | 0);
-        mix((y * 1e6) | 0);
-        mix(((pct || 0) * 100) | 0);
-        mix(count | 0);
-        return (h >>> 0) / 4294967295;
+    renderCleanCircle(cluster, W, H) {
+        const cx = cluster.x * W;
+        const cy = cluster.y * H;
+        const percentage = cluster.percentage || 0;
+
+        // Size based on percentage - exactly like the reference image
+        const baseRadius = Math.max(35, Math.min(75, 40 + (percentage * 1.2)));
+
+        this.ctx.save();
+
+        // Clean dark circular background - semi-transparent
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        this.ctx.beginPath();
+        this.ctx.arc(cx, cy, baseRadius, 0, 2 * Math.PI);
+        this.ctx.fill();
+
+        // Clean white border - like the reference
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+        this.ctx.lineWidth = 2.5;
+        this.ctx.stroke();
+
+        // Subtle inner highlight for professional look
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+        this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        this.ctx.arc(cx, cy, baseRadius - 4, 0, 2 * Math.PI);
+        this.ctx.stroke();
+
+        // Clean bold percentage text
+        const fontSize = Math.max(18, Math.min(28, baseRadius * 0.55));
+        this.ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+
+        // Text shadow for better contrast
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        this.ctx.fillText(`${percentage}%`, cx + 1, cy + 1);
+
+        // Main white text
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillText(`${percentage}%`, cx, cy);
+
+        this.ctx.restore();
     }
 
-    function wobble(t, seed, base = 1.0, amp = 0.10) {
-        const a1 = Math.sin(t * 0.7 + seed * 6.28318);
-        const a2 = Math.sin(t * 1.1 + seed * 12.56636);
-        const a3 = Math.sin(t * 0.43 + seed * 3.14159);
-        const n = (a1 * 0.5 + a2 * 0.35 + a3 * 0.15);
-        return base * (1.0 + amp * n);
+    setThreshold(threshold) {
+        this.PERCENTAGE_THRESHOLD = threshold;
+        this.render();
+        console.log(`🎯 Threshold updated: ${threshold}%`);
+    }
+}
+
+class BulletproofObsOverlay {
+    constructor() {
+        this.channelId = this.getChannelFromUrl();
+        this.renderer = null;
+        this.websocket = null;
+        this.pollInterval = null;
+        this.consecutiveErrors = 0;
+        this.maxRetries = 5;
+
+        console.log('🎯 Bulletproof OBS Overlay v3.0.0 initializing...');
+        this.init();
     }
 
-    // Critically-damped spring
-    class Spring {
-        constructor(value = 0, { omega = 10, zeta = 1 } = {}) {
-            this.x = value;
-            this.v = 0;
-            this.omega = omega;
-            this.zeta = zeta;
-            this.target = value;
-        }
-        setTarget(t) { this.target = t; }
-        jump(v) { this.x = v; this.v = 0; this.target = v; }
-        step(dt) {
-            const f = -this.omega * this.omega * (this.x - this.target) - 2 * this.zeta * this.omega * this.v;
-            this.v += f * dt;
-            this.x += this.v * dt;
-            return this.x;
-        }
-    }
-
-    class PreciseAreaRenderer {
-        constructor(canvas, opts = {}) {
-            this.canvas = canvas;
-            this.ctx = canvas.getContext('2d', { alpha: true });
-
-            // Absolute click-through insurance
-            this.canvas.style.pointerEvents = 'none';
-
-            this.PERCENTAGE_THRESHOLD = 3;
-            this.MIN_RADIUS = 80;
-            this.MAX_RADIUS = 160;
-
-            this.targetAspect = opts.targetAspect || 16 / 9;
-            this.viewport = { x: 0, y: 0, width: 0, height: 0 };
-
-            this.springs = new Map(); // key -> {x,y,r,p,seed}
-            this.targets = new Map();
-
-            this.animationId = null;
-            this.lastTs = 0;
-
-            this.resize();
-            window.addEventListener('resize', () => this.resize());
-            this.start();
-        }
-
-        start() {
-            if (REDUCED_MOTION) return;
-            if (this.animationId) return;
-            const loop = (ts) => {
-                if (!this.lastTs) this.lastTs = ts;
-                const dt = Math.min(0.05, Math.max(0.001, (ts - this.lastTs) / 1000));
-                this.lastTs = ts;
-
-                for (const [key, s] of this.springs.entries()) {
-                    const t = this.targets.get(key);
-                    if (!t) continue;
-                    s.x.setTarget(t.x);
-                    s.y.setTarget(t.y);
-                    s.r.setTarget(t.r);
-                    s.p.setTarget(t.p);
-                    s.x.step(dt); s.y.step(dt); s.r.step(dt); s.p.step(dt);
-                }
-
-                this.render(ts / 1000);
-                this.animationId = requestAnimationFrame(loop);
-            };
-            this.animationId = requestAnimationFrame(loop);
-        }
-
-        stop() { if (this.animationId) cancelAnimationFrame(this.animationId); this.animationId = null; }
-
-        resize() {
-            const dpr = window.devicePixelRatio || 1;
-            const cssW = window.innerWidth;
-            const cssH = window.innerHeight;
-
-            // Fullscreen canvas that never eats clicks (pointer-events: none in CSS)
-            this.canvas.width = Math.max(1, Math.floor(cssW * dpr));
-            this.canvas.height = Math.max(1, Math.floor(cssH * dpr));
-            this.canvas.style.width = cssW + 'px';
-            this.canvas.style.height = cssH + 'px';
-
-            this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-            // Project clusters into a 16:9 box centered in the window.
-            // This way, ANY 16:9 stream size lines up perfectly.
-            this.viewport = fitViewport(cssW, cssH, this.targetAspect);
-            this.render(performance.now() / 1000);
-        }
-
-        updateClusters(newClusters) {
-            const filtered = (newClusters || [])
-                .filter(c => (c.percentage || 0) >= this.PERCENTAGE_THRESHOLD);
-
-            const nextTargets = new Map();
-            for (const c of filtered) {
-                const baseArea = this.MIN_RADIUS + (c.percentage * 2.5);
-                const densityFactor = c.density ? Math.sqrt(c.density) : 1;
-                const spreadRadius = c.radius || 0.05;
-                const effectiveRadius = Math.max(
-                    this.MIN_RADIUS,
-                    Math.min(this.MAX_RADIUS, baseArea * densityFactor + (spreadRadius * 200))
-                );
-
-                const key = c.id ?? `${(c.x * 10000 | 0)}_${(c.y * 10000 | 0)}_${c.count | 0}`;
-                nextTargets.set(key, { x: c.x, y: c.y, r: effectiveRadius, p: c.percentage || 0, count: c.count || 1 });
-
-                if (!this.springs.has(key)) {
-                    const seed = hashSeed(c.x, c.y, c.percentage || 0, c.count || 1);
-                    this.springs.set(key, {
-                        x: new Spring(c.x, { omega: 9, zeta: 0.95 }),
-                        y: new Spring(c.y, { omega: 9, zeta: 0.95 }),
-                        r: new Spring(effectiveRadius, { omega: 12, zeta: 0.9 }),
-                        p: new Spring(c.percentage || 0, { omega: 7, zeta: 1.0 }),
-                        seed
-                    });
-                }
-            }
-            // prune missing
-            for (const key of [...this.springs.keys()]) {
-                if (!nextTargets.has(key)) this.springs.delete(key);
-            }
-            this.targets = nextTargets;
-
-            if (REDUCED_MOTION) {
-                for (const [key, s] of this.springs.entries()) {
-                    const t = this.targets.get(key);
-                    s.x.jump(t.x); s.y.jump(t.y); s.r.jump(t.r); s.p.jump(t.p);
-                }
-                this.render(performance.now() / 1000);
-            }
-        }
-
-        render(tSec = 0) {
-            const cssW = this.canvas.width / (window.devicePixelRatio || 1);
-            const cssH = this.canvas.height / (window.devicePixelRatio || 1);
-            this.ctx.clearRect(0, 0, cssW, cssH);
-
-            const { x: vx, y: vy, width: vw, height: vh } = this.viewport;
-
-            const drawables = [];
-            for (const [key, s] of this.springs.entries()) {
-                drawables.push({
-                    key,
-                    cx: vx + s.x.x * vw,   // IMPORTANT: normalized to 16:9 viewport, not the whole window
-                    cy: vy + s.y.x * vh,
-                    radius: s.r.x,
-                    percentage: s.p.x,
-                    seed: s.seed
-                });
-            }
-            drawables.sort((a, b) => a.percentage - b.percentage);
-
-            for (let i = 0; i < drawables.length; i++) {
-                const d = drawables[i];
-                const isTop = i === drawables.length - 1;
-
-                const wobbleAmp = Math.min(0.12, 0.06 + (d.percentage / 100) * 0.08);
-                const r = REDUCED_MOTION ? d.radius : d.radius * wobble(tSec, d.seed, 1.0, wobbleAmp);
-
-                let fillColor, borderColor;
-                if (isTop) { fillColor = 'rgba(0, 255, 255, 0.20)'; borderColor = 'rgba(0, 255, 255, 0.85)'; }
-                else if (d.percentage >= 15) { fillColor = 'rgba(147, 51, 234, 0.25)'; borderColor = 'rgba(147, 51, 234, 0.90)'; }
-                else { fillColor = 'rgba(147, 51, 234, 0.20)'; borderColor = 'rgba(147, 51, 234, 0.70)'; }
-
-                const needsPolygon = (d.percentage >= 20) && !REDUCED_MOTION;
-                if (needsPolygon) this.renderPolygonArea(d.cx, d.cy, r, fillColor, borderColor, tSec, d.seed, d.percentage);
-                else this.renderCircularArea(d.cx, d.cy, r, fillColor, borderColor);
-
-                this._renderPercentageLabel(d.cx, d.cy, Math.round(d.percentage), r, isTop);
-            }
-        }
-
-        renderCircularArea(cx, cy, radius, fillColor, borderColor) {
-            this.ctx.fillStyle = fillColor;
-            this.ctx.beginPath();
-            this.ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-            this.ctx.fill();
-
-            this.ctx.strokeStyle = borderColor;
-            this.ctx.lineWidth = 3;
-            this.ctx.stroke();
-
-            this.ctx.strokeStyle = borderColor.replace(/[\d\.]+\)$/g, '0.3)');
-            this.ctx.lineWidth = 1.5;
-            this.ctx.beginPath();
-            this.ctx.arc(cx, cy, radius - 6, 0, Math.PI * 2);
-            this.ctx.stroke();
-        }
-
-        renderPolygonArea(cx, cy, radius, fillColor, borderColor, tSec, seed, pct) {
-            const sides = Math.max(8, Math.min(16, 6 + Math.floor(pct / 7)));
-            this.ctx.beginPath();
-            for (let i = 0; i <= sides; i++) {
-                const a = (i / sides) * Math.PI * 2;
-                const local = wobble(tSec + i * 0.07, seed * 0.73, 1.0, 0.06);
-                const rr = radius * (0.94 + 0.08 * local);
-                const x = cx + Math.cos(a) * rr;
-                const y = cy + Math.sin(a) * rr;
-                if (i === 0) this.ctx.moveTo(x, y); else this.ctx.lineTo(x, y);
-            }
-            this.ctx.closePath();
-
-            this.ctx.fillStyle = fillColor;
-            this.ctx.fill();
-
-            this.ctx.strokeStyle = borderColor;
-            this.ctx.lineWidth = 3;
-            this.ctx.stroke();
-        }
-
-        // ---------- labels (text only; leader line only when needed) ----------
-        _pointRectDistance(px, py, rx, ry, rw, rh) {
-            const cx = Math.max(rx, Math.min(px, rx + rw));
-            const cy = Math.max(ry, Math.min(py, ry + rh));
-            const dx = px - cx;
-            const dy = py - cy;
-            return Math.hypot(dx, dy);
-        }
-
-        _computeLabelLayout(cx, cy, text, fontSize, radius) {
-            const ctx = this.ctx;
-            const { x: vx, y: vy, width: vw, height: vh } = this.viewport;
-
-            const textWidth = ctx.measureText(text).width;
-            const boxW = Math.ceil(textWidth);
-            const boxH = Math.ceil(fontSize);
-
-            let lx = cx, ly = cy;
-
-            const gutter = 6;
-            const minX = vx + gutter + boxW / 2;
-            const maxX = vx + vw - gutter - boxW / 2;
-            const minY = vy + gutter + boxH / 2;
-            const maxY = vy + vh - gutter - boxH / 2;
-
-            const clampedLx = Math.max(minX, Math.min(maxX, lx));
-            const clampedLy = Math.max(minY, Math.min(maxY, ly));
-
-            const box = {
-                x: Math.round(clampedLx - boxW / 2),
-                y: Math.round(clampedLy - boxH / 2),
-                w: boxW,
-                h: boxH
-            };
-
-            const dist = this._pointRectDistance(cx, cy, box.x, box.y, box.w, box.h);
-            const separated = dist > Math.max(0, radius - 2);
-
-            return { box, center: { x: clampedLx, y: clampedLy }, separated };
-        }
-
-        _renderPercentageLabel(cx, cy, percentage, radius, isTop) {
-            const ctx = this.ctx;
-            const str = `${percentage}%`;
-
-            const fontSize = Math.max(22, Math.min(40, radius * 0.35));
-            ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-
-            const layout = this._computeLabelLayout(cx, cy, str, fontSize, radius);
-
-            if (layout.separated) {
-                const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
-                const sx = cx + Math.cos(ang) * Math.max(0, radius - 4);
-                const sy = cy + Math.sin(ang) * Math.max(0, radius - 4);
-
-                const halfW = layout.box.w / 2, halfH = layout.box.h / 2;
-                const ex = layout.center.x - Math.sign(Math.cos(ang)) * (halfW - 2);
-                const ey = layout.center.y - Math.sign(Math.sin(ang)) * (halfH - 2);
-
-                ctx.save();
-                ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.85)' : 'rgba(147, 51, 234, 0.85)';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(sx, sy);
-                ctx.lineTo(ex, ey);
-                ctx.stroke();
-                ctx.restore();
-            }
-
-            // Text only (no pill)
-            ctx.save();
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-            ctx.shadowBlur = 8;
-            ctx.shadowOffsetX = 2;
-            ctx.shadowOffsetY = 2;
-
-            ctx.fillStyle = '#ffffff';
-            ctx.fillText(str, layout.center.x, layout.center.y);
-
-            ctx.shadowBlur = 0;
-            ctx.shadowOffsetX = 0;
-            ctx.shadowOffsetY = 0;
-
-            ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.9)' : 'rgba(147, 51, 234, 0.9)';
-            ctx.lineWidth = 1;
-            ctx.strokeText(str, layout.center.x, layout.center.y);
-            ctx.restore();
-        }
-
-        setThreshold(threshold) { this.PERCENTAGE_THRESHOLD = threshold; }
-    }
-
-    class InstantOverlay {
-        constructor() {
-            this.channelId = this.getChannelFromUrl();
-            this.renderer = null;
-            this.websocket = null;
-            this.pollInterval = null;
-            this.consecutiveErrors = 0;
-
-            this.init();
-        }
-
-        init() {
+    async init() {
+        try {
             if (!this.channelId) {
-                console.error('Missing channel parameter');
-                return;
+                throw new Error('Missing channel parameter in URL. Add ?channel=CHANNEL_NAME');
             }
+
+            console.log(`🔗 Connecting to channel: ${this.channelId}`);
+
+            await this.testConnection();
             this.setupRenderer();
             this.connectWebSocket();
             this.startPolling();
-            console.log(`🎯 Precise area overlay connected to: ${this.channelId}`);
+
+            console.log('✅ OBS Overlay ready!');
+
+        } catch (error) {
+            console.error('❌ OBS Overlay initialization failed:', error);
+            this.showError(error.message);
         }
+    }
 
-        getChannelFromUrl() {
-            const params = new URLSearchParams(window.location.search);
-            return params.get('channel') || params.get('c');
-        }
+    async testConnection() {
+        try {
+            const response = await fetch(`${EBS}/health`, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
 
-        setupRenderer() {
-            const targetAspect = parseAspectFromURL();
-            this.renderer = new PreciseAreaRenderer(canvas, { targetAspect });
-
-            const threshold = new URLSearchParams(window.location.search).get('threshold');
-            if (threshold) this.renderer.setThreshold(parseInt(threshold, 10));
-        }
-
-        connectWebSocket() {
-            // Allow disabling via query param: ?ws=0
-            const qp = new URLSearchParams(location.search);
-            const forceOff = qp.get('ws') === '0' || qp.get('ws') === 'false';
-            if (forceOff) {
-                console.info('[WS] disabled via query param; polling only.');
-                this.websocket = null;
-                return;
+            if (!response.ok) {
+                throw new Error(`Backend health check failed: ${response.status}`);
             }
 
-            const base = EBS.replace('https://', 'wss://').replace('http://', 'ws://');
-            const chan = this.channelId;
+            const data = await response.json();
+            console.log(`✅ Backend connection OK - Version: ${data.version}, Running: ${data.running}`);
+            return data;
 
-            // Try both styles
-            const candidates = [
-                `${base}/ws/${encodeURIComponent(chan)}`,
-                `${base}/ws?channel=${encodeURIComponent(chan)}`
-            ];
+        } catch (error) {
+            console.error('❌ Backend connection failed:', error);
+            throw new Error('Cannot connect to ClickMap server. Check backend status.');
+        }
+    }
 
-            const tryNext = (i = 0) => {
-                if (i >= candidates.length) {
-                    console.warn('[WS] All candidates failed; using polling only.');
-                    this.websocket = null;
-                    return;
-                }
+    getChannelFromUrl() {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('channel') || params.get('c');
+    }
 
-                const url = candidates[i];
-                let ws;
-                try {
-                    ws = new WebSocket(url);
-                } catch (e) {
-                    console.warn('[WS] construct failed for', url, e);
-                    return tryNext(i + 1);
-                }
+    setupRenderer() {
+        const canvas = document.getElementById('overlay-canvas');
+        if (!canvas) {
+            throw new Error('Canvas element not found');
+        }
 
-                let opened = false;
+        this.renderer = new BulletproofHeatmapRenderer(canvas);
 
-                ws.onopen = () => {
-                    opened = true;
-                    this.websocket = ws;
-                    console.info('[WS] connected:', url);
-                };
+        // Custom threshold from URL
+        const threshold = new URLSearchParams(window.location.search).get('threshold');
+        if (threshold) {
+            this.renderer.setThreshold(parseInt(threshold));
+            console.log(`🎯 Custom threshold: ${threshold}%`);
+        }
+    }
 
-                ws.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        this.updateVisualization(data);
-                    } catch (e) {
-                        console.warn('[WS] parse error:', e);
-                    }
-                };
+    connectWebSocket() {
+        if (this.websocket) return;
 
-                ws.onerror = (ev) => {
-                    console.warn('[WS] error:', url, ev?.message || ev);
-                };
+        try {
+            const wsUrl = EBS.replace('https://', 'wss://').replace('http://', 'ws://');
+            this.websocket = new WebSocket(`${wsUrl}/ws/${this.channelId}`);
 
-                ws.onclose = (ev) => {
-                    const { code, reason, wasClean } = ev || {};
-                    console.warn('[WS] closed:', url, { code, reason, wasClean });
-
-                    if (!opened) return tryNext(i + 1);       // try next URL form
-                    setTimeout(() => tryNext(i), 5000);        // reconnect same URL
-                };
+            this.websocket.onopen = () => {
+                console.log('📡 WebSocket connected');
             };
 
-            tryNext(0);
+            this.websocket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    this.updateVisualization(data);
+                } catch (e) {
+                    console.error('❌ WebSocket parse error:', e);
+                }
+            };
+
+            this.websocket.onerror = (error) => {
+                console.error('❌ WebSocket error:', error);
+                this.websocket = null;
+            };
+
+            this.websocket.onclose = () => {
+                console.log('📡 WebSocket disconnected');
+                this.websocket = null;
+
+                // Retry connection
+                setTimeout(() => this.connectWebSocket(), 5000);
+            };
+
+        } catch (error) {
+            console.error('❌ WebSocket connection failed:', error);
+        }
+    }
+
+    startPolling() {
+        if (this.pollInterval) return;
+
+        this.pollInterval = setInterval(() => this.poll(), 800);
+        this.poll(); // Initial poll
+
+        console.log('⏰ Polling started');
+    }
+
+    async poll() {
+        // Skip if WebSocket is active
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+            return;
         }
 
+        try {
+            const response = await fetch(
+                `${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`,
+                {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                }
+            );
 
-        startPolling() {
-            this.pollInterval = setInterval(() => this.poll(), 800);
-            this.poll();
-        }
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
 
-        async poll() {
-            if (this.websocket && this.websocket.readyState === WebSocket.OPEN) return;
+            const data = await response.json();
+            this.updateVisualization(data);
+            this.consecutiveErrors = 0;
 
-            try {
-                const response = await fetch(`${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        } catch (error) {
+            this.consecutiveErrors++;
+            console.error(`❌ Polling error (${this.consecutiveErrors}/${this.maxRetries}):`, error);
 
-                const data = await response.json();
-                this.updateVisualization(data);
-                this.consecutiveErrors = 0;
-
-            } catch (error) {
-                this.consecutiveErrors++;
-                if (this.consecutiveErrors <= 3) console.warn(`Connection issue ${this.consecutiveErrors}/3`);
+            if (this.consecutiveErrors >= this.maxRetries) {
+                this.showError(`Connection lost after ${this.maxRetries} attempts. Server may be down.`);
             }
         }
+    }
 
-        updateVisualization(data) {
-            if (!this.renderer) return;
-            const clusters = Array.isArray(data) ? data : (data?.clusters || data?.blobs || []);
-            this.renderer.updateClusters(clusters);
+    updateVisualization(data) {
+        if (this.renderer) {
+            this.renderer.updateClusters(data.clusters || []);
+        }
+
+        // Log significant updates
+        if ((data.clusters || []).length > 0) {
+            console.log(`📊 Updated: ${data.clusters.length} clusters, ${data.totalClicks} total clicks`);
         }
     }
 
-    function initialize() {
-        try {
-            new InstantOverlay();
-            console.log('🎯 Precise area-based overlay loaded');
-        } catch (error) { console.error('Failed to initialize overlay:', error); }
+    showError(message) {
+        const errorEl = document.getElementById('error');
+        if (errorEl) {
+            const paragraphs = errorEl.querySelectorAll('p');
+            if (paragraphs.length > 0) {
+                paragraphs[paragraphs.length - 1].textContent = message;
+            }
+            errorEl.style.display = 'block';
+        }
+
+        console.error(`🔴 Error: ${message}`);
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initialize);
-    } else {
-        initialize();
+    hideError() {
+        const errorEl = document.getElementById('error');
+        if (errorEl) {
+            errorEl.style.display = 'none';
+        }
     }
-})();
+}
+
+// Initialize with complete error handling
+function initializeObsOverlay() {
+    try {
+        window.obsOverlay = new BulletproofObsOverlay();
+    } catch (error) {
+        console.error('❌ Failed to initialize OBS overlay:', error);
+
+        // Show error in DOM if possible
+        const errorEl = document.getElementById('error');
+        if (errorEl) {
+            errorEl.style.display = 'block';
+            const paragraphs = errorEl.querySelectorAll('p');
+            if (paragraphs.length > 0) {
+                paragraphs[0].textContent = 'Failed to initialize overlay: ' + error.message;
+            }
+        }
+    }
+}
+
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeObsOverlay);
+} else {
+    initializeObsOverlay();
+}
+
+// URL parameter info
+console.log('🎯 OBS Overlay URL Parameters:');
+console.log('   ?channel=CHANNEL_NAME (required)');
+console.log('   &threshold=5 (optional, default: 3)');
+console.log('');
+console.log('📖 Example: overlay.html?channel=ninja&threshold=5');
+
+// Global reference for debugging
+window.BulletproofObsOverlay = BulletproofObsOverlay;

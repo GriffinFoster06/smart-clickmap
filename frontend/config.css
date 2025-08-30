@@ -98,7 +98,7 @@ body {
     font-weight: 500;
 }
 
-/* ===== PREVIEW SECTION ===== */
+/* ===== PREVIEW SECTION ===== 
 .preview-section {
     background: #2a2a2a;
     border: 1px solid #333333;
@@ -150,6 +150,7 @@ body {
     height: 100%;
     background: transparent;
 }
+    */
 
 /* ===== CONTROLS SECTION ===== */
 .controls-section {

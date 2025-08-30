@@ -2,9 +2,6 @@
 const EBS = 'https://smart-clickmap-backend.onrender.com';
 const POLL_MS = 1000;
 
-let HeatmapRenderer = null; // loaded dynamically, root-safe
-let renderer = null;
-
 let channel = null;        // what we will actually use for polling
 let channelSource = null;  // 'query','storage','twitch'
 let pollTimer = null;
@@ -15,7 +12,6 @@ const $ = (s) => document.querySelector(s);
 const els = {
     status: $('#status'),
     statusText: $('#status-text'),
-    previewStatus: $('#preview-status'),
     totalClicks: $('#total-clicks'),
     uniqueUsers: $('#unique-users'),
     clusterCount: $('#cluster-count'),
@@ -28,7 +24,6 @@ const els = {
     serverStatus: $('#server-status'),
     overlayStatus: $('#overlay-status'),
     thresholdVal: $('#threshold-value'),
-    miniCanvas: $('#mini-canvas'),
 };
 
 // Add a small channel badge in the status row so you can see what we’re using
@@ -53,10 +48,6 @@ function setRunningState(isRunning) {
     running = isRunning;
     els.status.classList.toggle('running', isRunning);
     els.status.classList.toggle('stopped', !isRunning);
-    els.previewStatus.textContent = isRunning ? 'Live' : 'Stopped';
-    els.previewStatus.classList.toggle('live', isRunning);
-    els.previewStatus.classList.toggle('stopped', !isRunning);
-
     els.statusText.textContent = isRunning ? 'Running' : 'Stopped';
     els.startBtn.disabled = isRunning;
     els.stopBtn.disabled = !isRunning;
@@ -83,35 +74,6 @@ const coerceNumber = (n, f = 0) => {
     return Number.isFinite(x) ? x : f;
 };
 const fmtPercent = (n) => (n == null || isNaN(n)) ? '-' : `${Math.round(n)}%`;
-
-// ---------- Root-safe import for heatmap.js ----------
-async function ensureRenderer() {
-    if (!HeatmapRenderer) {
-        // import heatmap.js relative to THIS file (works in Twitch root asset host)
-        const mod = await import(new URL('./heatmap.js', import.meta.url));
-        HeatmapRenderer = mod.HeatmapRenderer;
-    }
-    if (!renderer && els.miniCanvas) {
-        renderer = new HeatmapRenderer(els.miniCanvas);
-
-        // 🔑 Preview should show ALL clusters (even <3%)
-        renderer.setThreshold(0);
-        renderer.updateClusters([]); // paint once so it's not blank
-
-        // Make sure initial layout is respected
-        renderer.resize();
-        // One more resize on next tick in case layout just changed
-        setTimeout(() => renderer && renderer.resize(), 0);
-
-        try {
-            const ro = new ResizeObserver(() => renderer.resize());
-            ro.observe(els.miniCanvas.parentElement || els.miniCanvas);
-        } catch {
-            window.addEventListener('resize', () => renderer.resize());
-        }
-    }
-    return renderer;
-}
 
 // ---------- Channel resolution ----------
 function getQueryChannel() {
@@ -151,41 +113,10 @@ function initChannel() {
 function normalizePayload(raw) {
     if (!raw) return { clusters: [] };
     if (Array.isArray(raw)) return { clusters: raw };
-    if (Array.isArray(raw.clusters)) return { clusters: raw.clusters, width: raw.width, height: raw.height };
-    if (Array.isArray(raw.blobs)) return { clusters: raw.blobs, width: raw.width, height: raw.height };
-    if (Array.isArray(raw.data)) return { clusters: raw.data, width: raw.width, height: raw.height };
+    if (Array.isArray(raw.clusters)) return { clusters: raw.clusters };
+    if (Array.isArray(raw.blobs)) return { clusters: raw.blobs };
+    if (Array.isArray(raw.data)) return { clusters: raw.data };
     return { clusters: [raw] };
-}
-
-function normalizeClustersForPreview(payload, canvasW, canvasH) {
-    const { clusters, width, height } = payload;
-
-    const mapped = clusters.map((c) => ({
-        x: ('x' in c) ? coerceNumber(c.x, 0) : 0,
-        y: ('y' in c) ? coerceNumber(c.y, 0) : 0,
-        percentage: coerceNumber(c.percentage ?? c.pct, 0),
-        count: coerceNumber(c.count, 1),
-        density: coerceNumber(c.density, 1),
-        radius: coerceNumber(c.radius, 0.05),
-        id: c.id
-    }));
-
-    const maxX = mapped.reduce((m, c) => Math.max(m, c.x), 0);
-    const maxY = mapped.reduce((m, c) => Math.max(m, c.y), 0);
-
-    let W = width || (maxX > 1 ? maxX : 1);
-    let H = height || (maxY > 1 ? maxY : 1);
-
-    if (W <= 1 && H <= 1) return mapped; // already normalized
-
-    if (W < 2 && canvasW) W = canvasW;
-    if (H < 2 && canvasH) H = canvasH;
-
-    return mapped.map(c => ({
-        ...c,
-        x: W ? Math.min(1, Math.max(0, c.x / W)) : c.x,
-        y: H ? Math.min(1, Math.max(0, c.y / H)) : c.y
-    }));
 }
 
 function extractStats(raw, clusters) {
@@ -221,7 +152,6 @@ async function fetchHeatmapWithFallbacks(chan) {
                 console.log('[poll] using', url, `(${clusters.length} clusters)`);
                 return { url, payload };
             }
-            // Empty is ambiguous; try next variant before giving up
             console.log('[poll] empty clusters from', url);
             if (i === tries.length - 1) return { url, payload }; // last try, return anyway
         } catch (e) {
@@ -234,10 +164,6 @@ async function fetchHeatmapWithFallbacks(chan) {
 async function pollOnce() {
     if (!channel) { console.warn('[poll] No channel resolved yet'); return; }
 
-    const canvasW = (els.miniCanvas?.clientWidth) || 320;
-    const canvasH = (els.miniCanvas?.clientHeight) || 180;
-
-    // First try the “channel=” path; fall back to “login=” and “id=”
     const result = await fetchHeatmapWithFallbacks(channel);
     if (!result) {
         setServerUp(false);
@@ -246,16 +172,7 @@ async function pollOnce() {
     }
 
     const { payload } = result;
-    const clusters = normalizeClustersForPreview(payload, canvasW, canvasH);
-
-    await ensureRenderer();
-
-    // helpful debug: see exactly what preview receives
-    console.debug('[preview→renderer]', clusters.map(c => ({
-        x: +c.x.toFixed(3), y: +c.y.toFixed(3), pct: c.percentage
-    })));
-
-    renderer?.updateClusters(clusters);
+    const clusters = payload.clusters || [];
 
     const stats = extractStats(payload, clusters);
     els.totalClicks.textContent = Number.isFinite(stats.totalClicks) ? stats.totalClicks : '-';
@@ -282,7 +199,6 @@ async function onStart() {
     const qp = getQueryChannel();
     if (qp && qp !== channel) setChannel(qp, 'query');
     if (!channel) {
-        // fallback prompt for quick testing in root-only hosting
         const entered = prompt('Enter channel (login or broadcaster ID):', 'ljvke');
         if (entered) setChannel(entered, 'prompt');
     }
@@ -295,8 +211,7 @@ async function onReset() {
         const url = `${EBS}/reset?channel=${encodeURIComponent(channel || '')}`;
         const resp = await fetch(url, { method: 'POST' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        await ensureRenderer();
-        renderer?.updateClusters([]);
+
         els.totalClicks.textContent = '0';
         els.clusterCount.textContent = '0';
         els.coverage.textContent = '0%';
@@ -320,5 +235,4 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     initChannel();
     updateChannelBadge();
-    await ensureRenderer(); // build preview renderer immediately
 });

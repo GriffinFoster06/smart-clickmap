@@ -16,18 +16,26 @@ if (useRedis) {
     redis = Redis.createClient({ url: process.env.REDIS_URL });
     await redis.connect();
 } else {
-    clicks = new Map(); // Map<channelId, Map<userId, {x,y,timestamp}>>
+    // Map<channelId, Map<userId, {x,y,timestamp}>>
+    clicks = new Map();
 }
 
-// --- Per-channel running state ---
+// ======== Channel running state ========
+// Default behavior: channels are RUNNING unless explicitly stopped.
+// Flip to false to require an explicit /start per channel.
+const DEFAULT_RUNNING = true;
+
 const isRunningByChannel = new Map(); // Map<channelId, boolean>
-const connectedClients = new Map();   // Map<channelId, Set<ws>>
+const connectedClients = new Map(); // Map<channelId, Set<ws>>
 
 function getRunning(channelId) {
-    return !!isRunningByChannel.get(channelId);
+    if (!channelId) return DEFAULT_RUNNING;
+    const v = isRunningByChannel.get(channelId);
+    return (v === undefined) ? DEFAULT_RUNNING : !!v;
 }
 function setRunning(channelId, value) {
     isRunningByChannel.set(channelId, !!value);
+    console.log(`▶️  channel ${channelId} running=${!!value}`);
 }
 async function clearChannelStorage(channelId) {
     if (!channelId) return;
@@ -37,15 +45,16 @@ async function clearChannelStorage(channelId) {
     } else {
         clicks.delete(channelId);
     }
+    console.log(`🧹 cleared storage for channel ${channelId}`);
 }
 function resolveChannelIdFromReq(req) {
-    // Try query params first (?channel= / ?login= / ?id=)
+    // Prefer query params (?channel= / ?login= / ?id=)
     const url = new URL(req.url, `http://${req.headers.host}`);
     const qp = url.searchParams;
     const qChan = qp.get('channel') || qp.get('login') || qp.get('id');
     if (qChan) return qChan;
 
-    // Fallback to JWT (for POST /click or when auth header present)
+    // Fallback: Authorization JWT (present for /click)
     const auth = (req.headers.authorization || '').replace('Bearer ', '');
     if (auth) {
         try {
@@ -68,7 +77,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// ---------- Clustering ----------
+// ======== Clustering ========
 class PreciseClusterer {
     constructor(points) {
         this.points = points.map((p, i) => ({ ...p, id: i, visited: false, cluster: -1 }));
@@ -153,16 +162,16 @@ class PreciseClusterer {
         });
         const result = [];
         clusterMap.forEach((clusterPoints, id) => {
-            const metrics = this.calculateClusterMetrics(clusterPoints);
+            const m = this.calculateClusterMetrics(clusterPoints);
             result.push({
-                x: metrics.centroid.x,
-                y: metrics.centroid.y,
+                x: m.centroid.x,
+                y: m.centroid.y,
                 count: clusterPoints.length,
-                density: metrics.density,
-                spread: metrics.spread,
-                maxSpread: metrics.maxSpread,
-                compactness: metrics.compactness,
-                radius: Math.max(0.02, metrics.maxSpread),
+                density: m.density,
+                spread: m.spread,
+                maxSpread: m.maxSpread,
+                compactness: m.compactness,
+                radius: Math.max(0.02, m.maxSpread),
                 points: clusterPoints,
                 clusterId: id
             });
@@ -170,23 +179,16 @@ class PreciseClusterer {
         const individuals = this.points.filter(p => p.cluster === -1);
         individuals.forEach((point, idx) => {
             result.push({
-                x: point.x,
-                y: point.y,
-                count: 1,
-                density: 10,
-                spread: 0.01,
-                maxSpread: 0.02,
-                compactness: 1,
-                radius: 0.025,
-                points: [point],
-                clusterId: `individual_${idx}`
+                x: point.x, y: point.y, count: 1, density: 10,
+                spread: 0.01, maxSpread: 0.02, compactness: 1, radius: 0.025,
+                points: [point], clusterId: `individual_${idx}`
             });
         });
         return result.sort((a, b) => b.count - a.count);
     }
 }
 
-// ---------- WS broadcast ----------
+// ======== Broadcast ========
 function broadcastToChannel(channelId, data) {
     const clients = connectedClients.get(channelId);
     if (!clients) return;
@@ -202,7 +204,7 @@ function broadcastToChannel(channelId, data) {
     });
 }
 
-// ---------- Routes ----------
+// ======== Routes ========
 app.post('/click', async (req, res) => {
     try {
         const token = (req.headers.authorization || '').replace('Bearer ', '');
@@ -216,8 +218,8 @@ app.post('/click', async (req, res) => {
             return res.status(400).json({ error: 'invalid coordinates' });
         }
 
-        // Gate by per-channel running state
         if (!getRunning(channelId)) {
+            console.log(`⏸️  ignored click while stopped (channel ${channelId})`);
             return res.status(202).json({ ignored: true, reason: 'channel_stopped' });
         }
 
@@ -237,7 +239,6 @@ app.post('/click', async (req, res) => {
     }
 });
 
-// Start/stop/reset are now channel-aware
 app.post('/start', async (req, res) => {
     const channelId = resolveChannelIdFromReq(req);
     if (!channelId) return res.status(400).json({ error: 'missing channel' });
@@ -267,19 +268,20 @@ app.post('/reset', async (req, res) => {
     if (!channelId) return res.status(400).json({ error: 'missing channel' });
 
     await clearChannelStorage(channelId);
-
-    broadcastToChannel(channelId, { running: getRunning(channelId), clusters: [], totalClicks: 0, uniqueUsers: 0, coverage: 0 });
+    broadcastToChannel(channelId, {
+        running: getRunning(channelId),
+        clusters: [], totalClicks: 0, uniqueUsers: 0, coverage: 0
+    });
     res.json({ status: 'reset', channel: channelId });
 });
 
-// Heatmap now reflects per-channel running state
 app.get('/heatmap', async (req, res) => {
     const channelId = req.query.channel;
     const requestedThreshold = parseInt(req.query.threshold) || 3;
 
     if (!channelId) {
         return res.json({
-            running: false,
+            running: DEFAULT_RUNNING,
             clusters: [],
             totalClicks: 0,
             uniqueUsers: 0,
@@ -296,11 +298,12 @@ app.get('/heatmap', async (req, res) => {
 app.get('/health', (_, res) => res.json({
     status: 'ok',
     timestamp: Date.now(),
-    version: '2.3.0',
-    clustering: 'precise'
+    version: '2.3.1',
+    clustering: 'precise',
+    defaultRunning: DEFAULT_RUNNING
 }));
 
-// ---------- Heatmap helper ----------
+// ======== Heatmap helper ========
 async function getHeatmapData(channelId, requestedThreshold = 3) {
     let points = [];
     let userCount = 0;
@@ -356,9 +359,7 @@ async function getHeatmapData(channelId, requestedThreshold = 3) {
         .filter(cluster => cluster.percentage >= requestedThreshold)
         .sort((a, b) => b.percentage - a.percentage);
 
-    if (formattedClusters.length > 0) {
-        formattedClusters[0].isTop = true;
-    }
+    if (formattedClusters.length > 0) formattedClusters[0].isTop = true;
 
     const coverage = Math.min(100, Math.round((formattedClusters.length / Math.max(1, points.length * 0.1)) * 100));
 
@@ -372,10 +373,10 @@ async function getHeatmapData(channelId, requestedThreshold = 3) {
     };
 }
 
-// ---------- HTTP + WS Server ----------
+// ======== HTTP + WebSocket Server ========
 const server = createServer(app);
 
-// Accept ANY path and parse the channel from either /ws/<id> or ?channel=<id>
+// Accept dynamic paths; parse channel from /ws/<id>, /<id>, or ?channel=<id>
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws, req) => {
@@ -383,11 +384,8 @@ wss.on('connection', (ws, req) => {
     let channelId = url.searchParams.get('channel');
     if (!channelId) {
         const parts = url.pathname.split('/').filter(Boolean); // e.g. ["ws","167556274"]
-        if (parts[0]) {
-            // support /ws/<id> or /<id>
-            if (parts[0] === 'ws' && parts[1]) channelId = parts[1];
-            else if (parts[0] && !parts[1]) channelId = parts[0]; // bare "/<id>"
-        }
+        if (parts[0] === 'ws' && parts[1]) channelId = parts[1];
+        else if (parts[0] && !parts[1]) channelId = parts[0]; // bare "/<id>"
     }
 
     if (!channelId) {
@@ -407,7 +405,6 @@ wss.on('connection', (ws, req) => {
         }
     });
 
-    // Keep-alive pings to satisfy proxies
     const interval = setInterval(() => {
         if (ws.readyState === ws.OPEN) {
             try { ws.ping(); } catch { }
@@ -426,8 +423,9 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, () => {
-    console.log('🚀 Precise ClickMap EBS v2.3.0 running on port', PORT);
+    console.log('🚀 Precise ClickMap EBS v2.3.1 running on port', PORT);
     console.log('📊 Redis:', useRedis ? 'enabled' : 'disabled');
+    console.log(`⚙️  DEFAULT_RUNNING = ${DEFAULT_RUNNING}`);
     console.log('🎯 Enhanced precision clustering for close-together clicks');
 });
 

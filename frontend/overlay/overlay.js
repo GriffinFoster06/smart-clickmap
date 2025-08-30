@@ -1,26 +1,50 @@
-﻿// frontend/overlay/overlay.js - Aspect-correct overlay with smooth animation, smart labels (no pill), and click-through
+﻿// frontend/overlay/overlay.js - Aspect-correct 16:9 projection, smooth animation, click-through everywhere
 (function () {
     'use strict';
 
     const EBS = 'https://smart-clickmap-backend.onrender.com';
     const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    // Ensure the page is transparent and overlay never blocks clicks (e.g., Twitch theater mode)
+    // --- Overlay root so nothing in our subtree can ever eat clicks ---
+    let overlayRoot = document.getElementById('overlay-root');
+    if (!overlayRoot) {
+        overlayRoot = document.createElement('div');
+        overlayRoot.id = 'overlay-root';
+        document.body.appendChild(overlayRoot);
+    }
+
+    // Global safety: make page transparent and ensure our overlay never captures input
     try {
         document.documentElement.style.background = 'transparent';
         document.body.style.background = 'transparent';
         const style = document.createElement('style');
         style.textContent = `
-            html, body { background: transparent !important; }
-            #overlay-canvas {
-                pointer-events: none !important;
-                position: fixed; inset: 0;
-                width: 100vw; height: 100vh;
-                display: block;
-            }
-        `;
+      html, body { background: transparent !important; }
+      /* Our overlay subtree can never capture events */
+      #overlay-root, #overlay-root * { pointer-events: none !important; }
+      /* Fullscreen, on top, but inert to input */
+      #overlay-root {
+        position: fixed; inset: 0;
+        z-index: 2147483647; /* above twitch chrome, still inert */
+      }
+      /* The canvas is a direct child */
+      #overlay-canvas {
+        position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+        width: 100vw; height: 100vh; display: block;
+        background: transparent !important;
+        touch-action: none; /* avoid touch panning capture on mobile */
+      }
+    `;
         document.head.appendChild(style);
     } catch { }
+
+    // Ensure we have a canvas inside our root
+    let canvas = document.getElementById('overlay-canvas');
+    if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.id = 'overlay-canvas';
+        overlayRoot.appendChild(canvas);
+    }
 
     // ---------- helpers ----------
     function parseAspectFromURL() {
@@ -29,7 +53,7 @@
         const bw = parseInt(params.get('base_w') || params.get('bw') || '', 10);
         const bh = parseInt(params.get('base_h') || params.get('bh') || '', 10);
         if (Number.isFinite(bw) && bw > 0 && Number.isFinite(bh) && bh > 0) {
-            return bw / bh;
+            return bw / bh; // OBS base canvas hint
         }
 
         const aspectStr = params.get('aspect');
@@ -42,9 +66,10 @@
             if (Number.isFinite(asFloat) && asFloat > 0) return asFloat;
         }
 
-        return 16 / 9; // default common OBS base
+        return 16 / 9; // default: works for ANY 16:9 size (720p/900p/936p/1080p/etc)
     }
 
+    // Center a target aspect inside the window using "contain" fit.
     function fitViewport(containerW, containerH, targetAspect) {
         let vw = containerW;
         let vh = Math.round(vw / targetAspect);
@@ -99,7 +124,7 @@
             this.canvas = canvas;
             this.ctx = canvas.getContext('2d', { alpha: true });
 
-            // Click-through always
+            // Absolute click-through insurance
             this.canvas.style.pointerEvents = 'none';
 
             this.PERCENTAGE_THRESHOLD = 3;
@@ -151,6 +176,7 @@
             const cssW = window.innerWidth;
             const cssH = window.innerHeight;
 
+            // Fullscreen canvas that never eats clicks (pointer-events: none in CSS)
             this.canvas.width = Math.max(1, Math.floor(cssW * dpr));
             this.canvas.height = Math.max(1, Math.floor(cssH * dpr));
             this.canvas.style.width = cssW + 'px';
@@ -158,6 +184,8 @@
 
             this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+            // Project clusters into a 16:9 box centered in the window.
+            // This way, ANY 16:9 stream size lines up perfectly.
             this.viewport = fitViewport(cssW, cssH, this.targetAspect);
             this.render(performance.now() / 1000);
         }
@@ -216,7 +244,7 @@
             for (const [key, s] of this.springs.entries()) {
                 drawables.push({
                     key,
-                    cx: vx + s.x.x * vw,
+                    cx: vx + s.x.x * vw,   // IMPORTANT: normalized to 16:9 viewport, not the whole window
                     cy: vy + s.y.x * vh,
                     radius: s.r.x,
                     percentage: s.p.x,
@@ -283,7 +311,7 @@
             this.ctx.stroke();
         }
 
-        // ---------- label helpers (NO PILL) ----------
+        // ---------- labels (text only; leader line only when needed) ----------
         _pointRectDistance(px, py, rx, ry, rw, rh) {
             const cx = Math.max(rx, Math.min(px, rx + rw));
             const cy = Math.max(ry, Math.min(py, ry + rh));
@@ -292,17 +320,14 @@
             return Math.hypot(dx, dy);
         }
 
-        // Compute clamped label position; leader line only if the text box is fully off the blob
         _computeLabelLayout(cx, cy, text, fontSize, radius) {
             const ctx = this.ctx;
             const { x: vx, y: vy, width: vw, height: vh } = this.viewport;
 
             const textWidth = ctx.measureText(text).width;
-            // approximate text box (no pill): width = textWidth, height ≈ fontSize
             const boxW = Math.ceil(textWidth);
             const boxH = Math.ceil(fontSize);
 
-            // desired label center at blob center
             let lx = cx, ly = cy;
 
             const gutter = 6;
@@ -338,7 +363,6 @@
 
             const layout = this._computeLabelLayout(cx, cy, str, fontSize, radius);
 
-            // Only draw leader line if text box is fully off the blob
             if (layout.separated) {
                 const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
                 const sx = cx + Math.cos(ang) * Math.max(0, radius - 4);
@@ -358,7 +382,7 @@
                 ctx.restore();
             }
 
-            // Text with shadow + outline (no background box)
+            // Text only (no pill)
             ctx.save();
             ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
             ctx.shadowBlur = 8;
@@ -409,11 +433,6 @@
         }
 
         setupRenderer() {
-            const canvas = document.getElementById('overlay-canvas');
-            if (!canvas) return;
-
-            canvas.style.pointerEvents = 'none';
-
             const targetAspect = parseAspectFromURL();
             this.renderer = new PreciseAreaRenderer(canvas, { targetAspect });
 
@@ -439,7 +458,6 @@
                     this.websocket = null;
                     setTimeout(() => this.connectWebSocket(), 5000);
                 };
-
             } catch (e) {
                 console.log('WebSocket not available');
             }
@@ -468,7 +486,9 @@
         }
 
         updateVisualization(data) {
-            if (this.renderer) this.renderer.updateClusters(data.clusters || []);
+            if (!this.renderer) return;
+            const clusters = Array.isArray(data) ? data : (data?.clusters || data?.blobs || []);
+            this.renderer.updateClusters(clusters);
         }
     }
 

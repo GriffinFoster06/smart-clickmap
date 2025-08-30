@@ -1,4 +1,4 @@
-﻿// frontend/heatmap.js - Smooth, spring-animated clustering with smart labels and click-through
+﻿// frontend/heatmap.js - Smooth, spring-animated clustering with smart labels (no pill) and click-through
 export class HeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
@@ -194,23 +194,7 @@ export class HeatmapRenderer {
         this.ctx.stroke();
     }
 
-    // ---------- label helpers ----------
-    _drawRoundedRect(x, y, w, h, r) {
-        const ctx = this.ctx;
-        const rr = Math.min(r, h * 0.5, w * 0.5);
-        ctx.beginPath();
-        ctx.moveTo(x + rr, y);
-        ctx.lineTo(x + w - rr, y);
-        ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
-        ctx.lineTo(x + w, y + h - rr);
-        ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
-        ctx.lineTo(x + rr, y + h);
-        ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
-        ctx.lineTo(x, y + rr);
-        ctx.quadraticCurveTo(x, y, x + rr, y);
-        ctx.closePath();
-    }
-
+    // ---------- label helpers (NO PILL) ----------
     _pointRectDistance(px, py, rx, ry, rw, rh) {
         const cx = Math.max(rx, Math.min(px, rx + rw));
         const cy = Math.max(ry, Math.min(py, ry + rh));
@@ -225,40 +209,37 @@ export class HeatmapRenderer {
         const H = this.canvas.height / (window.devicePixelRatio || 1);
 
         const textWidth = ctx.measureText(text).width;
-        const padX = Math.round(fontSize * 0.6);
-        the const padY = Math.round(fontSize * 0.35);
-        const pillW = Math.ceil(textWidth + padX * 2);
-        const pillH = Math.ceil(fontSize + padY * 2);
+        const boxW = Math.ceil(textWidth);
+        const boxH = Math.ceil(fontSize);
 
         let lx = cx, ly = cy;
         const gutter = 6;
-        const minX = gutter + pillW / 2;
-        const maxX = W - gutter - pillW / 2;
-        const minY = gutter + pillH / 2;
-        const maxY = H - gutter - pillH / 2;
+        const minX = gutter + boxW / 2;
+        const maxX = W - gutter - boxW / 2;
+        const minY = gutter + boxH / 2;
+        const maxY = H - gutter - boxH / 2;
 
         const clampedLx = Math.max(minX, Math.min(maxX, lx));
         const clampedLy = Math.max(minY, Math.min(maxY, ly));
 
-        const pill = {
-            x: Math.round(clampedLx - pillW / 2),
-            y: Math.round(clampedLy - pillH / 2),
-            w: pillW,
-            h: pillH
+        const box = {
+            x: Math.round(clampedLx - boxW / 2),
+            y: Math.round(clampedLy - boxH / 2),
+            w: boxW,
+            h: boxH
         };
 
-        // Only draw a leader if the pill doesn't overlap the circle
-        const dist = this._pointRectDistance(cx, cy, pill.x, pill.y, pill.w, pill.h);
+        const dist = this._pointRectDistance(cx, cy, box.x, box.y, box.w, box.h);
         const separated = dist > Math.max(0, radius - 2);
 
-        return { pill, center: { x: clampedLx, y: clampedLy }, separated };
+        return { box, center: { x: clampedLx, y: clampedLy }, separated };
     }
 
     _renderPercentageLabelCanvas(cx, cy, percentage, radius, isTop) {
         const ctx = this.ctx;
         const str = `${percentage}%`;
 
-        const fontSize = Math.max(24, Math.min(40, radius * 0.35));
+        const fontSize = Math.max(22, Math.min(40, radius * 0.35));
         ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -270,7 +251,7 @@ export class HeatmapRenderer {
             const sx = cx + Math.cos(ang) * Math.max(0, radius - 4);
             const sy = cy + Math.sin(ang) * Math.max(0, radius - 4);
 
-            const halfW = layout.pill.w / 2, halfH = layout.pill.h / 2;
+            const halfW = layout.box.w / 2, halfH = layout.box.h / 2;
             const ex = layout.center.x - Math.sign(Math.cos(ang)) * (halfW - 2);
             const ey = layout.center.y - Math.sign(Math.sin(ang)) * (halfH - 2);
 
@@ -284,13 +265,7 @@ export class HeatmapRenderer {
             ctx.restore();
         }
 
-        // More transparent pill
-        ctx.save();
-        ctx.fillStyle = 'rgba(0,0,0,0.30)'; // was 0.55
-        this._drawRoundedRect(layout.pill.x, layout.pill.y, layout.pill.w, layout.pill.h, Math.round(fontSize * 0.45));
-        ctx.fill();
-        ctx.restore();
-
+        // Text only (no background box)
         ctx.save();
         ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
         ctx.shadowBlur = 8;
@@ -304,7 +279,7 @@ export class HeatmapRenderer {
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
 
-        ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.85)' : 'rgba(147, 51, 234, 0.85)';
+        ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.9)' : 'rgba(147, 51, 234, 0.9)';
         ctx.lineWidth = 1;
         ctx.strokeText(str, layout.center.x, layout.center.y);
         ctx.restore();

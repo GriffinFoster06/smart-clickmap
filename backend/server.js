@@ -9,6 +9,15 @@ import { createServer } from 'http';
 const PORT = process.env.PORT || 8080;
 const SECRET = Buffer.from(process.env.TWITCH_SECRET || '', 'base64');
 
+// GLOBAL SESSION STATE - SINGLE SOURCE OF TRUTH
+let GLOBAL_SESSION_STATE = {
+    isRunning: false,
+    startedAt: null,
+    stoppedAt: null,
+    totalClicks: 0,
+    lastActivity: null
+};
+
 const useRedis = !!process.env.REDIS_URL;
 let clicks;
 let redis;
@@ -19,7 +28,6 @@ if (useRedis) {
     clicks = new Map(); // channelId → Map(userId → { x, y, timestamp })
 }
 
-let isRunning = false;
 const connectedClients = new Map(); // channelId → Set of WebSocket connections
 
 const app = express();
@@ -34,16 +42,20 @@ app.use((req, res, next) => {
     next();
 });
 
-// Add request logging middleware
+// COMPREHENSIVE REQUEST LOGGING
 app.use((req, res, next) => {
-    console.log(`📝 ${req.method} ${req.url} - ${new Date().toISOString()}`);
+    const timestamp = new Date().toISOString();
+    console.log(`\n📝 [${timestamp}] ${req.method} ${req.url}`);
+    console.log(`📝 Session State: ${GLOBAL_SESSION_STATE.isRunning ? 'RUNNING' : 'STOPPED'}`);
     if (req.body && Object.keys(req.body).length > 0) {
         console.log('📝 Body:', req.body);
     }
     next();
 });
 
-// Enhanced clustering algorithm
+// ========================================
+// CLUSTERING ALGORITHM (UNCHANGED)
+// ========================================
 class DensityClusterer {
     constructor(points) {
         this.points = points.map((p, i) => ({ ...p, id: i, visited: false, cluster: -1 }));
@@ -52,10 +64,8 @@ class DensityClusterer {
     calculateOptimalEps() {
         const n = this.points.length;
         if (n < 4) return 0.05;
-
         const k = Math.max(3, Math.min(10, Math.floor(n * 0.08)));
         const distances = [];
-
         this.points.forEach(point => {
             const dists = this.points
                 .filter(p => p.id !== point.id)
@@ -64,12 +74,9 @@ class DensityClusterer {
                 .slice(0, k);
             distances.push(dists[dists.length - 1]);
         });
-
         distances.sort((a, b) => a - b);
-
         let maxChange = 0;
         let optimalEps = distances[Math.floor(distances.length * 0.75)];
-
         for (let i = 1; i < distances.length - 1; i++) {
             const change = distances[i + 1] - distances[i - 1];
             if (change > maxChange) {
@@ -77,7 +84,6 @@ class DensityClusterer {
                 optimalEps = distances[i];
             }
         }
-
         return Math.max(0.03, Math.min(0.12, optimalEps));
     }
 
@@ -93,18 +99,13 @@ class DensityClusterer {
 
     cluster() {
         if (this.points.length === 0) return [];
-
         const eps = this.calculateOptimalEps();
         const minPts = Math.max(2, Math.floor(this.points.length * 0.04));
-
         let clusterId = 0;
-
         this.points.forEach(point => {
             if (point.visited) return;
-
             point.visited = true;
             const neighbors = this.getNeighbors(point, eps);
-
             if (neighbors.length < minPts) {
                 point.cluster = -1;
             } else {
@@ -112,7 +113,6 @@ class DensityClusterer {
                 clusterId++;
             }
         });
-
         const clusterMap = new Map();
         this.points.forEach(point => {
             if (point.cluster >= 0) {
@@ -122,7 +122,6 @@ class DensityClusterer {
                 clusterMap.get(point.cluster).push(point);
             }
         });
-
         const result = [];
         clusterMap.forEach(clusterPoints => {
             const totalWeight = clusterPoints.length;
@@ -136,30 +135,22 @@ class DensityClusterer {
             };
             result.push(centroid);
         });
-
         if (this.points.length <= 20) {
             const noise = this.points.filter(p => p.cluster === -1);
             noise.forEach(point => {
                 result.push({
-                    x: point.x,
-                    y: point.y,
-                    count: 1,
-                    density: 1,
-                    radius: eps * 0.6,
-                    points: [point]
+                    x: point.x, y: point.y, count: 1, density: 1,
+                    radius: eps * 0.6, points: [point]
                 });
             });
         }
-
         return result.sort((a, b) => b.count - a.count);
     }
 
     expandCluster(point, neighbors, clusterId, eps, minPts) {
         point.cluster = clusterId;
-
         for (let i = 0; i < neighbors.length; i++) {
             const neighbor = neighbors[i];
-
             if (!neighbor.visited) {
                 neighbor.visited = true;
                 const newNeighbors = this.getNeighbors(neighbor, eps);
@@ -169,7 +160,6 @@ class DensityClusterer {
                     ));
                 }
             }
-
             if (neighbor.cluster === -1 || neighbor.cluster === undefined) {
                 neighbor.cluster = clusterId;
             }
@@ -177,11 +167,39 @@ class DensityClusterer {
     }
 }
 
-// WebSocket broadcast function
+// ========================================
+// WEBSOCKET BROADCASTING
+// ========================================
+function broadcastToAllClients(data) {
+    console.log(`📡 Broadcasting to all channels...`);
+    let totalSent = 0;
+    let totalErrors = 0;
+
+    connectedClients.forEach((clients, channelId) => {
+        clients.forEach(ws => {
+            if (ws.readyState === ws.OPEN) {
+                try {
+                    ws.send(JSON.stringify(data));
+                    totalSent++;
+                } catch (error) {
+                    console.error(`📡 WebSocket send error for channel ${channelId}:`, error);
+                    clients.delete(ws);
+                    totalErrors++;
+                }
+            } else {
+                clients.delete(ws);
+                totalErrors++;
+            }
+        });
+    });
+
+    console.log(`📡 Broadcast complete: ${totalSent} sent, ${totalErrors} errors`);
+}
+
 function broadcastToChannel(channelId, data) {
     const clients = connectedClients.get(channelId);
     if (!clients || clients.size === 0) {
-        console.log(`📡 No clients connected to channel: ${channelId}`);
+        console.log(`📡 No clients for channel: ${channelId}`);
         return;
     }
 
@@ -195,29 +213,174 @@ function broadcastToChannel(channelId, data) {
                 ws.send(message);
                 successCount++;
             } catch (error) {
-                console.error('WebSocket send error:', error);
+                console.error(`📡 Send error:`, error);
                 clients.delete(ws);
                 errorCount++;
             }
         } else {
-            // Clean up dead connections
             clients.delete(ws);
             errorCount++;
         }
     });
 
-    console.log(`📡 Broadcasted to ${successCount} clients in channel ${channelId} (${errorCount} errors)`);
+    console.log(`📡 Channel ${channelId}: ${successCount} sent, ${errorCount} errors`);
 }
 
-// Enhanced click handling with instant broadcast
-app.post('/click', async (req, res) => {
+// ========================================
+// SESSION MANAGEMENT
+// ========================================
+app.post('/start', async (req, res) => {
+    console.log('\n🚀 START SESSION REQUEST');
+
     try {
-        // ✅ CHECK IF SESSION IS RUNNING FIRST!
-        if (!isRunning) {
-            console.log('🚫 Click rejected - session not running');
-            return res.status(403).json({ error: 'session_not_running' });
+        // CLEAR ALL DATA
+        if (useRedis) {
+            const keys = await redis.keys('click:*');
+            if (keys.length > 0) {
+                await redis.del(keys);
+                console.log(`🧹 Cleared ${keys.length} Redis keys`);
+            }
+        } else {
+            clicks.clear();
+            console.log('🧹 Cleared in-memory clicks');
         }
 
+        // UPDATE GLOBAL STATE
+        GLOBAL_SESSION_STATE = {
+            isRunning: true,
+            startedAt: Date.now(),
+            stoppedAt: null,
+            totalClicks: 0,
+            lastActivity: Date.now()
+        };
+
+        console.log('🚀 SESSION STARTED - Global State:', GLOBAL_SESSION_STATE);
+
+        // BROADCAST TO ALL CLIENTS
+        const broadcastData = {
+            running: true,
+            clusters: [],
+            totalClicks: 0,
+            uniqueUsers: 0,
+            coverage: 0,
+            threshold: 3,
+            sessionState: GLOBAL_SESSION_STATE
+        };
+
+        broadcastToAllClients(broadcastData);
+
+        res.json({
+            status: 'started',
+            running: true,
+            sessionState: GLOBAL_SESSION_STATE
+        });
+
+    } catch (error) {
+        console.error('❌ Start session error:', error);
+        res.status(500).json({ error: 'Failed to start session' });
+    }
+});
+
+app.post('/stop', async (req, res) => {
+    console.log('\n🛑 STOP SESSION REQUEST');
+
+    try {
+        // UPDATE GLOBAL STATE FIRST
+        GLOBAL_SESSION_STATE.isRunning = false;
+        GLOBAL_SESSION_STATE.stoppedAt = Date.now();
+
+        console.log('🛑 SESSION STOPPED - Global State:', GLOBAL_SESSION_STATE);
+
+        // GET FINAL STATE FOR ALL CHANNELS
+        const channelIds = Array.from(connectedClients.keys());
+
+        for (const channelId of channelIds) {
+            try {
+                const data = await getHeatmapData(channelId, 3);
+                data.running = false;
+                data.sessionState = GLOBAL_SESSION_STATE;
+                broadcastToChannel(channelId, data);
+            } catch (error) {
+                console.error(`❌ Error broadcasting stop to ${channelId}:`, error);
+            }
+        }
+
+        res.json({
+            status: 'stopped',
+            running: false,
+            sessionState: GLOBAL_SESSION_STATE
+        });
+
+    } catch (error) {
+        console.error('❌ Stop session error:', error);
+        res.status(500).json({ error: 'Failed to stop session' });
+    }
+});
+
+app.post('/reset', async (req, res) => {
+    console.log('\n🧹 RESET SESSION REQUEST');
+
+    try {
+        // CLEAR DATA
+        if (useRedis) {
+            const keys = await redis.keys('click:*');
+            if (keys.length > 0) {
+                await redis.del(keys);
+                console.log(`🧹 Cleared ${keys.length} Redis keys`);
+            }
+        } else {
+            clicks.clear();
+            console.log('🧹 Cleared in-memory clicks');
+        }
+
+        // RESET COUNTERS BUT KEEP RUNNING STATE
+        GLOBAL_SESSION_STATE.totalClicks = 0;
+        GLOBAL_SESSION_STATE.lastActivity = Date.now();
+
+        console.log('🧹 DATA RESET - Global State:', GLOBAL_SESSION_STATE);
+
+        // BROADCAST TO ALL CLIENTS
+        const broadcastData = {
+            running: GLOBAL_SESSION_STATE.isRunning,
+            clusters: [],
+            totalClicks: 0,
+            uniqueUsers: 0,
+            coverage: 0,
+            threshold: 3,
+            sessionState: GLOBAL_SESSION_STATE
+        };
+
+        broadcastToAllClients(broadcastData);
+
+        res.json({
+            status: 'reset',
+            sessionState: GLOBAL_SESSION_STATE
+        });
+
+    } catch (error) {
+        console.error('❌ Reset session error:', error);
+        res.status(500).json({ error: 'Failed to reset session' });
+    }
+});
+
+// ========================================
+// CLICK HANDLING - BULLETPROOF
+// ========================================
+app.post('/click', async (req, res) => {
+    const timestamp = new Date().toISOString();
+    console.log(`\n👆 [${timestamp}] CLICK REQUEST`);
+    console.log(`👆 Global Session Running: ${GLOBAL_SESSION_STATE.isRunning}`);
+
+    // IMMEDIATE REJECTION IF NOT RUNNING
+    if (!GLOBAL_SESSION_STATE.isRunning) {
+        console.log('🚫 CLICK REJECTED - SESSION NOT RUNNING');
+        return res.status(403).json({
+            error: 'session_not_running',
+            sessionState: GLOBAL_SESSION_STATE
+        });
+    }
+
+    try {
         const token = (req.headers.authorization || '').replace('Bearer ', '');
         const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
         const { x, y } = req.body;
@@ -226,11 +389,15 @@ app.post('/click', async (req, res) => {
 
         if (typeof x !== 'number' || typeof y !== 'number' ||
             x < 0 || x > 1 || y < 0 || y > 1) {
-            return res.status(400).json({ error: 'invalid coordinates' });
+            console.log('🚫 CLICK REJECTED - INVALID COORDINATES');
+            return res.status(400).json({ error: 'invalid_coordinates' });
         }
+
+        console.log(`👆 Processing click for channel ${channelId}, user ${uid}`);
 
         const clickData = { x, y, timestamp: Date.now() };
 
+        // SAVE CLICK
         if (useRedis) {
             await redis.hSet(`click:${channelId}:${uid}`, clickData);
         } else {
@@ -240,107 +407,26 @@ app.post('/click', async (req, res) => {
             clicks.get(channelId).set(uid, clickData);
         }
 
-        // INSTANT UPDATE: Recalculate and broadcast immediately
-        try {
-            const updatedData = await getHeatmapData(channelId, 3);
-            broadcastToChannel(channelId, updatedData);
-            console.log(`📍 Click processed for channel ${channelId}: ${updatedData.totalClicks} total clicks`);
-        } catch (broadcastError) {
-            console.error('Error broadcasting click update:', broadcastError);
-            // Still return success since the click was saved
-        }
+        // UPDATE GLOBAL STATE
+        GLOBAL_SESSION_STATE.totalClicks++;
+        GLOBAL_SESSION_STATE.lastActivity = Date.now();
 
+        // BROADCAST UPDATE
+        const updatedData = await getHeatmapData(channelId, 3);
+        broadcastToChannel(channelId, updatedData);
+
+        console.log(`✅ CLICK PROCESSED - Total clicks: ${GLOBAL_SESSION_STATE.totalClicks}`);
         return res.sendStatus(200);
+
     } catch (e) {
-        console.error('Click processing error:', e);
-        return res.status(401).json({ error: 'invalid token' });
+        console.error('❌ Click processing error:', e);
+        return res.status(401).json({ error: 'invalid_token' });
     }
 });
 
-// Broadcaster controls with instant broadcast
-app.post('/start', async (req, res) => {
-    isRunning = true;
-    if (useRedis) {
-        const keys = await redis.keys('click:*');
-        if (keys.length > 0) {
-            await redis.del(keys);
-        }
-    } else {
-        clicks.clear();
-    }
-
-    // Broadcast to all channels - handle async properly
-    const channelIds = Array.from(connectedClients.keys());
-    for (const channelId of channelIds) {
-        try {
-            broadcastToChannel(channelId, {
-                running: true,
-                clusters: [],
-                totalClicks: 0,
-                uniqueUsers: 0,
-                coverage: 0,
-                threshold: 3
-            });
-        } catch (error) {
-            console.error(`Error broadcasting start to channel ${channelId}:`, error);
-        }
-    }
-
-    console.log('🚀 ClickMap session started');
-    res.json({ status: 'started', running: true });
-});
-
-app.post('/stop', async (_, res) => {
-    isRunning = false;
-
-    // Broadcast to all channels - handle async properly
-    const channelIds = Array.from(connectedClients.keys());
-    for (const channelId of channelIds) {
-        try {
-            const data = await getHeatmapData(channelId, 3);
-            data.running = false;
-            broadcastToChannel(channelId, data);
-        } catch (error) {
-            console.error(`Error broadcasting stop to channel ${channelId}:`, error);
-        }
-    }
-
-    console.log('🛑 ClickMap session stopped');
-    res.json({ status: 'stopped', running: false });
-});
-
-app.post('/reset', async (req, res) => {
-    if (useRedis) {
-        const keys = await redis.keys('click:*');
-        if (keys.length > 0) {
-            await redis.del(keys);
-        }
-    } else {
-        clicks.clear();
-    }
-
-    // Broadcast reset to all channels - handle async properly
-    const channelIds = Array.from(connectedClients.keys());
-    for (const channelId of channelIds) {
-        try {
-            broadcastToChannel(channelId, {
-                running: isRunning,
-                clusters: [],
-                totalClicks: 0,
-                uniqueUsers: 0,
-                coverage: 0,
-                threshold: 3
-            });
-        } catch (error) {
-            console.error(`Error broadcasting reset to channel ${channelId}:`, error);
-        }
-    }
-
-    console.log('🧹 ClickMap data reset');
-    res.json({ status: 'reset' });
-});
-
-// Helper function to get heatmap data
+// ========================================
+// DATA RETRIEVAL
+// ========================================
 async function getHeatmapData(channelId, requestedThreshold = 3) {
     let points = [];
     let userCount = 0;
@@ -368,12 +454,13 @@ async function getHeatmapData(channelId, requestedThreshold = 3) {
 
     if (points.length === 0) {
         return {
-            running: isRunning,
+            running: GLOBAL_SESSION_STATE.isRunning,
             clusters: [],
             totalClicks: 0,
             uniqueUsers: 0,
             coverage: 0,
-            threshold: requestedThreshold
+            threshold: requestedThreshold,
+            sessionState: GLOBAL_SESSION_STATE
         };
     }
 
@@ -401,28 +488,32 @@ async function getHeatmapData(channelId, requestedThreshold = 3) {
     const coverage = Math.min(100, Math.round((formattedClusters.length / Math.max(1, points.length * 0.1)) * 100));
 
     return {
-        running: isRunning,
+        running: GLOBAL_SESSION_STATE.isRunning,
         clusters: formattedClusters,
         totalClicks: points.length,
         uniqueUsers: userCount,
         coverage,
-        threshold: requestedThreshold
+        threshold: requestedThreshold,
+        sessionState: GLOBAL_SESSION_STATE
     };
 }
 
-// Regular HTTP endpoint (fallback)
 app.get('/heatmap', async (req, res) => {
     const channelId = req.query.channel;
     const requestedThreshold = parseInt(req.query.threshold) || 3;
 
+    console.log(`📊 Heatmap request for channel: ${channelId || 'ALL'}`);
+    console.log(`📊 Session running: ${GLOBAL_SESSION_STATE.isRunning}`);
+
     if (!channelId) {
         return res.json({
-            running: isRunning,
+            running: GLOBAL_SESSION_STATE.isRunning,
             clusters: [],
             totalClicks: 0,
             uniqueUsers: 0,
             coverage: 0,
-            threshold: requestedThreshold
+            threshold: requestedThreshold,
+            sessionState: GLOBAL_SESSION_STATE
         });
     }
 
@@ -430,11 +521,13 @@ app.get('/heatmap', async (req, res) => {
     res.json(data);
 });
 
+// ========================================
+// SERVER SETUP
+// ========================================
 app.get('/health', (_, res) => {
-    console.log('🏥 Health check requested');
     res.json({
         status: 'ok',
-        running: isRunning,
+        sessionState: GLOBAL_SESSION_STATE,
         timestamp: Date.now(),
         version: '2.1.0',
         websocket: true,
@@ -443,47 +536,27 @@ app.get('/health', (_, res) => {
     });
 });
 
-// Add a test endpoint to verify the server is working
-app.all('/test', (req, res) => {
-    console.log(`🧪 Test endpoint hit: ${req.method} ${req.url}`);
-    console.log('🧪 Headers:', req.headers);
-    console.log('🧪 Body:', req.body);
-    res.json({
-        method: req.method,
-        url: req.url,
-        timestamp: Date.now(),
-        message: 'Server is responding correctly'
-    });
-});
-
-// Create HTTP server
 const server = createServer(app);
-
-// WebSocket server for instant updates
-const wss = new WebSocketServer({
-    server,
-    path: '/ws'
-});
+const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws, req) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathParts = url.pathname.split('/');
-    const channelId = pathParts[pathParts.length - 1]; // Extract channel from path
+    const channelId = pathParts[pathParts.length - 1];
 
     if (!channelId || channelId === 'ws') {
         ws.close(1000, 'Channel ID required');
         return;
     }
 
-    // Add client to channel
     if (!connectedClients.has(channelId)) {
         connectedClients.set(channelId, new Set());
     }
     connectedClients.get(channelId).add(ws);
 
-    console.log(`📡 WebSocket client connected to channel: ${channelId}`);
+    console.log(`📡 WebSocket connected: ${channelId} (${connectedClients.get(channelId).size} total for channel)`);
 
-    // Send initial data
+    // Send current state immediately
     getHeatmapData(channelId, 3).then(data => {
         if (ws.readyState === ws.OPEN) {
             ws.send(JSON.stringify(data));
@@ -498,23 +571,17 @@ wss.on('connection', (ws, req) => {
                 connectedClients.delete(channelId);
             }
         }
-        console.log(`📡 WebSocket client disconnected from: ${channelId}`);
-    });
-
-    ws.on('error', (error) => {
-        console.error('WebSocket error:', error);
+        console.log(`📡 WebSocket disconnected: ${channelId}`);
     });
 });
 
 server.listen(PORT, () => {
-    console.log('🚀 Enhanced ClickMap EBS v2.1.0 running on port', PORT);
-    console.log('📊 Redis:', useRedis ? 'enabled' : 'disabled');
-    console.log('📡 WebSocket server enabled for instant updates');
-    console.log('🎯 Clean circular overlay rendering');
-    console.log('🔧 Debug logging enabled');
-}).on('error', (error) => {
-    console.error('❌ Server failed to start:', error);
-    process.exit(1);
+    console.log('\n🚀 CLICKMAP SERVER v2.1.0 STARTED');
+    console.log(`📍 Port: ${PORT}`);
+    console.log(`📊 Redis: ${useRedis ? 'enabled' : 'disabled'}`);
+    console.log(`📡 WebSocket: enabled`);
+    console.log(`🎯 Session State:`, GLOBAL_SESSION_STATE);
+    console.log('=====================================\n');
 });
 
 export default server;

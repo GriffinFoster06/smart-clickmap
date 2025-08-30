@@ -219,12 +219,12 @@ function broadcastToChannel(channelId, data) {
     }
 }
 
-// Enhanced click handling with running state check and instant broadcast
+// Enhanced click handling with running state check
 app.post('/click', async (req, res) => {
     try {
         // CHECK IF SYSTEM IS RUNNING FIRST!
         if (!isRunning) {
-            return res.status(423).json({ error: 'system is stopped' }); // 423 = Locked
+            return res.status(423).json({ error: 'system is stopped' });
         }
 
         const token = (req.headers.authorization || '').replace('Bearer ', '');
@@ -259,11 +259,9 @@ app.post('/click', async (req, res) => {
     }
 });
 
-// Broadcaster controls with improved state management
+// Broadcaster controls - MINIMAL AND FAST
 app.post('/start', async (req, res) => {
     isRunning = true;
-
-    // Clear all existing data
     if (useRedis) {
         const keys = await redis.keys('click:*');
         if (keys.length > 0) {
@@ -273,47 +271,24 @@ app.post('/start', async (req, res) => {
         clicks.clear();
     }
 
-    // Broadcast fresh start to all channels
     connectedClients.forEach((clients, channelId) => {
-        broadcastToChannel(channelId, {
-            running: true,
-            clusters: [],
-            totalClicks: 0,
-            uniqueUsers: 0,
-            coverage: 0,
-            threshold: 3,
-            message: 'ClickMap started - fresh session!'
-        });
+        broadcastToChannel(channelId, { running: true, clusters: [], totalClicks: 0, uniqueUsers: 0 });
     });
 
-    console.log('🎯 ClickMap started - ready for clicks!');
-    res.json({ status: 'started', running: true, message: 'System is now accepting clicks' });
+    res.json({ status: 'started', running: true });
 });
 
-app.post('/stop', async (req, res) => {
+app.post('/stop', async (_, res) => {
     isRunning = false;
 
-    // Broadcast final results to all channels
-    const broadcasts = [];
-    connectedClients.forEach(async (clients, channelId) => {
-        const data = await getHeatmapData(channelId, 3);
-        data.running = false;
-        data.message = 'ClickMap stopped - final results shown';
-        broadcastToChannel(channelId, data);
-        broadcasts.push(channelId);
+    connectedClients.forEach((clients, channelId) => {
+        broadcastToChannel(channelId, { running: false });
     });
 
-    console.log(`🛑 ClickMap stopped - final results sent to ${broadcasts.length} channels`);
-    res.json({
-        status: 'stopped',
-        running: false,
-        channelsNotified: broadcasts.length,
-        message: 'System stopped - no longer accepting clicks'
-    });
+    res.json({ status: 'stopped', running: false });
 });
 
 app.post('/reset', async (req, res) => {
-    // Clear all data but maintain current running state
     if (useRedis) {
         const keys = await redis.keys('click:*');
         if (keys.length > 0) {
@@ -323,25 +298,11 @@ app.post('/reset', async (req, res) => {
         clicks.clear();
     }
 
-    // Broadcast reset to all channels
     connectedClients.forEach((clients, channelId) => {
-        broadcastToChannel(channelId, {
-            running: isRunning,
-            clusters: [],
-            totalClicks: 0,
-            uniqueUsers: 0,
-            coverage: 0,
-            threshold: 3,
-            message: `Data reset - system is ${isRunning ? 'running' : 'stopped'}`
-        });
+        broadcastToChannel(channelId, { running: isRunning, clusters: [], totalClicks: 0, uniqueUsers: 0 });
     });
 
-    console.log(`🔄 ClickMap data reset - system is ${isRunning ? 'running' : 'stopped'}`);
-    res.json({
-        status: 'reset',
-        running: isRunning,
-        message: `Data cleared - system ${isRunning ? 'accepting' : 'not accepting'} clicks`
-    });
+    res.json({ status: 'reset' });
 });
 
 // Helper function with enhanced clustering

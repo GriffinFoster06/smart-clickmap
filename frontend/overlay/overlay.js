@@ -441,27 +441,73 @@
         }
 
         connectWebSocket() {
-            try {
-                const wsUrl = EBS.replace('https://', 'wss://').replace('http://', 'ws://');
-                this.websocket = new WebSocket(`${wsUrl}/ws/${this.channelId}`);
+            // Allow disabling via query param: ?ws=0
+            const qp = new URLSearchParams(location.search);
+            const forceOff = qp.get('ws') === '0' || qp.get('ws') === 'false';
+            if (forceOff) {
+                console.info('[WS] disabled via query param; polling only.');
+                this.websocket = null;
+                return;
+            }
 
-                this.websocket.onmessage = (event) => {
+            const base = EBS.replace('https://', 'wss://').replace('http://', 'ws://');
+            const chan = this.channelId;
+
+            // Try both styles
+            const candidates = [
+                `${base}/ws/${encodeURIComponent(chan)}`,
+                `${base}/ws?channel=${encodeURIComponent(chan)}`
+            ];
+
+            const tryNext = (i = 0) => {
+                if (i >= candidates.length) {
+                    console.warn('[WS] All candidates failed; using polling only.');
+                    this.websocket = null;
+                    return;
+                }
+
+                const url = candidates[i];
+                let ws;
+                try {
+                    ws = new WebSocket(url);
+                } catch (e) {
+                    console.warn('[WS] construct failed for', url, e);
+                    return tryNext(i + 1);
+                }
+
+                let opened = false;
+
+                ws.onopen = () => {
+                    opened = true;
+                    this.websocket = ws;
+                    console.info('[WS] connected:', url);
+                };
+
+                ws.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
                         this.updateVisualization(data);
-                    } catch (e) { console.warn('WebSocket parse error:', e); }
+                    } catch (e) {
+                        console.warn('[WS] parse error:', e);
+                    }
                 };
 
-                this.websocket.onerror = () => { this.websocket = null; };
-
-                this.websocket.onclose = () => {
-                    this.websocket = null;
-                    setTimeout(() => this.connectWebSocket(), 5000);
+                ws.onerror = (ev) => {
+                    console.warn('[WS] error:', url, ev?.message || ev);
                 };
-            } catch (e) {
-                console.log('WebSocket not available');
-            }
+
+                ws.onclose = (ev) => {
+                    const { code, reason, wasClean } = ev || {};
+                    console.warn('[WS] closed:', url, { code, reason, wasClean });
+
+                    if (!opened) return tryNext(i + 1);       // try next URL form
+                    setTimeout(() => tryNext(i), 5000);        // reconnect same URL
+                };
+            };
+
+            tryNext(0);
         }
+
 
         startPolling() {
             this.pollInterval = setInterval(() => this.poll(), 800);

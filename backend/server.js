@@ -212,6 +212,12 @@ function broadcastToChannel(channelId, data) {
 // Enhanced click handling with instant broadcast
 app.post('/click', async (req, res) => {
     try {
+        // ✅ CHECK IF SESSION IS RUNNING FIRST!
+        if (!isRunning) {
+            console.log('🚫 Click rejected - session not running');
+            return res.status(403).json({ error: 'session_not_running' });
+        }
+
         const token = (req.headers.authorization || '').replace('Bearer ', '');
         const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
         const { x, y } = req.body;

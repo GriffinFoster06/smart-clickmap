@@ -20,13 +20,16 @@ if (useRedis) {
     clicks = new Map();
 }
 
-// ======== Channel running state ========
-// Default behavior: channels are RUNNING unless explicitly stopped.
-// Flip to false to require an explicit /start per channel.
+/** Channels are RUNNING unless explicitly stopped.
+ *  Flip to false to require an explicit /start per channel. */
 const DEFAULT_RUNNING = true;
 
+/** Per-channel running state + WS client lists */
 const isRunningByChannel = new Map(); // Map<channelId, boolean>
 const connectedClients = new Map(); // Map<channelId, Set<ws>>
+
+/** Remember the last overlay channel that connected (usually your streamer). */
+let lastSeenChannelId = null;
 
 function getRunning(channelId) {
     if (!channelId) return DEFAULT_RUNNING;
@@ -47,22 +50,42 @@ async function clearChannelStorage(channelId) {
     }
     console.log(`🧹 cleared storage for channel ${channelId}`);
 }
+
+/** Robustly resolve a control request to the SAME key that /click uses.
+ *  Priority:
+ *   1) ?channel= / ?id= (numeric → use as-is; non-numeric → try exact key; else fallback)
+ *   2) ?login= (non-numeric) → try exact key; else fallback
+ *   3) Authorization JWT (for /click) → payload.channel_id
+ *   4) lastSeenChannelId (from latest WS connection)
+ */
 function resolveChannelIdFromReq(req) {
-    // Prefer query params (?channel= / ?login= / ?id=)
     const url = new URL(req.url, `http://${req.headers.host}`);
     const qp = url.searchParams;
-    const qChan = qp.get('channel') || qp.get('login') || qp.get('id');
-    if (qChan) return qChan;
 
-    // Fallback: Authorization JWT (present for /click)
+    const rawChan = qp.get('channel') || qp.get('id');
+    if (rawChan) {
+        if (/^\d+$/.test(rawChan)) return rawChan;            // numeric channel ID (ideal)
+        if (connectedClients.has(rawChan)) return rawChan;    // exact match to a connected key
+        if (lastSeenChannelId) return lastSeenChannelId;      // fallback to most recently-seen overlay
+        return rawChan;                                       // best effort (may not match /click’s key)
+    }
+
+    const login = qp.get('login');
+    if (login) {
+        if (connectedClients.has(login)) return login;        // exact key match
+        if (lastSeenChannelId) return lastSeenChannelId;      // fallback to known numeric id
+        return login;                                         // best effort
+    }
+
     const auth = (req.headers.authorization || '').replace('Bearer ', '');
     if (auth) {
         try {
             const payload = jwt.verify(auth, SECRET, { algorithms: ['HS256'] });
-            return payload.channel_id || null;
-        } catch { }
+            if (payload?.channel_id) return String(payload.channel_id);
+        } catch {/* ignore */ }
     }
-    return null;
+
+    return lastSeenChannelId; // may be null; handlers will guard for it
 }
 
 const app = express();
@@ -113,13 +136,7 @@ class PreciseClusterer {
         const maxDistance = Math.max(...distances);
         const area = Math.PI * maxDistance * maxDistance;
         const density = clusterPoints.length / (area || 0.001);
-        return {
-            centroid,
-            spread: avgDistance,
-            maxSpread: maxDistance,
-            density,
-            compactness: avgDistance / (maxDistance || 0.001)
-        };
+        return { centroid, spread: avgDistance, maxSpread: maxDistance, density, compactness: avgDistance / (maxDistance || 0.001) };
     }
     expandCluster(point, neighbors, clusterId, eps, minPts) {
         point.cluster = clusterId;
@@ -164,16 +181,10 @@ class PreciseClusterer {
         clusterMap.forEach((clusterPoints, id) => {
             const m = this.calculateClusterMetrics(clusterPoints);
             result.push({
-                x: m.centroid.x,
-                y: m.centroid.y,
-                count: clusterPoints.length,
-                density: m.density,
-                spread: m.spread,
-                maxSpread: m.maxSpread,
-                compactness: m.compactness,
-                radius: Math.max(0.02, m.maxSpread),
-                points: clusterPoints,
-                clusterId: id
+                x: m.centroid.x, y: m.centroid.y, count: clusterPoints.length,
+                density: m.density, spread: m.spread, maxSpread: m.maxSpread,
+                compactness: m.compactness, radius: Math.max(0.02, m.maxSpread),
+                points: clusterPoints, clusterId: id
             });
         });
         const individuals = this.points.filter(p => p.cluster === -1);
@@ -195,8 +206,7 @@ function broadcastToChannel(channelId, data) {
     const message = JSON.stringify(data);
     clients.forEach(ws => {
         if (ws.readyState === ws.OPEN) {
-            try { ws.send(message); }
-            catch (err) {
+            try { ws.send(message); } catch (err) {
                 console.error('WebSocket send error:', err);
                 clients.delete(ws);
             }
@@ -212,7 +222,7 @@ app.post('/click', async (req, res) => {
 
         const { x, y } = req.body;
         const uid = payload.user_id || payload.opaque_user_id;
-        const channelId = payload.channel_id;
+        const channelId = String(payload.channel_id); // ALWAYS numeric from Twitch
 
         if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || x > 1 || y < 0 || y > 1) {
             return res.status(400).json({ error: 'invalid coordinates' });
@@ -298,7 +308,7 @@ app.get('/heatmap', async (req, res) => {
 app.get('/health', (_, res) => res.json({
     status: 'ok',
     timestamp: Date.now(),
-    version: '2.3.1',
+    version: '2.4.0',
     clustering: 'precise',
     defaultRunning: DEFAULT_RUNNING
 }));
@@ -393,6 +403,9 @@ wss.on('connection', (ws, req) => {
         return;
     }
 
+    // Remember this as our most-recent overlay channel (used by control fallbacks).
+    lastSeenChannelId = channelId;
+
     if (!connectedClients.has(channelId)) connectedClients.set(channelId, new Set());
     connectedClients.get(channelId).add(ws);
 
@@ -423,7 +436,7 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, () => {
-    console.log('🚀 Precise ClickMap EBS v2.3.1 running on port', PORT);
+    console.log('🚀 Precise ClickMap EBS v2.4.0 running on port', PORT);
     console.log('📊 Redis:', useRedis ? 'enabled' : 'disabled');
     console.log(`⚙️  DEFAULT_RUNNING = ${DEFAULT_RUNNING}`);
     console.log('🎯 Enhanced precision clustering for close-together clicks');

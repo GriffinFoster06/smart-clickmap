@@ -1,473 +1,202 @@
-﻿// frontend/config.js - Complete broadcaster control panel
+﻿// frontend/config.js
 import { HeatmapRenderer } from './heatmap.js';
 
-const EBS = 'https://smart-clickmap-backend.onrender.com';
-
-class ConfigPanel {
-    constructor() {
-        this.pollInterval = null;
-        this.renderer = null;
-        this.sessionStart = null;
-        this.isRunning = false;
-        this.retryCount = 0;
-        this.maxRetries = 3;
-        this.authToken = '';
-        this.channelId = '';
-
-        this.init();
-    }
-
-    init() {
-        this.setupCanvas();
-        this.setupEventListeners();
-        this.setupTwitchAuth();
-        this.startPolling();
-
-        console.log('🎛️ Config Panel v2.0.0 initialized');
-    }
-
-    setupCanvas() {
-        const canvas = document.getElementById('mini-canvas');
-        if (canvas) {
-            // Set proper canvas size
-            canvas.width = 320;
-            canvas.height = 180;
-            canvas.style.width = '100%';
-            canvas.style.height = 'auto';
-
-            // Initialize simple renderer for config preview
-            this.initPreviewRenderer(canvas);
-        }
-    }
-
-    initPreviewRenderer(canvas) {
-        this.canvas = canvas;
-        this.ctx = canvas.getContext('2d');
-        this.previewClusters = [];
-    }
-
-    renderPreview() {
-        if (!this.ctx) return;
-
-        const W = this.canvas.width;
-        const H = this.canvas.height;
-
-        // Clear canvas
-        this.ctx.clearRect(0, 0, W, H);
-
-        // Dark background for preview
-        this.ctx.fillStyle = 'rgba(20, 20, 20, 0.3)';
-        this.ctx.fillRect(0, 0, W, H);
-
-        if (this.previewClusters.length === 0) {
-            // Show "No Data" text
-            this.ctx.fillStyle = '#666666';
-            this.ctx.font = '14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-            this.ctx.textAlign = 'center';
-            this.ctx.textBaseline = 'middle';
-            this.ctx.fillText('No active clusters', W / 2, H / 2);
-            return;
-        }
-
-        // Render clusters
-        this.previewClusters.forEach(cluster => {
-            const cx = cluster.x * W;
-            const cy = cluster.y * H;
-            const percentage = cluster.percentage || 0;
-
-            // Scale down for preview
-            const radius = Math.max(8, Math.min(25, 10 + (percentage * 0.8)));
-
-            this.ctx.save();
-
-            // Colors based on cluster
-            let fillColor, borderColor;
-            if (cluster.isTop) {
-                fillColor = 'rgba(0, 255, 255, 0.3)';
-                borderColor = 'rgba(0, 255, 255, 0.8)';
-            } else {
-                fillColor = 'rgba(147, 51, 234, 0.3)';
-                borderColor = 'rgba(147, 51, 234, 0.8)';
-            }
-
-            // Draw circle
-            this.ctx.fillStyle = fillColor;
-            this.ctx.beginPath();
-            this.ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
-            this.ctx.fill();
-
-            this.ctx.strokeStyle = borderColor;
-            this.ctx.lineWidth = 1.5;
-            this.ctx.stroke();
-
-            // Text
-            const fontSize = Math.max(8, Math.min(12, radius * 0.6));
-            this.ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-            this.ctx.textAlign = 'center';
-            this.ctx.textBaseline = 'middle';
-            this.ctx.fillStyle = '#ffffff';
-            this.ctx.fillText(`${percentage}%`, cx, cy);
-
-            this.ctx.restore();
-        });
-    }
-
-    setupEventListeners() {
-        // Control buttons
-        const startBtn = document.getElementById('start-btn');
-        const stopBtn = document.getElementById('stop-btn');
-        const resetBtn = document.getElementById('reset-btn');
-
-        if (startBtn) startBtn.addEventListener('click', () => this.startSession());
-        if (stopBtn) stopBtn.addEventListener('click', () => this.stopSession());
-        if (resetBtn) resetBtn.addEventListener('click', () => this.resetSession());
-
-        // Threshold control (if exists)
-        const thresholdSlider = document.getElementById('threshold-slider');
-        if (thresholdSlider) {
-            thresholdSlider.addEventListener('input', (e) => {
-                const threshold = parseInt(e.target.value);
-                if (this.renderer) {
-                    this.renderer.setThreshold(threshold);
-                }
-                document.getElementById('threshold-value').textContent = threshold + '%';
-            });
-        }
-    }
-
-    setupTwitchAuth() {
-        if (typeof Twitch !== 'undefined' && Twitch.ext) {
-            Twitch.ext.onAuthorized((auth) => {
-                this.authToken = auth.token;
-                this.channelId = auth.channelId;
-                console.log('✅ Config panel authorized for channel:', this.channelId);
-            });
-        }
-    }
-
-    async startSession() {
-        try {
-            this.setButtonState('start-btn', true); // Disable button
-
-            const response = await fetch(`${EBS}/start`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
-                }
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                this.sessionStart = Date.now();
-                this.updateStatus(true);
-                this.showNotification('✅ Session started successfully!', 'success');
-                console.log('🚀 ClickMap session started');
-            } else {
-                throw new Error(`HTTP ${response.status}`);
-            }
-        } catch (error) {
-            console.error('❌ Failed to start session:', error);
-            this.showError('Failed to start session. Please try again.');
-        } finally {
-            this.setButtonState('start-btn', false); // Re-enable button
-        }
-    }
-
-    async stopSession() {
-        try {
-            this.setButtonState('stop-btn', true);
-
-            const response = await fetch(`${EBS}/stop`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
-                }
-            });
-
-            if (response.ok) {
-                this.updateStatus(false);
-                this.sessionStart = null;
-                this.showNotification('⏹️ Session stopped', 'info');
-                console.log('⏸️ ClickMap session stopped');
-            } else {
-                throw new Error(`HTTP ${response.status}`);
-            }
-        } catch (error) {
-            console.error('❌ Failed to stop session:', error);
-            this.showError('Failed to stop session. Please try again.');
-        } finally {
-            this.setButtonState('stop-btn', false);
-        }
-    }
-
-    async resetSession() {
-        const confirmed = confirm('⚠️ Are you sure you want to clear all click data?\n\nThis action cannot be undone.');
-        if (!confirmed) return;
-
-        try {
-            this.setButtonState('reset-btn', true);
-
-            const response = await fetch(`${EBS}/reset`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
-                }
-            });
-
-            if (response.ok) {
-                this.showNotification('🗑️ All data cleared', 'info');
-                console.log('🧹 ClickMap data reset');
-
-                // Clear the preview canvas
-                if (this.renderer) {
-                    this.renderer.updateClusters([]);
-                }
-            } else {
-                throw new Error(`HTTP ${response.status}`);
-            }
-        } catch (error) {
-            console.error('❌ Failed to reset data:', error);
-            this.showError('Failed to reset data. Please try again.');
-        } finally {
-            this.setButtonState('reset-btn', false);
-        }
-    }
-
-    setButtonState(buttonId, disabled) {
-        const button = document.getElementById(buttonId);
-        if (button) {
-            button.disabled = disabled;
-        }
-    }
-
-    startPolling() {
-        // Poll every second for real-time updates
-        this.pollInterval = setInterval(() => this.pollData(), 1000);
-        this.pollData(); // Initial poll
-    }
-
-    async pollData() {
-        try {
-            document.body.classList.remove('loading');
-
-            // Use channel ID if available, otherwise poll general stats
-            const url = this.channelId
-                ? `${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`
-                : `${EBS}/heatmap`;
-
-            const response = await fetch(url);
-
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-            const data = await response.json();
-            this.updateUI(data);
-            this.hideError();
-            this.retryCount = 0;
-
-        } catch (error) {
-            this.retryCount++;
-            console.warn(`⚠️ Polling error (attempt ${this.retryCount}):`, error);
-
-            if (this.retryCount <= this.maxRetries) {
-                this.showError(`Connection issue. Retrying... (${this.retryCount}/${this.maxRetries})`);
-            } else {
-                this.showError('❌ Connection lost. Please check your internet connection and refresh the page.');
-            }
-            document.body.classList.add('loading');
-        }
-    }
-
-    updateUI(data) {
-        this.isRunning = data.running;
-        this.updateStatus(data.running);
-
-        // Update main statistics
-        this.updateElement('total-clicks', data.totalClicks || 0);
-        this.updateElement('unique-users', data.uniqueUsers || 0);
-
-        // Count clusters above threshold
-        const visibleClusters = (data.clusters || []).filter(c => c.percentage >= (data.threshold || 3));
-        this.updateElement('cluster-count', visibleClusters.length);
-        this.updateElement('coverage', `${data.coverage || 0}%`);
-
-        // Update advanced statistics
-        this.updateAdvancedStats(data);
-
-        // Update preview canvas
-        if (this.renderer) {
-            this.renderer.updateClusters(data.clusters || []);
-        }
-
-        // Update preview status
-        const previewStatus = document.getElementById('preview-status');
-        if (previewStatus) {
-            previewStatus.textContent = data.running ? 'LIVE' : 'STOPPED';
-            previewStatus.className = 'preview-overlay ' + (data.running ? 'live' : 'stopped');
-        }
-    }
-
-    updateAdvancedStats(data) {
-        // Session duration
-        if (this.sessionStart && data.running) {
-            const duration = Math.floor((Date.now() - this.sessionStart) / 1000);
-            const minutes = Math.floor(duration / 60);
-            const seconds = duration % 60;
-            this.updateElement('duration', `${minutes}:${seconds.toString().padStart(2, '0')}`);
-        } else {
-            this.updateElement('duration', '-');
-        }
-
-        // Last update time
-        this.updateElement('last-update', new Date().toLocaleTimeString());
-
-        // Top hotspot information
-        const topCluster = data.clusters?.[0];
-        if (topCluster) {
-            const topHotspotText = `${topCluster.percentage}% (${topCluster.count} users)`;
-            this.updateElement('top-hotspot', topHotspotText);
-        } else {
-            this.updateElement('top-hotspot', 'None');
-        }
-
-        // Threshold information
-        this.updateElement('threshold-info', `${data.threshold || 3}%`);
-    }
-
-    updateElement(id, value) {
-        const element = document.getElementById(id);
-        if (element) {
-            element.textContent = value;
-        }
-    }
-
-    updateStatus(isRunning) {
-        const statusEl = document.getElementById('status');
-        const statusText = document.getElementById('status-text');
-
-        if (statusEl && statusText) {
-            if (isRunning) {
-                statusEl.className = 'status-indicator running';
-                statusText.textContent = '🟢 Session Active';
-            } else {
-                statusEl.className = 'status-indicator stopped';
-                statusText.textContent = '🔴 Session Stopped';
-            }
-        }
-
-        // Update button states
-        const startBtn = document.getElementById('start-btn');
-        const stopBtn = document.getElementById('stop-btn');
-
-        if (startBtn && stopBtn) {
-            if (isRunning) {
-                startBtn.textContent = '▶️ Session Running';
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-            } else {
-                startBtn.textContent = '▶️ Start Session';
-                startBtn.disabled = false;
-                stopBtn.disabled = false;
-            }
-        }
-    }
-
-    showError(message) {
-        const errorEl = document.getElementById('error');
-        if (errorEl) {
-            // Try to update text content directly first
-            if (errorEl.textContent !== undefined) {
-                errorEl.textContent = message;
-            } else {
-                // Fallback: create text node if element is empty
-                errorEl.innerHTML = message;
-            }
-            errorEl.style.display = 'block';
-        }
-        console.error('🔴 Config Panel Error:', message);
-    }
-
-    hideError() {
-        const errorEl = document.getElementById('error');
-        if (errorEl) {
-            errorEl.style.display = 'none';
-        }
-    }
-
-    showNotification(message, type = 'info') {
-        console.log(`${type.toUpperCase()}: ${message}`);
-
-        // Create temporary notification element
-        const notification = document.createElement('div');
-        notification.className = `notification notification-${type}`;
-        notification.textContent = message;
-        notification.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 10px 16px;
-            border-radius: 6px;
-            color: white;
-            font-size: 12px;
-            font-weight: 600;
-            z-index: 10000;
-            opacity: 0;
-            transform: translateX(20px);
-            transition: all 0.3s ease;
-        `;
-
-        // Set color based on type
-        switch (type) {
-            case 'success':
-                notification.style.background = 'rgba(34, 197, 94, 0.9)';
-                break;
-            case 'error':
-                notification.style.background = 'rgba(239, 68, 68, 0.9)';
-                break;
-            default:
-                notification.style.background = 'rgba(59, 130, 246, 0.9)';
-        }
-
-        document.body.appendChild(notification);
-
-        // Animate in
-        requestAnimationFrame(() => {
-            notification.style.opacity = '1';
-            notification.style.transform = 'translateX(0)';
-        });
-
-        // Remove after 3 seconds
-        setTimeout(() => {
-            notification.style.opacity = '0';
-            notification.style.transform = 'translateX(20px)';
-            setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.parentNode.removeChild(notification);
-                }
-            }, 300);
-        }, 3000);
-    }
-
-    destroy() {
-        if (this.pollInterval) {
-            clearInterval(this.pollInterval);
-        }
-        if (this.renderer) {
-            this.renderer.destroy();
-        }
+const EBS = 'https://smart-clickmap-backend.onrender.com'; // same as overlay
+const POLL_MS = 1000;
+
+let channel = null;            // filled from Twitch auth or query param
+let pollTimer = null;
+let running = false;
+
+let renderer = null;           // HeatmapRenderer for #mini-canvas
+
+// ---- DOM ----
+const $ = (sel) => document.querySelector(sel);
+const els = {
+    status: $('#status'),
+    statusText: $('#status-text'),
+    previewStatus: $('#preview-status'),
+    totalClicks: $('#total-clicks'),
+    uniqueUsers: $('#unique-users'),
+    clusterCount: $('#cluster-count'),
+    coverage: $('#coverage'),
+    lastUpdate: $('#last-update'),
+    error: $('#error'),
+    startBtn: $('#start-btn'),
+    stopBtn: $('#stop-btn'),
+    resetBtn: $('#reset-btn'),
+    serverStatus: $('#server-status'),
+    overlayStatus: $('#overlay-status'),
+    thresholdVal: $('#threshold-value'),
+    miniCanvas: $('#mini-canvas'),
+};
+
+function setRunningState(isRunning) {
+    running = isRunning;
+    els.status.classList.toggle('running', isRunning);
+    els.status.classList.toggle('stopped', !isRunning);
+    els.previewStatus.textContent = isRunning ? 'Live' : 'Stopped';
+    els.previewStatus.classList.toggle('live', isRunning);
+    els.previewStatus.classList.toggle('stopped', !isRunning);
+
+    els.statusText.textContent = isRunning ? 'Running' : 'Stopped';
+    els.startBtn.disabled = isRunning;
+    els.stopBtn.disabled = !isRunning;
+}
+
+function setServerUp(up) {
+    els.serverStatus.textContent = up ? 'Connected' : 'Disconnected';
+    els.serverStatus.style.color = up ? '#4ade80' : '#ef4444';
+}
+
+function setOverlayUp(up) {
+    els.overlayStatus.textContent = up ? 'Ready' : 'Unavailable';
+    els.overlayStatus.style.color = up ? '#4ade80' : '#ef4444';
+}
+
+function setError(msg) {
+    if (!msg) {
+        els.error.style.display = 'none';
+    } else {
+        els.error.textContent = msg;
+        els.error.style.display = 'block';
     }
 }
 
-// Initialize config panel when DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        new ConfigPanel();
-    });
-} else {
-    new ConfigPanel();
+function fmtPercent(n) {
+    if (n == null || isNaN(n)) return '-';
+    return `${Math.round(n)}%`;
 }
 
-// Global reference for debugging
-window.ConfigPanel = ConfigPanel;
+// ---- Preview wiring ----
+function ensureRenderer() {
+    if (renderer) return renderer;
+    if (!els.miniCanvas) {
+        console.warn('mini-canvas not found');
+        return null;
+    }
+    renderer = new HeatmapRenderer(els.miniCanvas);
+    return renderer;
+}
+
+async function pollOnce() {
+    if (!channel) return;
+
+    try {
+        const resp = await fetch(`${EBS}/heatmap?channel=${encodeURIComponent(channel)}`, { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        // clusters for preview
+        const clusters = (data?.clusters) || [];
+        ensureRenderer()?.updateClusters(clusters);
+
+        // quick stats — adapt to your API
+        const total = data?.totals?.clicks ?? data?.totalClicks ?? clusters.reduce((a, c) => a + (c.count || 0), 0);
+        const users = data?.totals?.users ?? data?.uniqueUsers ?? '-';
+        const coveragePct = data?.coverage ?? (clusters.length ? Math.min(100, clusters.reduce((m, c) => Math.max(m, c.percentage || 0), 0)) : 0);
+
+        els.totalClicks.textContent = Number.isFinite(total) ? total : '-';
+        els.uniqueUsers.textContent = Number.isFinite(users) ? users : '-';
+        els.clusterCount.textContent = clusters.length;
+        els.coverage.textContent = fmtPercent(coveragePct);
+        els.lastUpdate.textContent = new Date().toLocaleTimeString();
+
+        setServerUp(true);
+        setError('');
+
+    } catch (err) {
+        console.error('[poll]', err);
+        setServerUp(false);
+        setError('Connection error. Retrying...');
+    }
+}
+
+function startPolling() {
+    if (pollTimer) return;
+    pollOnce(); // immediate
+    pollTimer = setInterval(pollOnce, POLL_MS);
+}
+
+function stopPolling() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+// ---- Buttons ----
+async function onStart() {
+    setRunningState(true);
+    startPolling();
+    // If you have a server-side flag to enable overlay stream, call it here:
+    // await fetch(`${EBS}/control/start?channel=${encodeURIComponent(channel)}`, { method: 'POST' }).catch(console.warn);
+}
+async function onStop() {
+    setRunningState(false);
+    stopPolling();
+    // If you have a server-side flag to disable overlay stream, call it here:
+    // await fetch(`${EBS}/control/stop?channel=${encodeURIComponent(channel)}`, { method: 'POST' }).catch(console.warn);
+}
+async function onReset() {
+    try {
+        // Adjust to your backend route; common names: /reset, /clear, /purge
+        const resp = await fetch(`${EBS}/reset?channel=${encodeURIComponent(channel)}`, { method: 'POST' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        // Clear preview immediately so the user sees something happened
+        ensureRenderer()?.updateClusters([]);
+        els.totalClicks.textContent = '0';
+        els.clusterCount.textContent = '0';
+        els.coverage.textContent = '0%';
+        els.lastUpdate.textContent = new Date().toLocaleTimeString();
+        setError('');
+    } catch (e) {
+        console.warn('Reset failed; adjust the endpoint to your API (e.g., /clear)', e);
+        setError('Reset failed. Check console for details.');
+    }
+}
+
+// ---- Twitch channel detection ----
+function resolveChannel() {
+    // 1) allow ?channel= in dev
+    const qp = new URLSearchParams(location.search);
+    const fromQP = qp.get('channel');
+    if (fromQP) return fromQP;
+
+    // 2) Twitch Extensions helper (in a config page it should be available)
+    try {
+        if (window.Twitch && window.Twitch.ext) {
+            window.Twitch.ext.onAuthorized((auth) => {
+                // You may need to decode channel/opaque user id from auth; often `channelId` is available
+                // If your backend uses broadcaster name instead, pass it via query param in dev.
+                channel = auth.channelId || channel;
+            });
+        }
+    } catch (e) {
+        console.warn('Twitch.ext not available:', e);
+    }
+
+    return null;
+}
+
+// ---- Boot ----
+document.addEventListener('DOMContentLoaded', () => {
+    // Hook buttons
+    els.startBtn?.addEventListener('click', onStart);
+    els.stopBtn?.addEventListener('click', onStop);
+    els.resetBtn?.addEventListener('click', onReset);
+
+    // Initial UI state
+    setRunningState(false);
+    setOverlayUp(true);
+    els.thresholdVal.textContent = '3%';
+
+    // Channel
+    channel = resolveChannel() || 'demo'; // fallback so preview works locally
+    if (!channel) {
+        console.warn('No channel resolved; pass ?channel=yourchannel locally.');
+    }
+
+    // Build preview renderer immediately so the canvas paints
+    ensureRenderer();
+});

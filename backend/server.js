@@ -16,11 +16,45 @@ if (useRedis) {
     redis = Redis.createClient({ url: process.env.REDIS_URL });
     await redis.connect();
 } else {
-    clicks = new Map();
+    clicks = new Map(); // Map<channelId, Map<userId, {x,y,timestamp}>>
 }
 
-let isRunning = false;
-const connectedClients = new Map();
+// --- Per-channel running state ---
+const isRunningByChannel = new Map(); // Map<channelId, boolean>
+const connectedClients = new Map();   // Map<channelId, Set<ws>>
+
+function getRunning(channelId) {
+    return !!isRunningByChannel.get(channelId);
+}
+function setRunning(channelId, value) {
+    isRunningByChannel.set(channelId, !!value);
+}
+async function clearChannelStorage(channelId) {
+    if (!channelId) return;
+    if (useRedis) {
+        const keys = await redis.keys(`click:${channelId}:*`);
+        if (keys.length > 0) await redis.del(keys);
+    } else {
+        clicks.delete(channelId);
+    }
+}
+function resolveChannelIdFromReq(req) {
+    // Try query params first (?channel= / ?login= / ?id=)
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const qp = url.searchParams;
+    const qChan = qp.get('channel') || qp.get('login') || qp.get('id');
+    if (qChan) return qChan;
+
+    // Fallback to JWT (for POST /click or when auth header present)
+    const auth = (req.headers.authorization || '').replace('Bearer ', '');
+    if (auth) {
+        try {
+            const payload = jwt.verify(auth, SECRET, { algorithms: ['HS256'] });
+            return payload.channel_id || null;
+        } catch { }
+    }
+    return null;
+}
 
 const app = express();
 app.use(cors({
@@ -34,116 +68,92 @@ app.use((req, res, next) => {
     next();
 });
 
-// Enhanced precise clustering algorithm
+// ---------- Clustering ----------
 class PreciseClusterer {
     constructor(points) {
         this.points = points.map((p, i) => ({ ...p, id: i, visited: false, cluster: -1 }));
     }
-
     calculatePreciseEps() {
         const n = this.points.length;
-        if (n < 3) return 0.04; // Smaller default for precision
-
-        // More precise epsilon calculation for close-together clicks
-        const k = Math.max(2, Math.min(6, Math.floor(n * 0.12))); // Higher ratio for precision
+        if (n < 3) return 0.04;
+        const k = Math.max(2, Math.min(6, Math.floor(n * 0.12)));
         const distances = [];
-
         this.points.forEach(point => {
             const dists = this.points
                 .filter(p => p.id !== point.id)
                 .map(p => this.distance(point, p))
                 .sort((a, b) => a - b)
                 .slice(0, k);
-            if (dists.length > 0) {
-                distances.push(dists[dists.length - 1]);
-            }
+            if (dists.length > 0) distances.push(dists[dists.length - 1]);
         });
-
         distances.sort((a, b) => a - b);
-
-        // More conservative epsilon for better precision
-        const percentile = Math.floor(distances.length * 0.6); // Lower percentile
-        let optimalEps = distances[percentile] || 0.04;
-
-        // Tighter range for more precise clustering
-        return Math.max(0.025, Math.min(0.08, optimalEps));
+        const percentile = Math.floor(distances.length * 0.6);
+        const optimal = distances[percentile] || 0.04;
+        return Math.max(0.025, Math.min(0.08, optimal));
     }
-
-    distance(a, b) {
-        return Math.hypot(a.x - b.x, a.y - b.y);
-    }
-
-    getNeighbors(point, eps) {
-        return this.points.filter(p =>
-            p.id !== point.id && this.distance(point, p) <= eps
-        );
-    }
-
+    distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+    getNeighbors(point, eps) { return this.points.filter(p => p.id !== point.id && this.distance(point, p) <= eps); }
     calculateClusterMetrics(clusterPoints) {
         if (clusterPoints.length === 0) return { spread: 0, density: 0, centroid: { x: 0, y: 0 } };
-
-        // Calculate centroid
         const centroid = {
-            x: clusterPoints.reduce((sum, p) => sum + p.x, 0) / clusterPoints.length,
-            y: clusterPoints.reduce((sum, p) => sum + p.y, 0) / clusterPoints.length
+            x: clusterPoints.reduce((s, p) => s + p.x, 0) / clusterPoints.length,
+            y: clusterPoints.reduce((s, p) => s + p.y, 0) / clusterPoints.length
         };
-
-        // Calculate spread (how dispersed the clicks are)
         const distances = clusterPoints.map(p => this.distance(p, centroid));
-        const avgDistance = distances.reduce((sum, d) => sum + d, 0) / distances.length;
+        const avgDistance = distances.reduce((s, d) => s + d, 0) / distances.length;
         const maxDistance = Math.max(...distances);
-
-        // Calculate density (clicks per area)
         const area = Math.PI * maxDistance * maxDistance;
         const density = clusterPoints.length / (area || 0.001);
-
         return {
             centroid,
             spread: avgDistance,
             maxSpread: maxDistance,
             density,
-            compactness: avgDistance / (maxDistance || 0.001) // How compact vs spread out
+            compactness: avgDistance / (maxDistance || 0.001)
         };
     }
-
+    expandCluster(point, neighbors, clusterId, eps, minPts) {
+        point.cluster = clusterId;
+        for (let i = 0; i < neighbors.length; i++) {
+            const neighbor = neighbors[i];
+            if (!neighbor.visited) {
+                neighbor.visited = true;
+                const newNeighbors = this.getNeighbors(neighbor, eps);
+                if (newNeighbors.length >= minPts) {
+                    neighbors.push(...newNeighbors.filter(n => !neighbors.some(e => e.id === n.id)));
+                }
+            }
+            if (neighbor.cluster === -1 || neighbor.cluster === undefined) {
+                neighbor.cluster = clusterId;
+            }
+        }
+    }
     cluster() {
         if (this.points.length === 0) return [];
-
         const eps = this.calculatePreciseEps();
-        // More aggressive minPts for precision - don't group tiny clusters too much
         const minPts = Math.max(1, Math.floor(this.points.length * 0.08));
-
         let clusterId = 0;
-
         this.points.forEach(point => {
             if (point.visited) return;
-
             point.visited = true;
             const neighbors = this.getNeighbors(point, eps);
-
             if (neighbors.length < minPts) {
-                point.cluster = -1; // Keep as individual point
+                point.cluster = -1;
             } else {
                 this.expandCluster(point, neighbors, clusterId, eps, minPts);
                 clusterId++;
             }
         });
-
-        // Process clusters with detailed metrics
         const clusterMap = new Map();
         this.points.forEach(point => {
             if (point.cluster >= 0) {
-                if (!clusterMap.has(point.cluster)) {
-                    clusterMap.set(point.cluster, []);
-                }
+                if (!clusterMap.has(point.cluster)) clusterMap.set(point.cluster, []);
                 clusterMap.get(point.cluster).push(point);
             }
         });
-
         const result = [];
-        clusterMap.forEach((clusterPoints, clusterId) => {
+        clusterMap.forEach((clusterPoints, id) => {
             const metrics = this.calculateClusterMetrics(clusterPoints);
-
             result.push({
                 x: metrics.centroid.x,
                 y: metrics.centroid.y,
@@ -152,157 +162,145 @@ class PreciseClusterer {
                 spread: metrics.spread,
                 maxSpread: metrics.maxSpread,
                 compactness: metrics.compactness,
-                radius: Math.max(0.02, metrics.maxSpread), // Actual coverage radius
+                radius: Math.max(0.02, metrics.maxSpread),
                 points: clusterPoints,
-                clusterId
+                clusterId: id
             });
         });
-
-        // Handle individual clicks (noise) as micro-clusters for precision
-        const individualClicks = this.points.filter(p => p.cluster === -1);
-        individualClicks.forEach((point, index) => {
+        const individuals = this.points.filter(p => p.cluster === -1);
+        individuals.forEach((point, idx) => {
             result.push({
                 x: point.x,
                 y: point.y,
                 count: 1,
-                density: 10, // High density for individual precise clicks
+                density: 10,
                 spread: 0.01,
                 maxSpread: 0.02,
                 compactness: 1,
                 radius: 0.025,
                 points: [point],
-                clusterId: `individual_${index}`
+                clusterId: `individual_${idx}`
             });
         });
-
         return result.sort((a, b) => b.count - a.count);
     }
-
-    expandCluster(point, neighbors, clusterId, eps, minPts) {
-        point.cluster = clusterId;
-
-        for (let i = 0; i < neighbors.length; i++) {
-            const neighbor = neighbors[i];
-
-            if (!neighbor.visited) {
-                neighbor.visited = true;
-                const newNeighbors = this.getNeighbors(neighbor, eps);
-                if (newNeighbors.length >= minPts) {
-                    neighbors.push(...newNeighbors.filter(n =>
-                        !neighbors.some(existing => existing.id === n.id)
-                    ));
-                }
-            }
-
-            if (neighbor.cluster === -1 || neighbor.cluster === undefined) {
-                neighbor.cluster = clusterId;
-            }
-        }
-    }
 }
 
-// WebSocket broadcast function
+// ---------- WS broadcast ----------
 function broadcastToChannel(channelId, data) {
     const clients = connectedClients.get(channelId);
-    if (clients) {
-        const message = JSON.stringify(data);
-        clients.forEach(ws => {
-            if (ws.readyState === ws.OPEN) {
-                try {
-                    ws.send(message);
-                } catch (error) {
-                    console.error('WebSocket send error:', error);
-                    clients.delete(ws);
-                }
+    if (!clients) return;
+    const message = JSON.stringify(data);
+    clients.forEach(ws => {
+        if (ws.readyState === ws.OPEN) {
+            try { ws.send(message); }
+            catch (err) {
+                console.error('WebSocket send error:', err);
+                clients.delete(ws);
             }
-        });
-    }
+        }
+    });
 }
 
-// Enhanced click handling with instant broadcast
+// ---------- Routes ----------
 app.post('/click', async (req, res) => {
     try {
         const token = (req.headers.authorization || '').replace('Bearer ', '');
         const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
+
         const { x, y } = req.body;
         const uid = payload.user_id || payload.opaque_user_id;
         const channelId = payload.channel_id;
 
-        if (typeof x !== 'number' || typeof y !== 'number' ||
-            x < 0 || x > 1 || y < 0 || y > 1) {
+        if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || x > 1 || y < 0 || y > 1) {
             return res.status(400).json({ error: 'invalid coordinates' });
         }
 
-        const clickData = { x, y, timestamp: Date.now() };
+        // Gate by per-channel running state
+        if (!getRunning(channelId)) {
+            return res.status(202).json({ ignored: true, reason: 'channel_stopped' });
+        }
 
+        const clickData = { x, y, timestamp: Date.now() };
         if (useRedis) {
             await redis.hSet(`click:${channelId}:${uid}`, clickData);
         } else {
-            if (!clicks.has(channelId)) {
-                clicks.set(channelId, new Map());
-            }
+            if (!clicks.has(channelId)) clicks.set(channelId, new Map());
             clicks.get(channelId).set(uid, clickData);
         }
 
-        // INSTANT UPDATE with precise clustering
         const updatedData = await getHeatmapData(channelId, 3);
         broadcastToChannel(channelId, updatedData);
-
         return res.sendStatus(200);
     } catch (e) {
         return res.status(401).json({ error: 'invalid token' });
     }
 });
 
-// Broadcaster controls
+// Start/stop/reset are now channel-aware
 app.post('/start', async (req, res) => {
-    isRunning = true;
-    if (useRedis) {
-        const keys = await redis.keys('click:*');
-        if (keys.length > 0) {
-            await redis.del(keys);
-        }
-    } else {
-        clicks.clear();
-    }
+    const channelId = resolveChannelIdFromReq(req);
+    if (!channelId) return res.status(400).json({ error: 'missing channel' });
 
-    connectedClients.forEach((clients, channelId) => {
-        broadcastToChannel(channelId, { running: true, clusters: [], totalClicks: 0, uniqueUsers: 0 });
-    });
+    setRunning(channelId, true);
+    await clearChannelStorage(channelId);
 
-    res.json({ status: 'started', running: true });
+    broadcastToChannel(channelId, { running: true, clusters: [], totalClicks: 0, uniqueUsers: 0, coverage: 0 });
+    res.json({ status: 'started', running: true, channel: channelId });
 });
 
-app.post('/stop', async (_, res) => {
-    isRunning = false;
+app.post('/stop', async (req, res) => {
+    const channelId = resolveChannelIdFromReq(req);
+    if (!channelId) return res.status(400).json({ error: 'missing channel' });
 
-    connectedClients.forEach(async (clients, channelId) => {
-        const data = await getHeatmapData(channelId, 3);
-        data.running = false;
-        broadcastToChannel(channelId, data);
-    });
+    setRunning(channelId, false);
 
-    res.json({ status: 'stopped', running: false });
+    const data = await getHeatmapData(channelId, 3);
+    data.running = false;
+    broadcastToChannel(channelId, data);
+
+    res.json({ status: 'stopped', running: false, channel: channelId });
 });
 
 app.post('/reset', async (req, res) => {
-    if (useRedis) {
-        const keys = await redis.keys('click:*');
-        if (keys.length > 0) {
-            await redis.del(keys);
-        }
-    } else {
-        clicks.clear();
-    }
+    const channelId = resolveChannelIdFromReq(req);
+    if (!channelId) return res.status(400).json({ error: 'missing channel' });
 
-    connectedClients.forEach((clients, channelId) => {
-        broadcastToChannel(channelId, { running: isRunning, clusters: [], totalClicks: 0, uniqueUsers: 0 });
-    });
+    await clearChannelStorage(channelId);
 
-    res.json({ status: 'reset' });
+    broadcastToChannel(channelId, { running: getRunning(channelId), clusters: [], totalClicks: 0, uniqueUsers: 0, coverage: 0 });
+    res.json({ status: 'reset', channel: channelId });
 });
 
-// Helper function with enhanced clustering
+// Heatmap now reflects per-channel running state
+app.get('/heatmap', async (req, res) => {
+    const channelId = req.query.channel;
+    const requestedThreshold = parseInt(req.query.threshold) || 3;
+
+    if (!channelId) {
+        return res.json({
+            running: false,
+            clusters: [],
+            totalClicks: 0,
+            uniqueUsers: 0,
+            coverage: 0,
+            threshold: requestedThreshold
+        });
+    }
+
+    const data = await getHeatmapData(channelId, requestedThreshold);
+    data.running = getRunning(channelId);
+    res.json(data);
+});
+
+app.get('/health', (_, res) => res.json({
+    status: 'ok',
+    timestamp: Date.now(),
+    version: '2.3.0',
+    clustering: 'precise'
+}));
+
+// ---------- Heatmap helper ----------
 async function getHeatmapData(channelId, requestedThreshold = 3) {
     let points = [];
     let userCount = 0;
@@ -330,16 +328,15 @@ async function getHeatmapData(channelId, requestedThreshold = 3) {
 
     if (points.length === 0) {
         return {
-            running: isRunning,
+            running: getRunning(channelId),
             clusters: [],
             totalClicks: 0,
-            uniqueUsers: 0,
+            uniqueUsers: userCount,
             coverage: 0,
             threshold: requestedThreshold
         };
     }
 
-    // Use precise clustering
     const clusterer = new PreciseClusterer(points);
     const rawClusters = clusterer.cluster();
 
@@ -366,7 +363,7 @@ async function getHeatmapData(channelId, requestedThreshold = 3) {
     const coverage = Math.min(100, Math.round((formattedClusters.length / Math.max(1, points.length * 0.1)) * 100));
 
     return {
-        running: isRunning,
+        running: getRunning(channelId),
         clusters: formattedClusters,
         totalClicks: points.length,
         uniqueUsers: userCount,
@@ -375,71 +372,42 @@ async function getHeatmapData(channelId, requestedThreshold = 3) {
     };
 }
 
-// Regular HTTP endpoint
-app.get('/heatmap', async (req, res) => {
-    const channelId = req.query.channel;
-    const requestedThreshold = parseInt(req.query.threshold) || 3;
-
-    if (!channelId) {
-        return res.json({
-            running: isRunning,
-            clusters: [],
-            totalClicks: 0,
-            uniqueUsers: 0,
-            coverage: 0,
-            threshold: requestedThreshold
-        });
-    }
-
-    const data = await getHeatmapData(channelId, requestedThreshold);
-    res.json(data);
-});
-
-app.get('/health', (_, res) => res.json({
-    status: 'ok',
-    running: isRunning,
-    timestamp: Date.now(),
-    version: '2.2.0',
-    clustering: 'precise'
-}));
-
-// Create HTTP server
+// ---------- HTTP + WS Server ----------
 const server = createServer(app);
 
-// WebSocket server for instant updates
-const wss = new WebSocketServer({
-    server,
-    path: '/ws'
-});
+// Accept ANY path and parse the channel from either /ws/<id> or ?channel=<id>
+const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws, req) => {
-    // Parse robustly
     const url = new URL(req.url, `http://${req.headers.host}`);
     let channelId = url.searchParams.get('channel');
-
-    // Also support /ws/<id> style
     if (!channelId) {
         const parts = url.pathname.split('/').filter(Boolean); // e.g. ["ws","167556274"]
-        if (parts[0] === 'ws' && parts[1]) channelId = parts[1];
+        if (parts[0]) {
+            // support /ws/<id> or /<id>
+            if (parts[0] === 'ws' && parts[1]) channelId = parts[1];
+            else if (parts[0] && !parts[1]) channelId = parts[0]; // bare "/<id>"
+        }
     }
 
     if (!channelId) {
-        ws.close(1008, 'Channel ID required'); // policy violation (1008) is clearer than 1000
+        ws.close(1008, 'Channel ID required');
         return;
     }
 
-    // Track client
     if (!connectedClients.has(channelId)) connectedClients.set(channelId, new Set());
     connectedClients.get(channelId).add(ws);
 
     console.log(`📡 WebSocket client connected to channel: ${channelId}`);
 
-    // Send initial snapshot
     getHeatmapData(channelId, 3).then(data => {
-        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(data));
+        if (ws.readyState === ws.OPEN) {
+            data.running = getRunning(channelId);
+            ws.send(JSON.stringify(data));
+        }
     });
 
-    // Optional: keep-alive to survive proxies
+    // Keep-alive pings to satisfy proxies
     const interval = setInterval(() => {
         if (ws.readyState === ws.OPEN) {
             try { ws.ping(); } catch { }
@@ -457,9 +425,8 @@ wss.on('connection', (ws, req) => {
     });
 });
 
-
 server.listen(PORT, () => {
-    console.log('🚀 Precise ClickMap EBS v2.2.0 running on port', PORT);
+    console.log('🚀 Precise ClickMap EBS v2.3.0 running on port', PORT);
     console.log('📊 Redis:', useRedis ? 'enabled' : 'disabled');
     console.log('🎯 Enhanced precision clustering for close-together clicks');
 });

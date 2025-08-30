@@ -1,4 +1,4 @@
-﻿// frontend/script.js - Main Twitch extension script with HUD-style visualization
+﻿// frontend/script.js - Main Twitch extension script with HUD-style visualization (click-through + 16:9 projection)
 import { HeatmapRenderer } from './heatmap.js';
 
 class ClickMapExtension {
@@ -10,6 +10,10 @@ class ClickMapExtension {
         this.pollInterval = null;
         this.isVisible = true;
         this.lastDataHash = '';
+
+        // 16:9 projection viewport (updated on resize)
+        this.targetAspect = 16 / 9;
+        this.viewport = { x: 0, y: 0, width: 0, height: 0 };
 
         // Statistics for debug mode
         this.stats = {
@@ -24,6 +28,35 @@ class ClickMapExtension {
         this.POLL_RATE = 1000; // 1 second polling
 
         this.init();
+    }
+
+    // ---------- helpers (same math as overlay) ----------
+    fitViewport(containerW, containerH, targetAspect) {
+        let vw = containerW;
+        let vh = Math.round(vw / targetAspect);
+        if (vh > containerH) {
+            vh = containerH;
+            vw = Math.round(vh * targetAspect);
+        }
+        const vx = Math.floor((containerW - vw) / 2);
+        const vy = Math.floor((containerH - vh) / 2);
+        return { x: vx, y: vy, width: vw, height: vh };
+    }
+
+    // Convert client coords to normalized coords inside the 16:9 viewport
+    // Clicks outside the viewport (letterbox) are clamped to the closest edge
+    clientToNormalized(clientX, clientY) {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        // current viewport
+        const vp = this.viewport;
+        // Clamp to viewport edges
+        const px = Math.max(vp.x, Math.min(vp.x + vp.width, clientX));
+        const py = Math.max(vp.y, Math.min(vp.y + vp.height, clientY));
+        const nx = (px - vp.x) / (vp.width || 1);
+        const ny = (py - vp.y) / (vp.height || 1);
+        // Normalize to [0,1]
+        return { x: Math.max(0, Math.min(1, nx)), y: Math.max(0, Math.min(1, ny)) };
     }
 
     init() {
@@ -46,6 +79,18 @@ class ClickMapExtension {
             return;
         }
 
+        // Absolutely never capture clicks
+        try {
+            canvas.style.pointerEvents = 'none';
+            // safety for any injected CSS
+            const style = document.createElement('style');
+            style.textContent = `
+                #heat { pointer-events: none !important; }
+                .loading-overlay, .error-overlay { pointer-events: none; } /* overlays remain passive */
+            `;
+            document.head.appendChild(style);
+        } catch { }
+
         this.renderer = new HeatmapRenderer(canvas);
         this.resizeCanvas();
 
@@ -58,55 +103,40 @@ class ClickMapExtension {
 
     resizeCanvas() {
         if (!this.renderer) return;
+        // Update renderer’s internal size
         this.renderer.resize();
+
+        // Recompute 16:9 viewport for this iframe size
+        const cssW = window.innerWidth;
+        const cssH = window.innerHeight;
+        this.viewport = this.fitViewport(cssW, cssH, this.targetAspect);
     }
 
     setupEventListeners() {
         let clickTimeout = null;
 
-        // Main click handler
+        // Main click handler (does NOT stop propagation; Twitch player still receives clicks)
         document.addEventListener('click', (event) => {
             if (!this.running || !this.authToken) return;
 
-            // Track interaction for analytics
-            if (window.analytics) {
-                window.analytics.trackInteraction();
-            }
+            // Debounce a tad to bundle double-clicks
+            if (clickTimeout) clearTimeout(clickTimeout);
+            clickTimeout = setTimeout(() => this.handleClick(event), 40);
+        }, { passive: true });
 
-            // Debounce rapid clicks
-            if (clickTimeout) {
-                clearTimeout(clickTimeout);
-            }
-
-            clickTimeout = setTimeout(() => {
-                this.handleClick(event);
-            }, 50);
-        });
-
-        // Touch support for mobile
+        // Touch support — passive and NO preventDefault, so native gestures/controls work
         document.addEventListener('touchstart', (event) => {
             if (!this.running || !this.authToken || event.touches.length > 1) return;
 
-            event.preventDefault();
             const touch = event.touches[0];
-            const syntheticEvent = {
-                clientX: touch.clientX,
-                clientY: touch.clientY
-            };
+            const syntheticEvent = { clientX: touch.clientX, clientY: touch.clientY };
 
-            if (clickTimeout) {
-                clearTimeout(clickTimeout);
-            }
-
-            clickTimeout = setTimeout(() => {
-                this.handleClick(syntheticEvent);
-            }, 50);
-        }, { passive: false });
+            if (clickTimeout) clearTimeout(clickTimeout);
+            clickTimeout = setTimeout(() => this.handleClick(syntheticEvent), 40);
+        }, { passive: true });
     }
 
     setupUI() {
-        // Show loading initially (hidden by default in clean version)
-        // Only enable status updates in debug mode
         if (window.debugManager?.isDebugMode) {
             this.showLoading(true);
             this.updateStatusBadge('Connecting...', 'inactive');
@@ -114,12 +144,11 @@ class ClickMapExtension {
     }
 
     handleClick(event) {
-        const rect = document.body.getBoundingClientRect();
-        const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-        const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-
-        // Visual feedback for the click
+        // Visual feedback (non-blocking, pointer-events: none)
         this.showClickFeedback(event.clientX, event.clientY);
+
+        // Normalize into 16:9 viewport
+        const { x, y } = this.clientToNormalized(event.clientX, event.clientY);
 
         // Send click to backend
         this.sendClick(x, y);
@@ -130,7 +159,6 @@ class ClickMapExtension {
     }
 
     showClickFeedback(clientX, clientY) {
-        // Create temporary visual feedback element
         const feedback = document.createElement('div');
         feedback.className = 'click-feedback';
         feedback.style.cssText = `
@@ -142,21 +170,12 @@ class ClickMapExtension {
             border: 2px solid rgba(147, 51, 234, 0.8);
             border-radius: 50%;
             pointer-events: none;
-            z-index: 10001;
+            z-index: 2147483647;
             margin: -10px 0 0 -10px;
             animation: clickPulse 0.6s ease-out forwards;
         `;
-
         document.body.appendChild(feedback);
-
-        // Remove after animation
-        setTimeout(() => {
-            if (feedback.parentNode) {
-                feedback.parentNode.removeChild(feedback);
-            }
-        }, 600);
-
-        // Announce click for screen readers
+        setTimeout(() => feedback.remove(), 650);
         this.announceToScreenReader('Click registered');
     }
 
@@ -168,17 +187,14 @@ class ClickMapExtension {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.authToken}`
                 },
-                body: JSON.stringify({ x, y })
+                body: JSON.stringify({ x, y }) // x,y are normalized to 16:9 viewport
             });
-
             if (!response.ok) {
                 console.warn('⚠️ Click submission failed:', response.status);
             }
         } catch (error) {
             console.error('❌ Click submission error:', error);
-            if (window.analytics) {
-                window.analytics.trackError();
-            }
+            if (window.analytics) window.analytics.trackError?.();
         }
     }
 
@@ -210,40 +226,27 @@ class ClickMapExtension {
         });
 
         Twitch.ext.onContext((context, changed) => {
-            // Handle context changes if needed
-            if (changed.includes('theme')) {
-                this.handleThemeChange(context.theme);
-            }
+            if (changed.includes('theme')) this.handleThemeChange(context.theme);
         });
     }
 
     handleThemeChange(theme) {
-        // Adjust colors based on Twitch theme
         document.body.classList.toggle('twitch-light', theme === 'light');
         document.body.classList.toggle('twitch-dark', theme === 'dark');
     }
 
     setupVisibilityOptimization() {
-        // Pause when tab is not visible
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                this.stopPolling();
-            } else if (this.isVisible) {
-                this.startPolling();
-            }
+            if (document.hidden) this.stopPolling();
+            else if (this.isVisible) this.startPolling();
         });
 
-        // Intersection observer for off-screen detection
         if ('IntersectionObserver' in window) {
             const observer = new IntersectionObserver((entries) => {
                 const entry = entries[0];
-                if (entry.intersectionRatio === 0) {
-                    this.stopPolling();
-                } else if (this.isVisible) {
-                    this.startPolling();
-                }
+                if (entry.intersectionRatio === 0) this.stopPolling();
+                else if (this.isVisible) this.startPolling();
             }, { threshold: 0 });
-
             observer.observe(document.body);
         }
     }
@@ -251,17 +254,11 @@ class ClickMapExtension {
     startPolling() {
         if (this.pollInterval) return;
 
-        if (window.debugManager?.isDebugMode) {
-            this.showLoading(false);
-        }
+        if (window.debugManager?.isDebugMode) this.showLoading(false);
         this.stats.status = 'polling';
 
-        this.pollInterval = setInterval(() => {
-            this.pollHeatmapData();
-        }, this.POLL_RATE);
-
-        // Initial poll
-        this.pollHeatmapData();
+        this.pollInterval = setInterval(() => this.pollHeatmapData(), this.POLL_RATE);
+        this.pollHeatmapData(); // initial
     }
 
     stopPolling() {
@@ -275,86 +272,69 @@ class ClickMapExtension {
 
     async pollHeatmapData() {
         const pollStart = performance.now();
-
         try {
             const response = await fetch(`${this.EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
             const data = await response.json();
             const dataHash = this.hashData(data);
 
-            // Only update if data has changed
             if (dataHash !== this.lastDataHash) {
                 this.lastDataHash = dataHash;
                 this.updateVisualization(data);
             }
 
-            // Update stats
             this.stats.polls++;
             this.stats.lastPollTime = `${(performance.now() - pollStart).toFixed(1)}ms`;
             this.stats.status = this.running ? 'active' : 'inactive';
 
-            // Update UI only in debug mode
             if (window.debugManager?.isDebugMode) {
-                this.updateStatusBadge(
-                    this.running ? 'Session Active' : 'Session Stopped',
-                    this.running ? 'active' : 'inactive'
-                );
+                this.updateStatusBadge(this.running ? 'Session Active' : 'Session Stopped',
+                    this.running ? 'active' : 'inactive');
             }
             this.hideError();
 
         } catch (error) {
             console.error('❌ Heatmap polling error:', error);
             this.showError('Connection lost. Retrying...');
-
-            if (window.debugManager?.isDebugMode) {
-                this.updateStatusBadge('Connection Error', 'inactive');
-            }
-
-            if (window.analytics) {
-                window.analytics.trackError();
-            }
+            if (window.debugManager?.isDebugMode) this.updateStatusBadge('Connection Error', 'inactive');
+            if (window.analytics) window.analytics.trackError?.();
         }
 
         this.updateDebugStats();
     }
 
     hashData(data) {
-        // Simple hash for change detection
         return JSON.stringify({
             running: data.running,
             clusters: data.clusters?.map(c => ({
-                x: Math.round(c.x * 1000),
-                y: Math.round(c.y * 1000),
+                x: Math.round((c.x || 0) * 1000),
+                y: Math.round((c.y || 0) * 1000),
                 p: c.percentage
             })) || []
         });
     }
 
     updateVisualization(data) {
-        this.running = data.running;
-
+        this.running = !!data.running;
         if (!this.renderer) return;
 
-        // Update renderer with HUD-style clusters
+        // If your backend returns absolute pixel coords, convert to normalized before passing along:
+        // Here we assume server already sends normalized coords [0..1] relative to the same 16:9 projection.
+        // If not, you can normalize here by inspecting data.width/height.
         this.renderer.updateClusters(data.clusters || []);
         this.stats.renders++;
 
-        // Update body classes for CSS styling
         document.body.classList.toggle('clickmap-active', this.running);
         document.body.classList.toggle('clickmap-has-data', (data.clusters || []).length > 0);
 
-        // Update debug stats
-        this.stats.clusters = (data.clusters || []).filter(c => c.percentage >= 3).length;
+        this.stats.clusters = (data.clusters || []).filter(c => (c.percentage || 0) >= 3).length;
 
-        // Announce significant changes to screen readers
-        const visibleClusters = (data.clusters || []).filter(c => c.percentage >= 3);
+        const visibleClusters = (data.clusters || []).filter(c => (c.percentage || 0) >= 3);
         if (visibleClusters.length > 0 && this.running) {
-            const topCluster = visibleClusters[0];
-            if (topCluster && topCluster.percentage >= 20) {
-                this.announceToScreenReader(`Hot spot detected: ${topCluster.percentage}% of clicks`);
+            const top = visibleClusters[0];
+            if (top && (top.percentage || 0) >= 20) {
+                this.announceToScreenReader(`Hot spot detected: ${top.percentage}% of clicks`);
             }
         }
     }
@@ -370,43 +350,28 @@ class ClickMapExtension {
 
     // UI Helper Methods
     showLoading(show) {
-        const loadingEl = document.getElementById('loading-overlay');
-        if (loadingEl) {
-            loadingEl.classList.toggle('visible', show);
-        }
+        const el = document.getElementById('loading-overlay');
+        if (el) el.classList.toggle('visible', !!show);
     }
 
     showError(message) {
         const errorEl = document.getElementById('error-overlay');
         const messageEl = document.getElementById('error-message');
-
         if (errorEl) {
-            if (messageEl) {
-                messageEl.textContent = message;
-            } else {
-                // Fallback: find any paragraph in error element
-                const paragraphs = errorEl.querySelectorAll('p');
-                if (paragraphs.length > 0) {
-                    paragraphs[0].textContent = message;
-                }
-            }
+            if (messageEl) messageEl.textContent = message;
             errorEl.style.display = 'block';
         }
-
         console.error('🔴 Extension Error:', message);
     }
 
     hideError() {
         const errorEl = document.getElementById('error-overlay');
-        if (errorEl) {
-            errorEl.style.display = 'none';
-        }
+        if (errorEl) errorEl.style.display = 'none';
     }
 
     updateStatusBadge(text, status) {
         const badge = document.getElementById('status-badge');
         const statusText = document.getElementById('status-text');
-
         if (badge && statusText) {
             statusText.textContent = text;
             badge.className = `status-badge visible ${status}`;
@@ -417,23 +382,14 @@ class ClickMapExtension {
         const announcer = document.getElementById('announcements');
         if (announcer) {
             announcer.textContent = message;
-
-            // Clear after announcement
-            setTimeout(() => {
-                announcer.textContent = '';
-            }, 1000);
+            setTimeout(() => { announcer.textContent = ''; }, 1000);
         }
     }
 
     destroy() {
         this.stopPolling();
-        if (this.renderer) {
-            this.renderer.destroy();
-        }
-        if (this.resizeTimeout) {
-            clearTimeout(this.resizeTimeout);
-        }
-
+        if (this.renderer) this.renderer.destroy();
+        if (this.resizeTimeout) clearTimeout(this.resizeTimeout);
         console.log('🧹 ClickMap Extension destroyed');
     }
 }
@@ -442,9 +398,7 @@ class ClickMapExtension {
 let extensionInstance = null;
 
 function initializeExtension() {
-    if (extensionInstance) {
-        extensionInstance.destroy();
-    }
+    if (extensionInstance) extensionInstance.destroy();
     extensionInstance = new ClickMapExtension();
 }
 

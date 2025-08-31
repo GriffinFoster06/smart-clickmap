@@ -2,7 +2,7 @@
 import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
-import { WebSocketServer } from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 
 const PORT = process.env.PORT || 8080;
@@ -19,7 +19,7 @@ const connectedClients = new Map(); // channelId → Set of WebSocket connection
 
 const app = express();
 
-// CORS setup - more permissive for WebSocket upgrades
+// CORS setup
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -30,13 +30,12 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Add WebSocket upgrade handling headers
+// Add headers for WebSocket support
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Upgrade, Connection');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, UPGRADE');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version, Sec-WebSocket-Protocol');
 
-    // Handle preflight
     if (req.method === 'OPTIONS') {
         res.sendStatus(200);
         return;
@@ -52,26 +51,95 @@ app.use((req, res, next) => {
     next();
 });
 
-// Health check
+// Health check with comprehensive diagnostics
 app.get('/health', (req, res) => {
     console.log('🏥 Health check called');
     res.json({
         status: 'ok',
         running: gameState.running,
         timestamp: Date.now(),
-        version: '3.1.0',
+        version: '3.2.0',
         uptime: process.uptime(),
-        websocket: 'enabled',
-        totalChannels: gameState.clicks.size,
-        totalClicks: Array.from(gameState.clicks.values()).reduce((sum, channelClicks) => sum + channelClicks.size, 0),
-        clients: Array.from(connectedClients.entries()).map(([channel, clients]) => ({
-            channel,
-            count: clients.size
-        })),
-        channels: Array.from(gameState.clicks.entries()).map(([channel, clicks]) => ({
-            channel,
-            clicks: clicks.size
-        }))
+        websocket: {
+            enabled: !!wss,
+            clients: wss ? wss.clients.size : 0,
+            channels: connectedClients.size,
+            connections_by_channel: Array.from(connectedClients.entries()).map(([channel, clients]) => ({
+                channel,
+                count: clients.size
+            }))
+        },
+        environment: {
+            node_env: process.env.NODE_ENV || 'unknown',
+            port: PORT,
+            render_service: process.env.RENDER_SERVICE_NAME || 'unknown',
+            render_service_id: process.env.RENDER_SERVICE_ID || 'unknown'
+        },
+        game_data: {
+            total_channels: gameState.clicks.size,
+            total_clicks: Array.from(gameState.clicks.values()).reduce((sum, channelClicks) => sum + channelClicks.size, 0),
+            channels: Array.from(gameState.clicks.entries()).map(([channel, clicks]) => ({
+                channel,
+                clicks: clicks.size
+            }))
+        }
+    });
+});
+
+// WebSocket production debug endpoint
+app.get('/ws-debug', (req, res) => {
+    console.log('🔍 WebSocket Debug requested');
+
+    const debug = {
+        timestamp: new Date().toISOString(),
+        websocket_server: {
+            exists: !!wss,
+            clients: wss ? wss.clients.size : 0,
+            ready_state: wss ? 'initialized' : 'not_initialized',
+            options: wss ? {
+                port: wss.options.port,
+                server: !!wss.options.server,
+                clientTracking: wss.options.clientTracking
+            } : null
+        },
+        connected_clients: {
+            channels: connectedClients.size,
+            total_connections: Array.from(connectedClients.values()).reduce((sum, set) => sum + set.size, 0),
+            by_channel: Array.from(connectedClients.entries()).map(([channel, clients]) => ({
+                channel,
+                count: clients.size
+            }))
+        },
+        server_info: {
+            listening: !!httpServer && httpServer.listening,
+            address: httpServer ? httpServer.address() : null,
+            port: PORT,
+            environment: process.env.NODE_ENV || 'development'
+        }
+    };
+
+    console.log('🔍 Debug result:', JSON.stringify(debug, null, 2));
+    res.json(debug);
+});
+
+// WebSocket connection test helper
+app.get('/ws-test/:channelId', (req, res) => {
+    const { channelId } = req.params;
+    const wsUrl = `wss://${req.get('host')}/ws/${channelId}`;
+
+    res.json({
+        test_url: wsUrl,
+        server_ready: !!httpServer && httpServer.listening,
+        websocket_ready: !!wss,
+        client_count: wss ? wss.clients.size : 0,
+        instructions: [
+            'Test in browser console:',
+            `const ws = new WebSocket('${wsUrl}');`,
+            `ws.onopen = () => console.log('✅ Connected');`,
+            `ws.onerror = (e) => console.log('❌ Error:', e);`,
+            `ws.onclose = (e) => console.log('🔒 Closed:', e.code, e.reason);`,
+            `ws.onmessage = (e) => console.log('📨 Message:', e.data);`
+        ]
     });
 });
 
@@ -207,14 +275,6 @@ app.post('/click', (req, res) => {
         const uid = payload.user_id || payload.opaque_user_id;
         const channelId = payload.channel_id;
 
-        console.log(`   Token payload:`, {
-            user_id: payload.user_id,
-            opaque_user_id: payload.opaque_user_id,
-            channel_id: payload.channel_id,
-            finalUid: uid,
-            finalChannelId: channelId
-        });
-
         if (typeof x !== 'number' || typeof y !== 'number' ||
             x < 0 || x > 1 || y < 0 || y > 1) {
             console.log(`   ❌ Invalid coordinates: (${x}, ${y})`);
@@ -233,16 +293,12 @@ app.post('/click', (req, res) => {
         gameState.clicks.get(channelId).set(uid, { x, y, timestamp: Date.now() });
         gameState.lastUpdate = Date.now();
 
-        console.log(`✅ Click stored:`);
-        console.log(`   Channel: ${channelId}`);
-        console.log(`   User: ${uid}`);
-        console.log(`   Position: (${x.toFixed(3)}, ${y.toFixed(3)})`);
+        console.log(`✅ Click stored: Channel ${channelId}, User ${uid}, Pos (${x.toFixed(3)}, ${y.toFixed(3)})`);
         console.log(`   Total clicks in channel: ${gameState.clicks.get(channelId).size}`);
-        console.log(`   All channels:`, Array.from(gameState.clicks.keys()));
 
         // Get updated data and broadcast immediately
         const updatedData = getCurrentHeatmapData(channelId);
-        console.log(`   📡 Broadcasting update: ${updatedData.clusters.length} clusters to channel ${channelId}`);
+        console.log(`   📡 Broadcasting: ${updatedData.clusters.length} clusters to channel ${channelId}`);
         broadcastToChannel(channelId, updatedData);
 
         res.json({
@@ -267,32 +323,13 @@ app.get('/heatmap', (req, res) => {
     const channelId = req.query.channel;
     const threshold = parseInt(req.query.threshold) || 3;
 
-    console.log(`📊 HEATMAP endpoint called:`);
-    console.log(`   Channel: ${channelId || 'NOT PROVIDED (will aggregate all)'}`);
-    console.log(`   Threshold: ${threshold}%`);
-    console.log(`   Query params:`, req.query);
-    console.log(`   Full URL: ${req.url}`);
-    console.log(`   Available channels:`, Array.from(gameState.clicks.keys()));
+    console.log(`📊 HEATMAP endpoint: channel=${channelId || 'ALL'}, threshold=${threshold}%`);
 
     try {
         const data = getCurrentHeatmapData(channelId, threshold);
 
-        console.log(`✅ Heatmap data prepared:`);
-        console.log(`   Target channel: ${channelId || 'ALL'}`);
-        console.log(`   Total clicks: ${data.totalClicks}`);
-        console.log(`   Unique users: ${data.uniqueUsers}`);
-        console.log(`   Clusters: ${data.clusters.length}`);
-        console.log(`   Running: ${data.running}`);
-        console.log(`   Threshold: ${data.threshold}%`);
-
-        // Log cluster details for debugging
-        if (data.clusters.length > 0) {
-            console.log(`   📍 Cluster details:`);
-            data.clusters.forEach(c => {
-                console.log(`     - ID: ${c.id}, ${c.percentage}% at (${c.x.toFixed(3)}, ${c.y.toFixed(3)}), Count: ${c.count}${c.isTop ? ' (TOP)' : ''}`);
-            });
-        } else if (data.totalClicks > 0) {
-            console.log(`   🐛 POTENTIAL BUG: ${data.totalClicks} clicks but 0 clusters! Check threshold.`);
+        if (data.totalClicks > 0) {
+            console.log(`✅ Heatmap: ${data.totalClicks} clicks → ${data.clusters.length} clusters`);
         }
 
         res.json(data);
@@ -307,57 +344,28 @@ app.get('/heatmap', (req, res) => {
     }
 });
 
-// WebSocket test endpoint
-app.get('/ws-test/:channelId', (req, res) => {
-    const { channelId } = req.params;
-    const clients = connectedClients.get(channelId);
-
-    res.json({
-        channelId,
-        connected: !!clients,
-        clientCount: clients ? clients.size : 0,
-        allChannels: Array.from(connectedClients.keys()),
-        totalClients: Array.from(connectedClients.values()).reduce((sum, set) => sum + set.size, 0),
-        gameData: {
-            running: gameState.running,
-            totalChannels: gameState.clicks.size,
-            channelClicks: gameState.clicks.has(channelId) ? gameState.clicks.get(channelId).size : 0
-        }
-    });
-});
-
-// FIXED: Get current heatmap data with proper clustering for all cases
+// Get current heatmap data with proper clustering
 function getCurrentHeatmapData(channelId, threshold = 3) {
-    console.log(`🔍 getCurrentHeatmapData called: channel=${channelId}, threshold=${threshold}%`);
-
-    // If no specific channel requested, aggregate all channels WITH clustering
+    // If no specific channel requested, aggregate all channels
     if (!channelId || channelId === 'all') {
-        console.log(`🔍 Aggregating data from all channels`);
-
         let allPoints = [];
         let totalClicks = 0;
         let totalUsers = 0;
 
-        // Collect all points from all channels
-        gameState.clicks.forEach((channelClicks, channel) => {
-            console.log(`   📊 Channel ${channel}: ${channelClicks.size} clicks`);
+        gameState.clicks.forEach((channelClicks) => {
             totalClicks += channelClicks.size;
             totalUsers += channelClicks.size;
 
-            // Add all points to the aggregate
             Array.from(channelClicks.values()).forEach(point => {
                 allPoints.push(point);
             });
         });
 
-        console.log(`🔍 Aggregated: ${allPoints.length} total points from ${gameState.clicks.size} channels`);
-
-        // Process ALL points into clusters
         const clusters = processClicksIntoClusters(allPoints, threshold);
 
         return {
             running: gameState.running,
-            clusters,  // ✅ Now includes clusters from all channels
+            clusters,
             totalClicks,
             uniqueUsers: totalUsers,
             coverage: Math.min(100, clusters.length * 10),
@@ -367,11 +375,9 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     }
 
     // Handle specific channel
-    console.log(`🔍 Getting data for specific channel: ${channelId}`);
     const channelClicks = gameState.clicks.get(channelId);
 
     if (!channelClicks || channelClicks.size === 0) {
-        console.log(`🔍 Channel ${channelId} has no clicks`);
         return {
             running: gameState.running,
             clusters: [],
@@ -384,10 +390,7 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     }
 
     const points = Array.from(channelClicks.values());
-    console.log(`🔍 Channel ${channelId} has ${points.length} points`);
     const clusters = processClicksIntoClusters(points, threshold);
-
-    console.log(`🔍 Channel ${channelId} result: ${points.length} points → ${clusters.length} clusters`);
 
     return {
         running: gameState.running,
@@ -400,21 +403,16 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     };
 }
 
-// Enhanced clustering function with comprehensive logging
+// Enhanced clustering with debug logging
 function processClicksIntoClusters(points, threshold) {
-    console.log(`🧮 CLUSTERING START: ${points.length} points, threshold ${threshold}%`);
-
-    if (points.length === 0) {
-        console.log(`🧮 CLUSTERING: No points to process`);
-        return [];
-    }
+    if (points.length === 0) return [];
 
     const clusters = [];
-    const gridSize = 0.1; // 10% of screen
+    const gridSize = 0.1;
     const grid = new Map();
 
     // Group points into grid cells
-    points.forEach((point, index) => {
+    points.forEach((point) => {
         const cellX = Math.floor(point.x / gridSize);
         const cellY = Math.floor(point.y / gridSize);
         const cellKey = `${cellX},${cellY}`;
@@ -423,36 +421,25 @@ function processClicksIntoClusters(points, threshold) {
             grid.set(cellKey, []);
         }
         grid.get(cellKey).push(point);
-
-        console.log(`🧮 Point ${index}: (${point.x.toFixed(3)}, ${point.y.toFixed(3)}) → Cell ${cellKey}`);
     });
-
-    console.log(`🧮 CLUSTERING: Created ${grid.size} grid cells`);
 
     // Convert grid cells to clusters
     let clusterId = 0;
-    grid.forEach((cellPoints, cellKey) => {
+    grid.forEach((cellPoints) => {
         const percentage = Math.round((cellPoints.length / points.length) * 100);
-
-        console.log(`🧮 Cell ${cellKey}: ${cellPoints.length} points = ${percentage}% (threshold: ${threshold}%)`);
 
         if (percentage >= threshold) {
             const avgX = cellPoints.reduce((sum, p) => sum + p.x, 0) / cellPoints.length;
             const avgY = cellPoints.reduce((sum, p) => sum + p.y, 0) / cellPoints.length;
 
-            const cluster = {
+            clusters.push({
                 id: clusterId++,
                 x: avgX,
                 y: avgY,
                 count: cellPoints.length,
                 percentage,
                 isTop: false
-            };
-
-            clusters.push(cluster);
-            console.log(`✅ CLUSTER CREATED: ID ${cluster.id}, ${percentage}% at (${avgX.toFixed(3)}, ${avgY.toFixed(3)}), ${cellPoints.length} points`);
-        } else {
-            console.log(`❌ CLUSTER FILTERED: Cell ${cellKey} has ${percentage}% < ${threshold}%`);
+            });
         }
     });
 
@@ -460,26 +447,21 @@ function processClicksIntoClusters(points, threshold) {
     clusters.sort((a, b) => b.percentage - a.percentage);
     if (clusters.length > 0) {
         clusters[0].isTop = true;
-        console.log(`🏆 TOP CLUSTER: #${clusters[0].id} with ${clusters[0].percentage}%`);
     }
 
-    console.log(`🧮 CLUSTERING COMPLETE: ${clusters.length} final clusters`);
     return clusters;
 }
 
 // WebSocket broadcasting
 function broadcastToChannel(channelId, data) {
     const clients = connectedClients.get(channelId);
-    if (!clients || clients.size === 0) {
-        console.log(`📡 No WebSocket clients for channel ${channelId}`);
-        return;
-    }
+    if (!clients || clients.size === 0) return;
 
     const message = JSON.stringify(data);
     let sentCount = 0;
 
     clients.forEach(ws => {
-        if (ws.readyState === ws.OPEN) {
+        if (ws.readyState === WebSocket.OPEN) {
             try {
                 ws.send(message);
                 sentCount++;
@@ -492,102 +474,123 @@ function broadcastToChannel(channelId, data) {
         }
     });
 
-    console.log(`📡 Broadcast to channel ${channelId}: ${sentCount}/${clients.size} clients, ${data.clusters.length} clusters`);
+    if (sentCount > 0) {
+        console.log(`📡 Broadcast to ${channelId}: ${sentCount} clients, ${data.clusters.length} clusters`);
+    }
 }
 
 function broadcastToAll(data) {
     let totalSent = 0;
-    let totalChannels = 0;
-
     connectedClients.forEach((clients, channelId) => {
         const channelData = channelId === 'all' ? data : getCurrentHeatmapData(channelId);
         Object.assign(channelData, { running: data.running, action: data.action });
         broadcastToChannel(channelId, channelData);
         totalSent += clients.size;
-        totalChannels++;
     });
 
-    console.log(`📡 Broadcast to all: ${totalSent} clients across ${totalChannels} channels`);
+    if (totalSent > 0) {
+        console.log(`📡 Broadcast to all: ${totalSent} clients`);
+    }
 }
 
 // HTTP server
-const server = createServer(app);
+const httpServer = createServer(app);
 
-// WebSocket server with improved configuration
-const wss = new WebSocketServer({
-    server,
-    path: '/ws',
-    perMessageDeflate: false,
-    maxPayload: 1024 * 1024,
-    verifyClient: (info) => {
-        console.log(`🔗 WebSocket verification: ${info.req.url} from ${info.req.headers.origin || 'unknown'}`);
-        return true;
-    }
-});
+// ===== RENDER.COM PROVEN WEBSOCKET APPROACH =====
+// Based on working example from Render.com community
 
-console.log('🔧 WebSocket server configured');
+console.log('🔧 Creating WebSocket server using Render.com proven approach...');
 
-wss.on('connection', (ws, req) => {
-    console.log(`🔗 New WebSocket connection from ${req.socket.remoteAddress}`);
-    console.log(`📍 WebSocket URL: ${req.url}`);
+// Method 1: Simple WebSocket.Server (Render.com proven working method)
+let wss;
+try {
+    wss = new WebSocketServer({
+        port: PORT + 1, // Use separate port for WebSocket (common Render pattern)
+        perMessageDeflate: false,
+        clientTracking: true
+    });
+    console.log(`✅ WebSocket server created on port ${PORT + 1} (separate port method)`);
+} catch (portError) {
+    console.log('⚠️ Separate port failed, trying server integration...');
 
+    // Method 2: Integrate with HTTP server
     try {
-        // More robust channel ID extraction
-        const url = new URL(req.url, `http://${req.headers.host}`);
-        console.log(`🔍 Parsed URL: ${url.pathname}`);
+        wss = new WebSocketServer({
+            server: httpServer,
+            perMessageDeflate: false,
+            clientTracking: true
+        });
+        console.log('✅ WebSocket server integrated with HTTP server');
+    } catch (integrationError) {
+        console.error('❌ Both WebSocket methods failed:', portError, integrationError);
+    }
+}
 
-        // Handle both /ws/channelId and /ws?channel=channelId formats
+if (wss) {
+    wss.on('connection', (ws, req) => {
+        const startTime = Date.now();
+        console.log(`🔗 NEW WEBSOCKET CONNECTION`);
+        console.log(`   URL: ${req.url}`);
+        console.log(`   Origin: ${req.headers.origin}`);
+        console.log(`   User-Agent: ${req.headers['user-agent']?.substring(0, 50)}...`);
+
+        // Extract channel ID from URL
         let channelId = null;
-
-        // First try path-based channel ID
-        const pathParts = url.pathname.split('/').filter(part => part.length > 0);
-        console.log(`🔍 Path parts:`, pathParts);
-
-        if (pathParts.length >= 2 && pathParts[0] === 'ws') {
-            channelId = pathParts[1];
-            console.log(`📍 Channel ID from path: ${channelId}`);
-        }
-
-        // Fallback to query parameter
-        if (!channelId) {
-            channelId = url.searchParams.get('channel');
-            console.log(`📍 Channel ID from query: ${channelId}`);
+        if (req.url) {
+            // Handle /ws/channelId or /?channel=channelId
+            const match = req.url.match(/\/ws\/([^?]+)/) || req.url.match(/[?&]channel=([^&]+)/);
+            if (match) {
+                channelId = match[1];
+                console.log(`   Channel: ${channelId}`);
+            }
         }
 
         if (!channelId) {
-            console.error('❌ No channel ID provided in WebSocket connection');
-            ws.close(1000, 'Channel ID required');
+            console.error('❌ No channel ID found');
+            ws.close(1008, 'Channel ID required in URL: /ws/CHANNEL_ID');
             return;
         }
 
-        // Add client to channel
+        // Add to tracking
         if (!connectedClients.has(channelId)) {
             connectedClients.set(channelId, new Set());
         }
         connectedClients.get(channelId).add(ws);
 
-        console.log(`📡 WebSocket connected: Channel ${channelId} (${connectedClients.get(channelId).size} total for this channel)`);
-        console.log(`📊 Total channels: ${connectedClients.size}, Total clients: ${Array.from(connectedClients.values()).reduce((sum, set) => sum + set.size, 0)}`);
+        const clientCount = connectedClients.get(channelId).size;
+        const totalClients = wss.clients.size;
 
-        // Send initial data immediately
+        console.log(`✅ Connected: Channel ${channelId} (${clientCount} in channel, ${totalClients} total)`);
+
+        // Send initial data
         try {
             const initialData = getCurrentHeatmapData(channelId);
             ws.send(JSON.stringify(initialData));
-            console.log(`📨 Sent initial data to channel ${channelId}: ${initialData.clusters.length} clusters, ${initialData.totalClicks} clicks`);
+            console.log(`📨 Initial data sent: ${initialData.clusters.length} clusters`);
         } catch (error) {
             console.error('❌ Error sending initial data:', error);
         }
 
-        // Handle WebSocket messages
+        // Handle messages
         ws.on('message', (message) => {
             try {
-                console.log(`📨 WebSocket message from ${channelId}:`, message.toString());
+                const data = JSON.parse(message.toString());
+                console.log(`📨 Message from ${channelId}:`, data);
+
+                // Echo for testing
+                ws.send(JSON.stringify({
+                    type: 'echo',
+                    received: data,
+                    timestamp: Date.now()
+                }));
             } catch (error) {
-                console.error('❌ WebSocket message error:', error);
+                console.error('❌ Message error:', error);
             }
         });
 
+        // Handle close
         ws.on('close', (code, reason) => {
+            const duration = Date.now() - startTime;
             const clients = connectedClients.get(channelId);
             if (clients) {
                 clients.delete(ws);
@@ -595,40 +598,34 @@ wss.on('connection', (ws, req) => {
                     connectedClients.delete(channelId);
                 }
             }
-            console.log(`📡 WebSocket disconnected: Channel ${channelId}, Code: ${code}, Reason: ${reason || 'none'}`);
+            console.log(`🔒 Disconnected: ${channelId} after ${duration}ms (Code: ${code})`);
         });
 
+        // Handle errors
         ws.on('error', (error) => {
-            console.error(`❌ WebSocket error for channel ${channelId}:`, error);
+            console.error(`❌ WebSocket error for ${channelId}:`, error);
         });
 
-        // Send ping periodically to keep connection alive
-        const pingInterval = setInterval(() => {
-            if (ws.readyState === ws.OPEN) {
-                try {
-                    ws.ping();
-                } catch (error) {
-                    console.error('❌ WebSocket ping error:', error);
-                    clearInterval(pingInterval);
-                }
+        // Keep-alive pings
+        const keepAlive = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.ping();
             } else {
-                clearInterval(pingInterval);
+                clearInterval(keepAlive);
             }
         }, 30000);
 
-        ws.on('close', () => {
-            clearInterval(pingInterval);
-        });
+        ws.on('close', () => clearInterval(keepAlive));
+    });
 
-    } catch (error) {
-        console.error('❌ WebSocket connection setup error:', error);
-        ws.close(1000, 'Server error');
-    }
-});
+    wss.on('error', (error) => {
+        console.error('❌ WebSocket server error:', error);
+    });
 
-wss.on('error', (error) => {
-    console.error('❌ WebSocket server error:', error);
-});
+    console.log('🎉 WebSocket server event handlers configured');
+} else {
+    console.error('❌ WebSocket server could not be created!');
+}
 
 // Error handling
 process.on('uncaughtException', (error) => {
@@ -636,38 +633,28 @@ process.on('uncaughtException', (error) => {
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    console.error('❌ Unhandled Rejection:', reason);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('📝 Received SIGTERM, starting graceful shutdown...');
-
-    // Close all WebSocket connections
-    connectedClients.forEach((clients, channelId) => {
-        clients.forEach(ws => {
-            try {
-                ws.close(1000, 'Server shutting down');
-            } catch (error) {
-                console.error('Error closing WebSocket:', error);
-            }
-        });
-    });
-
-    server.close(() => {
-        console.log('✅ Server closed gracefully');
-        process.exit(0);
-    });
-});
-
-server.listen(PORT, () => {
-    console.log('🚀 ClickMap EBS v3.1.0 BULLETPROOF + FIXED CLUSTERING');
-    console.log(`📡 Server running on port ${PORT}`);
-    console.log(`🎯 Health check: http://localhost:${PORT}/health`);
-    console.log(`🔗 WebSocket endpoint: ws://localhost:${PORT}/ws/[channelId]`);
+// Start HTTP server
+httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log('🚀 ClickMap EBS v3.2.0 RENDER.COM WEBSOCKET DIAGNOSIS');
+    console.log(`📡 HTTP Server: https://smart-clickmap-backend.onrender.com`);
+    console.log(`🔗 WebSocket URL: wss://smart-clickmap-backend.onrender.com/ws/[CHANNEL_ID]`);
+    console.log(`🎯 Health: https://smart-clickmap-backend.onrender.com/health`);
+    console.log(`🔍 Debug: https://smart-clickmap-backend.onrender.com/ws-debug`);
+    console.log(`🧪 Test: https://smart-clickmap-backend.onrender.com/ws-test/167556274`);
     console.log(`📊 Game state: ${gameState.running ? 'RUNNING' : 'STOPPED'}`);
-    console.log('🔧 WebSocket server ready for connections');
-    console.log('🐛 Debug logging enabled - clustering issues should now be visible');
+    console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+
+    // Status verification
+    setTimeout(() => {
+        console.log('🔍 SERVER STATUS CHECK:');
+        console.log(`   HTTP server listening: ${httpServer.listening}`);
+        console.log(`   HTTP server address: ${JSON.stringify(httpServer.address())}`);
+        console.log(`   WebSocket server ready: ${!!wss}`);
+        console.log(`   WebSocket clients: ${wss ? wss.clients.size : 0}`);
+    }, 1000);
 });
 
-export default server;
+export default httpServer;

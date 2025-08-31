@@ -1,17 +1,19 @@
-﻿// frontend/overlay/overlay.js - Bulletproof OBS overlay
+﻿// frontend/overlay/overlay.js - Complete overlay with fancy visuals restored
 const EBS = 'https://smart-clickmap-backend.onrender.com';
 
-class BulletproofHeatmapRenderer {
+class FancyHeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
         this.clusters = [];
         this.PERCENTAGE_THRESHOLD = 3;
+        this.animationId = null;
 
+        console.log('🎨 Fancy heatmap renderer initialized');
         this.resize();
-        window.addEventListener('resize', () => this.resize());
+        this.startAnimation();
 
-        console.log('🎨 Heatmap renderer initialized');
+        window.addEventListener('resize', () => this.resize());
     }
 
     resize() {
@@ -23,6 +25,20 @@ class BulletproofHeatmapRenderer {
         this.ctx.scale(dpr, dpr);
 
         console.log(`🔄 Canvas resized: ${window.innerWidth}x${window.innerHeight} (DPR: ${dpr})`);
+
+        // Test draw to verify canvas is working
+        this.testDraw();
+    }
+
+    testDraw() {
+        // Quick test to verify canvas is responsive
+        this.ctx.save();
+        this.ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+        this.ctx.fillRect(0, 0, 50, 50);
+        this.ctx.restore();
+        setTimeout(() => {
+            this.ctx.clearRect(0, 0, 50, 50);
+        }, 100);
     }
 
     updateClusters(newClusters) {
@@ -30,86 +46,186 @@ class BulletproofHeatmapRenderer {
             .filter(cluster => (cluster.percentage || 0) >= this.PERCENTAGE_THRESHOLD)
             .sort((a, b) => b.percentage - a.percentage);
 
-        this.render();
-
         console.log(`📊 Updated clusters: ${this.clusters.length} visible`);
+
+        // Force immediate render
+        this.render();
     }
 
-    render() {
+    startAnimation() {
+        if (this.animationId) return;
+
+        const animate = (timestamp) => {
+            this.render(timestamp);
+            this.animationId = requestAnimationFrame(animate);
+        };
+
+        this.animationId = requestAnimationFrame(animate);
+        console.log('🎬 Animation loop started');
+    }
+
+    render(timestamp = 0) {
         const W = window.innerWidth;
         const H = window.innerHeight;
 
+        // Clear canvas
         this.ctx.clearRect(0, 0, W, H);
 
         if (this.clusters.length === 0) return;
 
-        this.clusters.forEach((cluster) => {
-            this.renderCleanCircle(cluster, W, H);
+        // Render each cluster with fancy effects
+        this.clusters.forEach((cluster, index) => {
+            this.renderFancyBubble(cluster, W, H, index, timestamp);
         });
     }
 
-    renderCleanCircle(cluster, W, H) {
+    renderFancyBubble(cluster, W, H, index, timestamp) {
         const cx = cluster.x * W;
         const cy = cluster.y * H;
         const percentage = cluster.percentage || 0;
+        const isTop = cluster.isTop || index === 0;
 
-        // Size based on percentage - exactly like the reference image
-        const baseRadius = Math.max(35, Math.min(75, 40 + (percentage * 1.2)));
+        // Dynamic size with subtle animation
+        const baseRadius = Math.max(45, Math.min(85, 50 + (percentage * 1.8)));
+        const pulseAmount = Math.sin((timestamp * 0.002) + (index * 0.5)) * 3;
+        const radius = baseRadius + pulseAmount;
 
         this.ctx.save();
 
-        // Clean dark circular background - semi-transparent
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        // ✨ OUTER GLOW EFFECT
+        const glowGradient = this.ctx.createRadialGradient(cx, cy, 0, cx, cy, radius + 20);
+        if (isTop) {
+            glowGradient.addColorStop(0, 'rgba(0, 255, 255, 0.2)');
+            glowGradient.addColorStop(1, 'rgba(0, 255, 255, 0)');
+        } else if (percentage >= 15) {
+            glowGradient.addColorStop(0, 'rgba(147, 51, 234, 0.15)');
+            glowGradient.addColorStop(1, 'rgba(147, 51, 234, 0)');
+        } else {
+            glowGradient.addColorStop(0, 'rgba(147, 51, 234, 0.1)');
+            glowGradient.addColorStop(1, 'rgba(147, 51, 234, 0)');
+        }
+
+        this.ctx.fillStyle = glowGradient;
         this.ctx.beginPath();
-        this.ctx.arc(cx, cy, baseRadius, 0, 2 * Math.PI);
+        this.ctx.arc(cx, cy, radius + 20, 0, 2 * Math.PI);
         this.ctx.fill();
 
-        // Clean white border - like the reference
-        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
-        this.ctx.lineWidth = 2.5;
-        this.ctx.stroke();
+        // ✨ MAIN BUBBLE WITH GRADIENT
+        const bubbleGradient = this.ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+        if (isTop) {
+            bubbleGradient.addColorStop(0, 'rgba(0, 255, 255, 0.4)');
+            bubbleGradient.addColorStop(0.6, 'rgba(0, 200, 255, 0.3)');
+            bubbleGradient.addColorStop(1, 'rgba(0, 150, 255, 0.2)');
+        } else if (percentage >= 20) {
+            bubbleGradient.addColorStop(0, 'rgba(147, 51, 234, 0.35)');
+            bubbleGradient.addColorStop(0.6, 'rgba(147, 51, 234, 0.25)');
+            bubbleGradient.addColorStop(1, 'rgba(147, 51, 234, 0.15)');
+        } else {
+            bubbleGradient.addColorStop(0, 'rgba(147, 51, 234, 0.3)');
+            bubbleGradient.addColorStop(0.6, 'rgba(147, 51, 234, 0.2)');
+            bubbleGradient.addColorStop(1, 'rgba(147, 51, 234, 0.1)');
+        }
 
-        // Subtle inner highlight for professional look
-        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-        this.ctx.lineWidth = 1;
+        this.ctx.fillStyle = bubbleGradient;
         this.ctx.beginPath();
-        this.ctx.arc(cx, cy, baseRadius - 4, 0, 2 * Math.PI);
+        this.ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
+        this.ctx.fill();
+
+        // ✨ ANIMATED BORDER
+        const borderOpacity = 0.8 + Math.sin(timestamp * 0.003) * 0.2;
+        const borderColor = isTop
+            ? `rgba(0, 255, 255, ${borderOpacity})`
+            : `rgba(147, 51, 234, ${borderOpacity})`;
+
+        this.ctx.strokeStyle = borderColor;
+        this.ctx.lineWidth = isTop ? 4 : 3;
+        this.ctx.beginPath();
+        this.ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
         this.ctx.stroke();
 
-        // Clean bold percentage text
-        const fontSize = Math.max(18, Math.min(28, baseRadius * 0.55));
+        // ✨ INNER HIGHLIGHT RING
+        this.ctx.strokeStyle = `rgba(255, 255, 255, ${0.4 + Math.sin(timestamp * 0.004) * 0.2})`;
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.arc(cx, cy, radius - 8, 0, 2 * Math.PI);
+        this.ctx.stroke();
+
+        // ✨ PERCENTAGE TEXT WITH ENHANCED STYLING
+        const fontSize = Math.max(22, Math.min(36, radius * 0.5));
         this.ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'middle';
 
-        // Text shadow for better contrast
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-        this.ctx.fillText(`${percentage}%`, cx + 1, cy + 1);
+        // Text glow effect
+        this.ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+        this.ctx.shadowBlur = 15;
+        this.ctx.shadowOffsetX = 3;
+        this.ctx.shadowOffsetY = 3;
 
-        // Main white text
-        this.ctx.fillStyle = '#ffffff';
+        // Main text
+        this.ctx.fillStyle = isTop ? '#ffffff' : '#f5f5f5';
         this.ctx.fillText(`${percentage}%`, cx, cy);
+
+        // Reset shadow
+        this.ctx.shadowBlur = 0;
+        this.ctx.shadowOffsetX = 0;
+        this.ctx.shadowOffsetY = 0;
+
+        // ✨ TEXT OUTLINE
+        this.ctx.strokeStyle = isTop
+            ? 'rgba(0, 255, 255, 0.9)'
+            : 'rgba(147, 51, 234, 0.9)';
+        this.ctx.lineWidth = 1.5;
+        this.ctx.strokeText(`${percentage}%`, cx, cy);
+
+        // ✨ SPARKLE EFFECT FOR TOP CLUSTER
+        if (isTop && Math.random() > 0.7) {
+            this.drawSparkle(cx, cy, radius, timestamp);
+        }
 
         this.ctx.restore();
     }
 
+    drawSparkle(cx, cy, radius, timestamp) {
+        const sparkleCount = 3;
+        for (let i = 0; i < sparkleCount; i++) {
+            const angle = (timestamp * 0.001 + i * 2.094) % (Math.PI * 2);
+            const distance = radius * 0.7;
+            const sx = cx + Math.cos(angle) * distance;
+            const sy = cy + Math.sin(angle) * distance;
+            const sparkleSize = 2 + Math.sin(timestamp * 0.01 + i) * 1;
+
+            this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            this.ctx.beginPath();
+            this.ctx.arc(sx, sy, sparkleSize, 0, 2 * Math.PI);
+            this.ctx.fill();
+        }
+    }
+
     setThreshold(threshold) {
         this.PERCENTAGE_THRESHOLD = threshold;
-        this.render();
         console.log(`🎯 Threshold updated: ${threshold}%`);
+    }
+
+    destroy() {
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+            this.animationId = null;
+        }
+        console.log('🎨 Renderer destroyed');
     }
 }
 
-class BulletproofObsOverlay {
+class WorkingObsOverlay {
     constructor() {
         this.channelId = this.getChannelFromUrl();
         this.renderer = null;
         this.websocket = null;
         this.pollInterval = null;
         this.consecutiveErrors = 0;
-        this.maxRetries = 5;
+        this.maxRetries = 3;
 
-        console.log('🎯 Bulletproof OBS Overlay v3.0.0 initializing...');
+        console.log('🎯 Working OBS Overlay v3.3.0 - Fancy Visuals Restored');
         this.init();
     }
 
@@ -123,35 +239,29 @@ class BulletproofObsOverlay {
 
             await this.testConnection();
             this.setupRenderer();
-            this.connectWebSocket();
-            this.startPolling();
 
-            console.log('✅ OBS Overlay ready!');
+            // Start with polling for reliability, then try WebSocket
+            this.startPolling();
+            setTimeout(() => this.tryWebSocket(), 2000);
+
+            console.log('✅ OBS Overlay ready with fancy visuals!');
 
         } catch (error) {
-            console.error('❌ OBS Overlay initialization failed:', error);
+            console.error('❌ Overlay initialization failed:', error);
             this.showError(error.message);
         }
     }
 
     async testConnection() {
         try {
-            const response = await fetch(`${EBS}/health`, {
-                method: 'GET',
-                headers: { 'Content-Type': 'application/json' }
-            });
-
-            if (!response.ok) {
-                throw new Error(`Backend health check failed: ${response.status}`);
-            }
-
+            const response = await fetch(`${EBS}/health`);
+            if (!response.ok) throw new Error(`Health check failed: ${response.status}`);
             const data = await response.json();
-            console.log(`✅ Backend connection OK - Version: ${data.version}, Running: ${data.running}`);
+            console.log(`✅ Backend OK - Version: ${data.version}, WebSocket: ${data.websocket.enabled}`);
             return data;
-
         } catch (error) {
             console.error('❌ Backend connection failed:', error);
-            throw new Error('Cannot connect to ClickMap server. Check backend status.');
+            throw error;
         }
     }
 
@@ -166,25 +276,68 @@ class BulletproofObsOverlay {
             throw new Error('Canvas element not found');
         }
 
-        this.renderer = new BulletproofHeatmapRenderer(canvas);
+        console.log('🎨 Setting up fancy renderer...');
+        this.renderer = new FancyHeatmapRenderer(canvas);
 
-        // Custom threshold from URL
+        // Custom threshold
         const threshold = new URLSearchParams(window.location.search).get('threshold');
         if (threshold) {
             this.renderer.setThreshold(parseInt(threshold));
-            console.log(`🎯 Custom threshold: ${threshold}%`);
+        }
+
+        console.log('✅ Fancy renderer ready');
+    }
+
+    startPolling() {
+        if (this.pollInterval) return;
+
+        console.log('⏰ Starting reliable polling...');
+        this.pollInterval = setInterval(() => this.poll(), 800);
+        this.poll(); // Initial poll
+    }
+
+    async poll() {
+        try {
+            const response = await fetch(
+                `${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}&t=${Date.now()}`
+            );
+
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const data = await response.json();
+            this.updateVisualization(data);
+            this.consecutiveErrors = 0;
+
+        } catch (error) {
+            this.consecutiveErrors++;
+            if (this.consecutiveErrors >= this.maxRetries) {
+                this.showError('Connection lost. Check server status.');
+            }
         }
     }
 
-    connectWebSocket() {
+    tryWebSocket() {
         if (this.websocket) return;
 
         try {
-            const wsUrl = EBS.replace('https://', 'wss://').replace('http://', 'ws://');
-            this.websocket = new WebSocket(`${wsUrl}/ws/${this.channelId}`);
+            const wsUrl = `wss://smart-clickmap-backend.onrender.com/ws/${this.channelId}`;
+            console.log('📡 Attempting WebSocket connection...');
+
+            this.websocket = new WebSocket(wsUrl);
+
+            const timeout = setTimeout(() => {
+                console.log('⏰ WebSocket timeout, keeping polling');
+                this.websocket?.close();
+                this.websocket = null;
+            }, 8000);
 
             this.websocket.onopen = () => {
-                console.log('📡 WebSocket connected');
+                clearTimeout(timeout);
+                console.log('✅ WebSocket connected! Stopping polling.');
+                if (this.pollInterval) {
+                    clearInterval(this.pollInterval);
+                    this.pollInterval = null;
+                }
             };
 
             this.websocket.onmessage = (event) => {
@@ -196,130 +349,107 @@ class BulletproofObsOverlay {
                 }
             };
 
-            this.websocket.onerror = (error) => {
-                console.error('❌ WebSocket error:', error);
-                this.websocket = null;
+            this.websocket.onerror = () => {
+                clearTimeout(timeout);
+                console.log('⚠️ WebSocket failed, keeping polling');
             };
 
             this.websocket.onclose = () => {
-                console.log('📡 WebSocket disconnected');
+                clearTimeout(timeout);
+                console.log('📡 WebSocket closed, resuming polling');
                 this.websocket = null;
-
-                // Retry connection
-                setTimeout(() => this.connectWebSocket(), 5000);
+                if (!this.pollInterval) {
+                    this.startPolling();
+                }
             };
 
         } catch (error) {
-            console.error('❌ WebSocket connection failed:', error);
-        }
-    }
-
-    startPolling() {
-        if (this.pollInterval) return;
-
-        this.pollInterval = setInterval(() => this.poll(), 800);
-        this.poll(); // Initial poll
-
-        console.log('⏰ Polling started');
-    }
-
-    async poll() {
-        // Skip if WebSocket is active
-        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-            return;
-        }
-
-        try {
-            const response = await fetch(
-                `${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`,
-                {
-                    method: 'GET',
-                    headers: { 'Content-Type': 'application/json' }
-                }
-            );
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-
-            const data = await response.json();
-            this.updateVisualization(data);
-            this.consecutiveErrors = 0;
-
-        } catch (error) {
-            this.consecutiveErrors++;
-            console.error(`❌ Polling error (${this.consecutiveErrors}/${this.maxRetries}):`, error);
-
-            if (this.consecutiveErrors >= this.maxRetries) {
-                this.showError(`Connection lost after ${this.maxRetries} attempts. Server may be down.`);
-            }
+            console.warn('⚠️ WebSocket setup failed:', error);
         }
     }
 
     updateVisualization(data) {
+        console.log(`📊 Updating visualization: ${(data.clusters || []).length} clusters`);
+
         if (this.renderer) {
             this.renderer.updateClusters(data.clusters || []);
         }
 
-        // Log significant updates
-        if ((data.clusters || []).length > 0) {
-            console.log(`📊 Updated: ${data.clusters.length} clusters, ${data.totalClicks} total clicks`);
+        // Log updates for debugging
+        const clusterCount = (data.clusters || []).length;
+        if (clusterCount > 0) {
+            console.log(`📊 Updated: ${clusterCount} clusters, ${data.totalClicks} total clicks`);
+
+            // Log first cluster details for debugging
+            if (data.clusters && data.clusters[0]) {
+                const c = data.clusters[0];
+                console.log(`🎯 Top cluster: ${c.percentage}% at (${c.x.toFixed(3)}, ${c.y.toFixed(3)})`);
+            }
         }
     }
 
     showError(message) {
-        const errorEl = document.getElementById('error');
-        if (errorEl) {
-            const paragraphs = errorEl.querySelectorAll('p');
-            if (paragraphs.length > 0) {
-                paragraphs[paragraphs.length - 1].textContent = message;
-            }
-            errorEl.style.display = 'block';
-        }
-
         console.error(`🔴 Error: ${message}`);
-    }
-
-    hideError() {
         const errorEl = document.getElementById('error');
         if (errorEl) {
-            errorEl.style.display = 'none';
-        }
-    }
-}
-
-// Initialize with complete error handling
-function initializeObsOverlay() {
-    try {
-        window.obsOverlay = new BulletproofObsOverlay();
-    } catch (error) {
-        console.error('❌ Failed to initialize OBS overlay:', error);
-
-        // Show error in DOM if possible
-        const errorEl = document.getElementById('error');
-        if (errorEl) {
+            const p = errorEl.querySelector('p');
+            if (p) p.textContent = message;
             errorEl.style.display = 'block';
-            const paragraphs = errorEl.querySelectorAll('p');
-            if (paragraphs.length > 0) {
-                paragraphs[0].textContent = 'Failed to initialize overlay: ' + error.message;
-            }
         }
+    }
+
+    destroy() {
+        if (this.websocket) {
+            this.websocket.close();
+            this.websocket = null;
+        }
+        if (this.pollInterval) {
+            clearInterval(this.pollInterval);
+            this.pollInterval = null;
+        }
+        if (this.renderer) {
+            this.renderer.destroy();
+            this.renderer = null;
+        }
+        console.log('🧹 Overlay destroyed');
     }
 }
 
-// Initialize when DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initializeObsOverlay);
-} else {
-    initializeObsOverlay();
+// Initialize
+function initializeOverlay() {
+    try {
+        // Clean up any existing overlay
+        if (window.obsOverlay) {
+            window.obsOverlay.destroy();
+        }
+
+        window.obsOverlay = new WorkingObsOverlay();
+
+        console.log('🎉 Fancy overlay initialized successfully!');
+
+    } catch (error) {
+        console.error('❌ Failed to initialize overlay:', error);
+    }
 }
 
-// URL parameter info
-console.log('🎯 OBS Overlay URL Parameters:');
-console.log('   ?channel=CHANNEL_NAME (required)');
-console.log('   &threshold=5 (optional, default: 3)');
-console.log('');
-console.log('📖 Example: overlay.html?channel=ninja&threshold=5');
+// Start when ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeOverlay);
+} else {
+    initializeOverlay();
+}
 
-// Global reference for debugging
-window.BulletproofObsOverlay = BulletproofObsOverlay;
+// Cleanup on unload
+window.addEventListener('beforeunload', () => {
+    if (window.obsOverlay) {
+        window.obsOverlay.destroy();
+    }
+});
+
+console.log('🎯 Fancy Overlay Script Loaded');
+console.log('   URL: ?channel=CHANNEL_NAME&threshold=5');
+console.log('   ✨ Fancy animated bubbles enabled');
+console.log('   📡 WebSocket + Polling fallback');
+
+// Global reference
+window.WorkingObsOverlay = WorkingObsOverlay;

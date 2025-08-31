@@ -23,24 +23,24 @@ const app = express();
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Upgrade', 'Connection'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Upgrade', 'Connection', 'Sec-WebSocket-Key', 'Sec-WebSocket-Version', 'Sec-WebSocket-Protocol'],
     credentials: false
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Add headers for WebSocket support
+// Add WebSocket headers
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, UPGRADE');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version, Sec-WebSocket-Protocol');
-    
+
     if (req.method === 'OPTIONS') {
         res.sendStatus(200);
         return;
     }
-    
+
     next();
 });
 
@@ -58,7 +58,7 @@ app.get('/health', (req, res) => {
         status: 'ok',
         running: gameState.running,
         timestamp: Date.now(),
-        version: '3.2.0',
+        version: '3.2.1',
         uptime: process.uptime(),
         websocket: {
             enabled: !!wss,
@@ -86,21 +86,17 @@ app.get('/health', (req, res) => {
     });
 });
 
-// WebSocket production debug endpoint
+// WebSocket debug endpoint  
 app.get('/ws-debug', (req, res) => {
     console.log('🔍 WebSocket Debug requested');
-    
+
     const debug = {
         timestamp: new Date().toISOString(),
         websocket_server: {
             exists: !!wss,
             clients: wss ? wss.clients.size : 0,
-            ready_state: wss ? 'initialized' : 'not_initialized',
-            options: wss ? {
-                port: wss.options.port,
-                server: !!wss.options.server,
-                clientTracking: wss.options.clientTracking
-            } : null
+            integrated_with_http: true,
+            ready_state: wss ? 'operational' : 'not_initialized'
         },
         connected_clients: {
             channels: connectedClients.size,
@@ -114,10 +110,11 @@ app.get('/ws-debug', (req, res) => {
             listening: !!httpServer && httpServer.listening,
             address: httpServer ? httpServer.address() : null,
             port: PORT,
+            single_port_mode: true,
             environment: process.env.NODE_ENV || 'development'
         }
     };
-    
+
     console.log('🔍 Debug result:', JSON.stringify(debug, null, 2));
     res.json(debug);
 });
@@ -126,19 +123,19 @@ app.get('/ws-debug', (req, res) => {
 app.get('/ws-test/:channelId', (req, res) => {
     const { channelId } = req.params;
     const wsUrl = `wss://${req.get('host')}/ws/${channelId}`;
-    
+
     res.json({
         test_url: wsUrl,
         server_ready: !!httpServer && httpServer.listening,
         websocket_ready: !!wss,
         client_count: wss ? wss.clients.size : 0,
         instructions: [
-            'Test in browser console:',
+            'Test WebSocket connection in browser console:',
             `const ws = new WebSocket('${wsUrl}');`,
-            `ws.onopen = () => console.log('✅ Connected');`,
-            `ws.onerror = (e) => console.log('❌ Error:', e);`,
-            `ws.onclose = (e) => console.log('🔒 Closed:', e.code, e.reason);`,
-            `ws.onmessage = (e) => console.log('📨 Message:', e.data);`
+            `ws.onopen = () => console.log('✅ Connected to ${channelId}');`,
+            `ws.onerror = (e) => console.log('❌ Connection error:', e);`,
+            `ws.onclose = (e) => console.log('🔒 Connection closed:', e.code, e.reason);`,
+            `ws.onmessage = (e) => console.log('📨 Message received:', e.data);`
         ]
     });
 });
@@ -322,7 +319,7 @@ app.post('/click', (req, res) => {
 app.get('/heatmap', (req, res) => {
     const channelId = req.query.channel;
     const threshold = parseInt(req.query.threshold) || 3;
-    
+
     console.log(`📊 HEATMAP endpoint: channel=${channelId || 'ALL'}, threshold=${threshold}%`);
 
     try {
@@ -346,26 +343,29 @@ app.get('/heatmap', (req, res) => {
 
 // Get current heatmap data with proper clustering
 function getCurrentHeatmapData(channelId, threshold = 3) {
-    // If no specific channel requested, aggregate all channels
+    // If no specific channel requested, aggregate all channels WITH clustering
     if (!channelId || channelId === 'all') {
         let allPoints = [];
         let totalClicks = 0;
         let totalUsers = 0;
 
+        // Collect all points from all channels
         gameState.clicks.forEach((channelClicks) => {
             totalClicks += channelClicks.size;
             totalUsers += channelClicks.size;
-            
+
+            // Add all points to the aggregate
             Array.from(channelClicks.values()).forEach(point => {
                 allPoints.push(point);
             });
         });
 
+        // Process ALL points into clusters
         const clusters = processClicksIntoClusters(allPoints, threshold);
 
         return {
             running: gameState.running,
-            clusters,
+            clusters,  // ✅ Now includes clusters from all channels
             totalClicks,
             uniqueUsers: totalUsers,
             coverage: Math.min(100, clusters.length * 10),
@@ -376,7 +376,7 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
 
     // Handle specific channel
     const channelClicks = gameState.clicks.get(channelId);
-    
+
     if (!channelClicks || channelClicks.size === 0) {
         return {
             running: gameState.running,
@@ -403,12 +403,12 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     };
 }
 
-// Enhanced clustering with debug logging
+// Enhanced clustering algorithm with proper logic
 function processClicksIntoClusters(points, threshold) {
     if (points.length === 0) return [];
 
     const clusters = [];
-    const gridSize = 0.1;
+    const gridSize = 0.1; // 10% of screen
     const grid = new Map();
 
     // Group points into grid cells
@@ -452,7 +452,7 @@ function processClicksIntoClusters(points, threshold) {
     return clusters;
 }
 
-// WebSocket broadcasting
+// WebSocket broadcasting functions
 function broadcastToChannel(channelId, data) {
     const clients = connectedClients.get(channelId);
     if (!clients || clients.size === 0) return;
@@ -487,145 +487,162 @@ function broadcastToAll(data) {
         broadcastToChannel(channelId, channelData);
         totalSent += clients.size;
     });
-    
+
     if (totalSent > 0) {
         console.log(`📡 Broadcast to all: ${totalSent} clients`);
     }
 }
 
-// HTTP server
+// ===== HTTP SERVER CREATION =====
+console.log('🔧 Creating HTTP server...');
 const httpServer = createServer(app);
 
-// ===== RENDER.COM PROVEN WEBSOCKET APPROACH =====
-// Based on working example from Render.com community
-
-console.log('🔧 Creating WebSocket server using Render.com proven approach...');
-
-// Method 1: Simple WebSocket.Server (Render.com proven working method)
+// ===== WEBSOCKET SERVER INTEGRATION =====
+console.log('🔧 Creating WebSocket server integrated with HTTP server...');
 let wss;
 try {
-    wss = new WebSocketServer({ 
-        port: PORT + 1, // Use separate port for WebSocket (common Render pattern)
+    // CRITICAL: Use the HTTP server, not a separate port
+    wss = new WebSocketServer({
+        server: httpServer,  // Use the same HTTP server - this is the key fix!
         perMessageDeflate: false,
         clientTracking: true
     });
-    console.log(`✅ WebSocket server created on port ${PORT + 1} (separate port method)`);
-} catch (portError) {
-    console.log('⚠️ Separate port failed, trying server integration...');
-    
-    // Method 2: Integrate with HTTP server
-    try {
-        wss = new WebSocketServer({ 
-            server: httpServer,
-            perMessageDeflate: false,
-            clientTracking: true
-        });
-        console.log('✅ WebSocket server integrated with HTTP server');
-    } catch (integrationError) {
-        console.error('❌ Both WebSocket methods failed:', portError, integrationError);
-    }
+    console.log('✅ WebSocket server integrated with HTTP server on single port');
+} catch (error) {
+    console.error('❌ WebSocket server creation failed:', error);
+    process.exit(1);
 }
 
-if (wss) {
-    wss.on('connection', (ws, req) => {
-        const startTime = Date.now();
-        console.log(`🔗 NEW WEBSOCKET CONNECTION`);
-        console.log(`   URL: ${req.url}`);
-        console.log(`   Origin: ${req.headers.origin}`);
-        console.log(`   User-Agent: ${req.headers['user-agent']?.substring(0, 50)}...`);
+// Handle WebSocket upgrade requests explicitly
+httpServer.on('upgrade', (request, socket, head) => {
+    console.log('🔗 WebSocket upgrade request received:');
+    console.log(`   URL: ${request.url}`);
+    console.log(`   Origin: ${request.headers.origin}`);
+    console.log(`   Connection: ${request.headers.connection}`);
+    console.log(`   Upgrade: ${request.headers.upgrade}`);
 
-        // Extract channel ID from URL
-        let channelId = null;
-        if (req.url) {
-            // Handle /ws/channelId or /?channel=channelId
-            const match = req.url.match(/\/ws\/([^?]+)/) || req.url.match(/[?&]channel=([^&]+)/);
-            if (match) {
-                channelId = match[1];
-                console.log(`   Channel: ${channelId}`);
-            }
+    // Only handle WebSocket upgrade requests for /ws/ paths
+    if (request.url && request.url.startsWith('/ws/')) {
+        console.log('✅ Valid WebSocket path, handling upgrade...');
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, request);
+        });
+    } else {
+        console.log('❌ Invalid WebSocket path, closing connection');
+        socket.destroy();
+    }
+});
+
+// WebSocket connection handling
+wss.on('connection', (ws, req) => {
+    const startTime = Date.now();
+    console.log(`🔗 NEW WEBSOCKET CONNECTION`);
+    console.log(`   URL: ${req.url}`);
+    console.log(`   Origin: ${req.headers.origin}`);
+    console.log(`   User-Agent: ${req.headers['user-agent']?.substring(0, 50)}...`);
+
+    // Extract channel ID from URL: /ws/channelId
+    let channelId = null;
+    if (req.url) {
+        const match = req.url.match(/\/ws\/([^?&\/]+)/);
+        if (match) {
+            channelId = match[1];
+            console.log(`   Channel: ${channelId}`);
         }
+    }
 
-        if (!channelId) {
-            console.error('❌ No channel ID found');
-            ws.close(1008, 'Channel ID required in URL: /ws/CHANNEL_ID');
-            return;
-        }
+    if (!channelId) {
+        console.error('❌ No channel ID found in WebSocket URL');
+        ws.close(1008, 'Channel ID required: /ws/CHANNEL_ID');
+        return;
+    }
 
-        // Add to tracking
-        if (!connectedClients.has(channelId)) {
-            connectedClients.set(channelId, new Set());
-        }
-        connectedClients.get(channelId).add(ws);
+    // Add to tracking
+    if (!connectedClients.has(channelId)) {
+        connectedClients.set(channelId, new Set());
+    }
+    connectedClients.get(channelId).add(ws);
 
-        const clientCount = connectedClients.get(channelId).size;
-        const totalClients = wss.clients.size;
+    const clientCount = connectedClients.get(channelId).size;
+    const totalClients = wss.clients.size;
 
-        console.log(`✅ Connected: Channel ${channelId} (${clientCount} in channel, ${totalClients} total)`);
+    console.log(`✅ WebSocket connected: Channel ${channelId} (${clientCount} in channel, ${totalClients} total)`);
 
-        // Send initial data
+    // Send initial data immediately
+    try {
+        const initialData = getCurrentHeatmapData(channelId);
+        ws.send(JSON.stringify(initialData));
+        console.log(`📨 Initial data sent: ${initialData.clusters.length} clusters, ${initialData.totalClicks} clicks`);
+    } catch (error) {
+        console.error('❌ Error sending initial data:', error);
+    }
+
+    // Handle incoming messages
+    ws.on('message', (message) => {
         try {
-            const initialData = getCurrentHeatmapData(channelId);
-            ws.send(JSON.stringify(initialData));
-            console.log(`📨 Initial data sent: ${initialData.clusters.length} clusters`);
+            const data = JSON.parse(message.toString());
+            console.log(`📨 Message from ${channelId}:`, data);
+
+            // Echo back for testing
+            ws.send(JSON.stringify({
+                type: 'echo',
+                received: data,
+                timestamp: Date.now(),
+                channelId: channelId
+            }));
         } catch (error) {
-            console.error('❌ Error sending initial data:', error);
+            console.error('❌ Message parsing error:', error);
         }
+    });
 
-        // Handle messages
-        ws.on('message', (message) => {
+    // Handle connection close
+    ws.on('close', (code, reason) => {
+        const duration = Date.now() - startTime;
+        const clients = connectedClients.get(channelId);
+        if (clients) {
+            clients.delete(ws);
+            if (clients.size === 0) {
+                connectedClients.delete(channelId);
+            }
+        }
+        console.log(`🔒 WebSocket disconnected: ${channelId} after ${duration}ms`);
+        console.log(`   Code: ${code}, Reason: ${reason || 'none'}`);
+        console.log(`   Remaining clients in channel: ${clients ? clients.size : 0}`);
+    });
+
+    // Handle connection errors
+    ws.on('error', (error) => {
+        console.error(`❌ WebSocket error for ${channelId}:`, error);
+    });
+
+    // Keep-alive mechanism
+    const keepAlive = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
             try {
-                const data = JSON.parse(message.toString());
-                console.log(`📨 Message from ${channelId}:`, data);
-                
-                // Echo for testing
-                ws.send(JSON.stringify({
-                    type: 'echo',
-                    received: data,
-                    timestamp: Date.now()
-                }));
-            } catch (error) {
-                console.error('❌ Message error:', error);
-            }
-        });
-
-        // Handle close
-        ws.on('close', (code, reason) => {
-            const duration = Date.now() - startTime;
-            const clients = connectedClients.get(channelId);
-            if (clients) {
-                clients.delete(ws);
-                if (clients.size === 0) {
-                    connectedClients.delete(channelId);
-                }
-            }
-            console.log(`🔒 Disconnected: ${channelId} after ${duration}ms (Code: ${code})`);
-        });
-
-        // Handle errors
-        ws.on('error', (error) => {
-            console.error(`❌ WebSocket error for ${channelId}:`, error);
-        });
-
-        // Keep-alive pings
-        const keepAlive = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
                 ws.ping();
-            } else {
+            } catch (pingError) {
+                console.error('❌ Keep-alive ping error:', pingError);
                 clearInterval(keepAlive);
             }
-        }, 30000);
+        } else {
+            clearInterval(keepAlive);
+        }
+    }, 25000); // 25 second keep-alive
 
-        ws.on('close', () => clearInterval(keepAlive));
+    ws.on('close', () => {
+        clearInterval(keepAlive);
     });
 
-    wss.on('error', (error) => {
-        console.error('❌ WebSocket server error:', error);
+    ws.on('pong', () => {
+        console.log(`🏓 Pong received from ${channelId}`);
     });
+});
 
-    console.log('🎉 WebSocket server event handlers configured');
-} else {
-    console.error('❌ WebSocket server could not be created!');
-}
+// WebSocket server error handling
+wss.on('error', (error) => {
+    console.error('❌ WebSocket server error:', error);
+    console.error('   Stack:', error.stack);
+});
 
 // Error handling
 process.on('uncaughtException', (error) => {
@@ -636,24 +653,48 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection:', reason);
 });
 
-// Start HTTP server
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('📝 Received SIGTERM, starting graceful shutdown...');
+
+    // Close all WebSocket connections
+    connectedClients.forEach((clients, channelId) => {
+        clients.forEach(ws => {
+            try {
+                ws.close(1000, 'Server shutting down');
+            } catch (error) {
+                console.error('Error closing WebSocket:', error);
+            }
+        });
+    });
+
+    httpServer.close(() => {
+        console.log('✅ Server closed gracefully');
+        process.exit(0);
+    });
+});
+
+// Start server
 httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 ClickMap EBS v3.2.0 RENDER.COM WEBSOCKET DIAGNOSIS');
+    console.log('🚀 ClickMap EBS v3.2.1 SINGLE PORT WEBSOCKET - FINAL VERSION');
     console.log(`📡 HTTP Server: https://smart-clickmap-backend.onrender.com`);
     console.log(`🔗 WebSocket URL: wss://smart-clickmap-backend.onrender.com/ws/[CHANNEL_ID]`);
-    console.log(`🎯 Health: https://smart-clickmap-backend.onrender.com/health`);
-    console.log(`🔍 Debug: https://smart-clickmap-backend.onrender.com/ws-debug`);
-    console.log(`🧪 Test: https://smart-clickmap-backend.onrender.com/ws-test/167556274`);
+    console.log(`🎯 Health check: https://smart-clickmap-backend.onrender.com/health`);
+    console.log(`🔍 Debug endpoint: https://smart-clickmap-backend.onrender.com/ws-debug`);
+    console.log(`🧪 Test endpoint: https://smart-clickmap-backend.onrender.com/ws-test/167556274`);
     console.log(`📊 Game state: ${gameState.running ? 'RUNNING' : 'STOPPED'}`);
     console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-    
-    // Status verification
+
+    // Final status verification
     setTimeout(() => {
-        console.log('🔍 SERVER STATUS CHECK:');
+        console.log('🔍 FINAL STATUS CHECK:');
         console.log(`   HTTP server listening: ${httpServer.listening}`);
         console.log(`   HTTP server address: ${JSON.stringify(httpServer.address())}`);
-        console.log(`   WebSocket server ready: ${!!wss}`);
+        console.log(`   WebSocket server integrated: ${!!wss}`);
         console.log(`   WebSocket clients: ${wss ? wss.clients.size : 0}`);
+        console.log(`   Connected channels: ${connectedClients.size}`);
+        console.log(`   Single port mode: ${PORT}`);
+        console.log('🎉 Server fully operational!');
     }, 1000);
 });
 

@@ -1,4 +1,4 @@
-﻿// frontend/script.js - Bulletproof main extension script
+﻿// frontend/script.js - Bulletproof main extension script with improved Twitch integration
 import { HeatmapRenderer } from './heatmap.js';
 
 class BulletproofExtension {
@@ -13,6 +13,7 @@ class BulletproofExtension {
         this.lastDataHash = '';
         this.consecutiveErrors = 0;
         this.maxRetries = 5;
+        this.twitchReady = false;
 
         this.EBS = 'https://smart-clickmap-backend.onrender.com';
         this.POLL_RATE = 1000;
@@ -42,11 +43,11 @@ class BulletproofExtension {
             this.log('Setting up event listeners...');
             this.setupEventListeners();
 
-            this.log('Setting up Twitch extension...');
-            this.setupTwitchExtension();
-
             this.log('Setting up visibility optimization...');
             this.setupVisibilityOptimization();
+
+            this.log('Setting up Twitch extension...');
+            await this.setupTwitchExtension();
 
             this.log('Testing backend connection...');
             await this.testConnection();
@@ -229,12 +230,32 @@ class BulletproofExtension {
         }
     }
 
-    setupTwitchExtension() {
-        if (typeof Twitch === 'undefined' || !Twitch.ext) {
-            this.error('Twitch Extension Helper not available');
-            return;
-        }
+    async setupTwitchExtension() {
+        return new Promise((resolve, reject) => {
+            const maxAttempts = 50; // 5 seconds total
+            let attempts = 0;
 
+            const checkTwitch = () => {
+                attempts++;
+
+                if (typeof Twitch !== 'undefined' && Twitch.ext) {
+                    this.log('✅ Twitch Extension Helper found');
+                    this.twitchReady = true;
+                    this.initializeTwitchHandlers();
+                    resolve();
+                } else if (attempts >= maxAttempts) {
+                    this.error('Twitch Extension Helper not available after maximum attempts');
+                    reject(new Error('Twitch Extension Helper not available'));
+                } else {
+                    setTimeout(checkTwitch, 100);
+                }
+            };
+
+            checkTwitch();
+        });
+    }
+
+    initializeTwitchHandlers() {
         Twitch.ext.onAuthorized((auth) => {
             this.authToken = auth.token;
             this.channelId = auth.channelId;

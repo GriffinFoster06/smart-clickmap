@@ -84,48 +84,51 @@
         </div>
     </div>
 
-    <!-- Wait for Twitch Helper, then load modules -->
+    <!-- Load modules after a short delay to ensure Twitch loads first -->
     <script>
-        function waitForTwitchAndLoadConfig() {
-            if (typeof Twitch !== 'undefined' && Twitch.ext) {
-                // Twitch Extension Helper is ready, now load our modules
-                const scripts = [
-                    'heatmap.js',
-                    'config.js'
-                ];
+        function loadConfigModules() {
+            console.log('🎛️ Loading Config Panel modules...');
 
-                // Load modules sequentially
-                let loadIndex = 0;
-                function loadNext() {
-                    if (loadIndex >= scripts.length) return;
+            const scripts = [
+                'heatmap.js',
+                'config.js'
+            ];
 
-                    const script = document.createElement('script');
-                    script.type = 'module';
-                    script.src = scripts[loadIndex];
-                    script.onload = function () {
-                        loadIndex++;
-                        loadNext();
-                    };
-                    script.onerror = function () {
-                        console.error('Failed to load config script:', scripts[loadIndex]);
-                        loadIndex++;
-                        loadNext();
-                    };
-                    document.head.appendChild(script);
+            // Load modules sequentially
+            let loadIndex = 0;
+            function loadNext() {
+                if (loadIndex >= scripts.length) {
+                    console.log('✅ All Config Panel modules loaded');
+                    return;
                 }
 
-                loadNext();
-            } else {
-                // Wait and try again
-                setTimeout(waitForTwitchAndLoadConfig, 100);
+                const script = document.createElement('script');
+                script.type = 'module';
+                script.src = scripts[loadIndex];
+                script.onload = function () {
+                    console.log(`✅ Config: Loaded: ${scripts[loadIndex]}`);
+                    loadIndex++;
+                    loadNext();
+                };
+                script.onerror = function () {
+                    console.error(`❌ Config: Failed to load: ${scripts[loadIndex]}`);
+                    loadIndex++;
+                    loadNext();
+                };
+                document.head.appendChild(script);
             }
+
+            loadNext();
         }
 
-        // Start loading process
+        // Start loading process after DOM is ready with small delay for Twitch
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', waitForTwitchAndLoadConfig);
+            document.addEventListener('DOMContentLoaded', () => {
+                // Small delay to let Twitch Extension Helper settle
+                setTimeout(loadConfigModules, 100);
+            });
         } else {
-            waitForTwitchAndLoadConfig();
+            setTimeout(loadConfigModules, 100);
         }
     </script>
 </body>

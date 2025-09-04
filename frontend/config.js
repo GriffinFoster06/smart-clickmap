@@ -1,4 +1,4 @@
-﻿// frontend/config.js - Bulletproof configuration panel with improved Twitch integration
+﻿// frontend/config.js - Simplified configuration panel that works with or without Twitch
 import { HeatmapRenderer } from './heatmap.js';
 
 class BulletproofConfigPanel {
@@ -55,9 +55,10 @@ class BulletproofConfigPanel {
     }
 
     async setupTwitchExtension() {
-        return new Promise((resolve, reject) => {
-            const maxAttempts = 50; // 5 seconds total
+        return new Promise((resolve) => {
+            // Check if Twitch is available with a reasonable timeout
             let attempts = 0;
+            const maxAttempts = 30; // 3 seconds max
 
             const checkTwitch = () => {
                 attempts++;
@@ -68,8 +69,8 @@ class BulletproofConfigPanel {
                     this.initializeTwitchHandlers();
                     resolve();
                 } else if (attempts >= maxAttempts) {
-                    this.log('⚠️ Twitch Extension Helper not available - continuing without it');
-                    // Don't reject, as config panel can work without Twitch context
+                    this.log('⚠️ Twitch Extension Helper not available - running in standalone mode');
+                    // Still resolve to continue initialization
                     resolve();
                 } else {
                     setTimeout(checkTwitch, 100);
@@ -447,7 +448,7 @@ class BulletproofConfigPanel {
     }
 }
 
-// Initialize when DOM is ready with error handling
+// Initialize config panel immediately when loaded (but after DOM is ready)
 function initializeConfig() {
     try {
         window.configPanel = new BulletproofConfigPanel();

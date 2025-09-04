@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ClickMap Overlay</title>
+
+    <!-- Twitch Extension Helper Library - MUST LOAD FIRST -->
+    <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
+
     <style>
         * {
             margin: 0;
@@ -48,6 +52,31 @@
         <p>Connection error</p>
     </div>
 
-    <script src="overlay.js"></script>
+    <!-- Load overlay script after small delay for Twitch -->
+    <script>
+        function loadOverlayScript() {
+            console.log('🖼️ Loading overlay script...');
+
+            const script = document.createElement('script');
+            script.src = 'overlay.js';
+            script.onload = function () {
+                console.log('✅ Overlay script loaded');
+            };
+            script.onerror = function () {
+                console.error('❌ Failed to load overlay script');
+            };
+            document.head.appendChild(script);
+        }
+
+        // Start loading process after DOM is ready with small delay for Twitch
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                // Small delay to let Twitch Extension Helper settle
+                setTimeout(loadOverlayScript, 100);
+            });
+        } else {
+            setTimeout(loadOverlayScript, 100);
+        }
+    </script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-﻿// frontend/script.js - Simplified main extension script that works with or without Twitch
+﻿// frontend/script.js - Bulletproof main extension script with improved Twitch integration
 import { HeatmapRenderer } from './heatmap.js';
 
 class BulletproofExtension {
@@ -231,10 +231,9 @@ class BulletproofExtension {
     }
 
     async setupTwitchExtension() {
-        return new Promise((resolve) => {
-            // Check if Twitch is available with a reasonable timeout
+        return new Promise((resolve, reject) => {
+            const maxAttempts = 50; // 5 seconds total
             let attempts = 0;
-            const maxAttempts = 30; // 3 seconds max
 
             const checkTwitch = () => {
                 attempts++;
@@ -245,10 +244,8 @@ class BulletproofExtension {
                     this.initializeTwitchHandlers();
                     resolve();
                 } else if (attempts >= maxAttempts) {
-                    this.log('⚠️ Twitch Extension Helper not available - running in standalone mode');
-                    // Still resolve to continue initialization
-                    this.startStandaloneMode();
-                    resolve();
+                    this.error('Twitch Extension Helper not available after maximum attempts');
+                    reject(new Error('Twitch Extension Helper not available'));
                 } else {
                     setTimeout(checkTwitch, 100);
                 }
@@ -284,20 +281,6 @@ class BulletproofExtension {
         });
 
         this.log('✅ Twitch extension setup complete');
-    }
-
-    // Fallback mode for testing without Twitch
-    startStandaloneMode() {
-        this.log('🔧 Starting in standalone mode');
-
-        // Use a test channel ID for demo purposes
-        this.channelId = 'demo';
-        this.authToken = 'demo-token';
-
-        // Start polling immediately
-        this.startPolling();
-
-        this.log('✅ Standalone mode active');
     }
 
     connectWebSocket() {
@@ -444,7 +427,7 @@ class BulletproofExtension {
     }
 }
 
-// Initialize extension immediately when loaded (but after DOM is ready)
+// Initialize extension with error handling
 function initializeExtension() {
     try {
         window.clickMapExtension = new BulletproofExtension();

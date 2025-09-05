@@ -1,7 +1,7 @@
-﻿// frontend/config.js - Bulletproof configuration panel
+﻿// frontend/config.js - HTTP-only configuration panel
 import { HeatmapRenderer } from './heatmap.js';
 
-class BulletproofConfigPanel {
+class HTTPConfigPanel {
     constructor() {
         this.EBS = 'https://smart-clickmap-backend.onrender.com';
         this.pollInterval = null;
@@ -14,7 +14,7 @@ class BulletproofConfigPanel {
         // Debug logging
         this.debug = true;
 
-        this.log('🎛️ Bulletproof Config Panel v3.0.0 initializing...');
+        this.log('🎛️ HTTP Config Panel v3.2.0 initializing...');
         this.init();
     }
 
@@ -42,7 +42,7 @@ class BulletproofConfigPanel {
             this.log('Starting polling...');
             this.startPolling();
 
-            this.log('✅ Configuration panel ready!');
+            this.log('✅ Configuration panel ready! (HTTP-only mode)');
 
         } catch (error) {
             this.error('Failed to initialize config panel', error);
@@ -63,10 +63,12 @@ class BulletproofConfigPanel {
 
             const data = await response.json();
             this.log(`✅ Backend connection OK - Version: ${data.version}, Running: ${data.running}`);
+            this.updateElement('server-status', 'Connected');
             return data;
 
         } catch (error) {
             this.error('Backend connection failed', error);
+            this.updateElement('server-status', 'Error');
             throw error;
         }
     }
@@ -97,8 +99,6 @@ class BulletproofConfigPanel {
                 await this.handleStart();
             });
             this.log('✅ Start button listener attached');
-        } else {
-            this.error('Start button not found!');
         }
 
         // STOP button  
@@ -109,8 +109,6 @@ class BulletproofConfigPanel {
                 await this.handleStop();
             });
             this.log('✅ Stop button listener attached');
-        } else {
-            this.error('Stop button not found!');
         }
 
         // RESET button
@@ -121,8 +119,6 @@ class BulletproofConfigPanel {
                 await this.handleReset();
             });
             this.log('✅ Reset button listener attached');
-        } else {
-            this.error('Reset button not found!');
         }
     }
 
@@ -156,6 +152,9 @@ class BulletproofConfigPanel {
                 this.showStatus('Session Active', 'running');
                 this.showSuccess('✅ Session started successfully!');
                 this.log('✅ Start successful');
+
+                // Speed up polling when active
+                this.restartPolling(500);
             } else {
                 throw new Error(data.error || 'Start failed');
             }
@@ -199,6 +198,9 @@ class BulletproofConfigPanel {
                 this.showStatus('Session Stopped', 'stopped');
                 this.showSuccess('⏹️ Session stopped successfully!');
                 this.log('✅ Stop successful');
+
+                // Slow down polling when stopped
+                this.restartPolling(2000);
             } else {
                 throw new Error(data.error || 'Stop failed');
             }
@@ -265,16 +267,29 @@ class BulletproofConfigPanel {
             clearInterval(this.pollInterval);
         }
 
-        this.pollInterval = setInterval(() => this.pollData(), 1000);
+        const pollRate = this.isRunning ? 500 : 1000; // Faster when active
+        this.pollInterval = setInterval(() => this.pollData(), pollRate);
         this.pollData(); // Initial poll
-        this.log('✅ Polling started');
+        this.log(`✅ Polling started (${pollRate}ms interval)`);
+    }
+
+    restartPolling(newRate) {
+        if (this.pollInterval) {
+            clearInterval(this.pollInterval);
+        }
+
+        this.pollInterval = setInterval(() => this.pollData(), newRate);
+        this.log(`🔄 Polling restarted (${newRate}ms interval)`);
     }
 
     async pollData() {
         try {
-            const response = await fetch(`${this.EBS}/heatmap`, {
+            const response = await fetch(`${this.EBS}/heatmap?t=${Date.now()}`, {
                 method: 'GET',
-                headers: { 'Content-Type': 'application/json' }
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Cache-Control': 'no-cache'
+                }
             });
 
             if (!response.ok) {
@@ -292,6 +307,7 @@ class BulletproofConfigPanel {
 
             if (this.consecutiveErrors >= this.maxRetries) {
                 this.showError(`Connection lost after ${this.maxRetries} attempts. Check server.`);
+                this.updateElement('server-status', 'Error');
             }
         }
     }
@@ -381,8 +397,24 @@ class BulletproofConfigPanel {
 
     showSuccess(message) {
         this.log(`SUCCESS: ${message}`);
-        // Could add a success toast here
         console.log(`✅ ${message}`);
+
+        // Briefly show success in error area with green styling
+        const errorEl = document.getElementById('error');
+        if (errorEl) {
+            errorEl.style.background = 'rgba(34, 197, 94, 0.1)';
+            errorEl.style.borderColor = 'rgba(34, 197, 94, 0.3)';
+            errorEl.style.color = '#22c55e';
+            errorEl.textContent = message;
+            errorEl.style.display = 'block';
+
+            setTimeout(() => {
+                errorEl.style.display = 'none';
+                errorEl.style.background = '';
+                errorEl.style.borderColor = '';
+                errorEl.style.color = '';
+            }, 3000);
+        }
     }
 
     destroy() {
@@ -399,7 +431,7 @@ class BulletproofConfigPanel {
 // Initialize when DOM is ready with error handling
 function initializeConfig() {
     try {
-        window.configPanel = new BulletproofConfigPanel();
+        window.configPanel = new HTTPConfigPanel();
     } catch (error) {
         console.error('❌ Failed to initialize config panel:', error);
     }
@@ -412,4 +444,4 @@ if (document.readyState === 'loading') {
 }
 
 // Global reference for debugging
-window.BulletproofConfigPanel = BulletproofConfigPanel;
+window.HTTPConfigPanel = HTTPConfigPanel;

@@ -1,4 +1,4 @@
-﻿// frontend/config.js - Bulletproof configuration panel with improved Twitch integration
+﻿// frontend/config.js - Bulletproof configuration panel
 import { HeatmapRenderer } from './heatmap.js';
 
 class BulletproofConfigPanel {
@@ -10,7 +10,6 @@ class BulletproofConfigPanel {
         this.isRunning = false;
         this.consecutiveErrors = 0;
         this.maxRetries = 5;
-        this.twitchReady = false;
 
         // Debug logging
         this.debug = true;
@@ -37,9 +36,6 @@ class BulletproofConfigPanel {
             this.log('Setting up event listeners...');
             this.setupEventListeners();
 
-            this.log('Setting up Twitch extension...');
-            await this.setupTwitchExtension();
-
             this.log('Testing backend connection...');
             await this.testConnection();
 
@@ -51,53 +47,6 @@ class BulletproofConfigPanel {
         } catch (error) {
             this.error('Failed to initialize config panel', error);
             this.showError('Failed to initialize. Check console for details.');
-        }
-    }
-
-    async setupTwitchExtension() {
-        return new Promise((resolve, reject) => {
-            const maxAttempts = 50; // 5 seconds total
-            let attempts = 0;
-
-            const checkTwitch = () => {
-                attempts++;
-
-                if (typeof Twitch !== 'undefined' && Twitch.ext) {
-                    this.log('✅ Twitch Extension Helper found');
-                    this.twitchReady = true;
-                    this.initializeTwitchHandlers();
-                    resolve();
-                } else if (attempts >= maxAttempts) {
-                    this.log('⚠️ Twitch Extension Helper not available - continuing without it');
-                    // Don't reject, as config panel can work without Twitch context
-                    resolve();
-                } else {
-                    setTimeout(checkTwitch, 100);
-                }
-            };
-
-            checkTwitch();
-        });
-    }
-
-    initializeTwitchHandlers() {
-        try {
-            // Config panels don't typically need authorization, but we can set up handlers if needed
-            if (Twitch.ext.onAuthorized) {
-                Twitch.ext.onAuthorized((auth) => {
-                    this.log(`✅ Twitch auth received for channel: ${auth.channelId}`);
-                });
-            }
-
-            if (Twitch.ext.onVisibilityChanged) {
-                Twitch.ext.onVisibilityChanged((isVisible) => {
-                    this.log(`Config panel visibility changed: ${isVisible}`);
-                });
-            }
-
-            this.log('✅ Twitch handlers initialized');
-        } catch (error) {
-            this.error('Error setting up Twitch handlers', error);
         }
     }
 

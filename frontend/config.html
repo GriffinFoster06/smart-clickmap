@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ClickMap Control Panel</title>
 
-    <!-- Twitch Extension Helper Library - MUST LOAD FIRST -->
+    <!-- Twitch Extension Helper Library -->
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
 
     <!-- Config Panel Styles -->
@@ -50,6 +50,18 @@
             <div class="stat-label">Coverage</div>
         </div>
     </div>
+    
+    <!-- Live Preview 
+    <div class="preview-section">
+        <div class="preview-header">
+            <span>Live Preview</span>
+            <div class="preview-status" id="preview-status">Stopped</div>
+        </div>
+        <div class="preview-container">
+            <canvas id="mini-canvas" width="320" height="180"></canvas>
+        </div>
+    </div>
+    -->
 
     <!-- Controls -->
     <div class="controls-section">
@@ -84,49 +96,8 @@
         </div>
     </div>
 
-    <!-- Wait for Twitch Helper, then load modules -->
-    <script>
-        function waitForTwitchAndLoadConfig() {
-            if (typeof Twitch !== 'undefined' && Twitch.ext) {
-                // Twitch Extension Helper is ready, now load our modules
-                const scripts = [
-                    'heatmap.js',
-                    'config.js'
-                ];
-
-                // Load modules sequentially
-                let loadIndex = 0;
-                function loadNext() {
-                    if (loadIndex >= scripts.length) return;
-
-                    const script = document.createElement('script');
-                    script.type = 'module';
-                    script.src = scripts[loadIndex];
-                    script.onload = function () {
-                        loadIndex++;
-                        loadNext();
-                    };
-                    script.onerror = function () {
-                        console.error('Failed to load config script:', scripts[loadIndex]);
-                        loadIndex++;
-                        loadNext();
-                    };
-                    document.head.appendChild(script);
-                }
-
-                loadNext();
-            } else {
-                // Wait and try again
-                setTimeout(waitForTwitchAndLoadConfig, 100);
-            }
-        }
-
-        // Start loading process
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', waitForTwitchAndLoadConfig);
-        } else {
-            waitForTwitchAndLoadConfig();
-        }
-    </script>
+    <!-- Load JavaScript -->
+    <script type="module" src="heatmap.js"></script>
+    <script type="module" src="config.js"></script>
 </body>
 </html>

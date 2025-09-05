@@ -5,11 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Click Map - Twitch Extension</title>
 
-    <!-- Twitch Extension Helper Library - MUST LOAD FIRST -->
+    <!-- Twitch Extension Helper Library -->
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
 
     <!-- Extension Styles -->
     <link rel="stylesheet" href="style.css">
+
+    <!-- Preload important resources -->
+    <link rel="preload" href="heatmap.js" as="script">
+    <link rel="preload" href="script.js" as="script">
+    <link rel="preload" href="debug.js" as="script">
 </head>
 <body>
     <!-- Main heatmap canvas - clean HUD-style overlay -->
@@ -66,50 +71,9 @@
         }
     </script>
 
-    <!-- Wait for Twitch Helper, then load modules -->
-    <script>
-        function waitForTwitchAndLoad() {
-            if (typeof Twitch !== 'undefined' && Twitch.ext) {
-                // Twitch Extension Helper is ready, now load our modules
-                const scripts = [
-                    'debug.js',
-                    'heatmap.js',
-                    'script.js'
-                ];
-
-                // Load modules sequentially
-                let loadIndex = 0;
-                function loadNext() {
-                    if (loadIndex >= scripts.length) return;
-
-                    const script = document.createElement('script');
-                    script.type = 'module';
-                    script.src = scripts[loadIndex];
-                    script.onload = function () {
-                        loadIndex++;
-                        loadNext();
-                    };
-                    script.onerror = function () {
-                        console.error('Failed to load script:', scripts[loadIndex]);
-                        loadIndex++;
-                        loadNext();
-                    };
-                    document.head.appendChild(script);
-                }
-
-                loadNext();
-            } else {
-                // Wait and try again
-                setTimeout(waitForTwitchAndLoad, 100);
-            }
-        }
-
-        // Start loading process
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', waitForTwitchAndLoad);
-        } else {
-            waitForTwitchAndLoad();
-        }
-    </script>
+    <!-- Load scripts in order -->
+    <script type="module" src="debug.js"></script>
+    <script type="module" src="heatmap.js"></script>
+    <script type="module" src="script.js"></script>
 </body>
 </html>

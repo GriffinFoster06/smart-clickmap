@@ -1,7 +1,7 @@
-﻿// frontend/config.js - HTTP-only configuration panel for Twitch extensions
+﻿// frontend/config.js - Bulletproof configuration panel with robust connection handling
 import { HeatmapRenderer } from './heatmap.js';
 
-class TwitchConfigPanel {
+class BulletproofConfigPanel {
     constructor() {
         this.EBS = 'https://smart-clickmap-backend.onrender.com';
         this.pollInterval = null;
@@ -9,16 +9,16 @@ class TwitchConfigPanel {
         this.sessionStart = null;
         this.isRunning = false;
         this.consecutiveErrors = 0;
-        this.maxRetries = 3;
-        this.authToken = '';
-
-        // Optimized for config panel
-        this.POLL_RATE = 2000; // 2 seconds for config panel
+        this.maxRetries = 5;
+        this.websocket = null;
+        this.wsRetryCount = 0;
+        this.maxWsRetries = 3;
+        this.useWebSockets = true;
 
         // Debug logging
         this.debug = true;
 
-        this.log('🎛️ Config Panel v3.1.0 (HTTP-only) initializing...');
+        this.log('🎛️ Bulletproof Config Panel v3.1.0 initializing...');
         this.init();
     }
 
@@ -34,9 +34,6 @@ class TwitchConfigPanel {
 
     async init() {
         try {
-            this.log('Setting up Twitch extension auth...');
-            this.setupTwitchAuth();
-
             this.log('Setting up canvas...');
             this.setupCanvas();
 
@@ -46,8 +43,8 @@ class TwitchConfigPanel {
             this.log('Testing backend connection...');
             await this.testConnection();
 
-            this.log('Starting polling...');
-            this.startPolling();
+            this.log('Starting data connection...');
+            this.startDataConnection();
 
             this.log('✅ Configuration panel ready!');
 
@@ -57,31 +54,12 @@ class TwitchConfigPanel {
         }
     }
 
-    setupTwitchAuth() {
-        if (typeof Twitch === 'undefined' || !Twitch.ext) {
-            this.error('Twitch Extension Helper not available');
-            return;
-        }
-
-        Twitch.ext.onAuthorized((auth) => {
-            this.authToken = auth.token;
-            this.log('✅ Twitch auth received');
-        });
-    }
-
     async testConnection() {
         try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000);
-
             const response = await fetch(`${this.EBS}/health`, {
                 method: 'GET',
-                headers: { 'Content-Type': 'application/json' },
-                signal: controller.signal,
-                cache: 'no-cache'
+                headers: { 'Content-Type': 'application/json' }
             });
-
-            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`Health check failed: ${response.status}`);
@@ -89,7 +67,6 @@ class TwitchConfigPanel {
 
             const data = await response.json();
             this.log(`✅ Backend connection OK - Version: ${data.version}, Running: ${data.running}`);
-            this.hideError();
             return data;
 
         } catch (error) {
@@ -124,6 +101,8 @@ class TwitchConfigPanel {
                 await this.handleStart();
             });
             this.log('✅ Start button listener attached');
+        } else {
+            this.error('Start button not found!');
         }
 
         // STOP button  
@@ -134,6 +113,8 @@ class TwitchConfigPanel {
                 await this.handleStop();
             });
             this.log('✅ Stop button listener attached');
+        } else {
+            this.error('Stop button not found!');
         }
 
         // RESET button
@@ -144,7 +125,116 @@ class TwitchConfigPanel {
                 await this.handleReset();
             });
             this.log('✅ Reset button listener attached');
+        } else {
+            this.error('Reset button not found!');
         }
+    }
+
+    startDataConnection() {
+        // Always start polling as primary method
+        this.startPolling();
+
+        // Try WebSocket as enhancement
+        if (this.useWebSockets && this.wsRetryCount < this.maxWsRetries) {
+            this.connectWebSocket();
+        }
+    }
+
+    connectWebSocket() {
+        if (this.websocket || !this.useWebSockets) return;
+
+        try {
+            const wsBaseUrls = [
+                this.EBS.replace('https://', 'wss://').replace('http://', 'ws://'),
+                this.EBS.replace('https://', 'wss://').replace('http://', 'wss://')
+            ];
+
+            const wsUrls = [];
+            for (const baseUrl of wsBaseUrls) {
+                wsUrls.push(`${baseUrl}/ws/config`); // Config panel WebSocket
+                wsUrls.push(`${baseUrl}/ws?channel=config`);
+            }
+
+            this.attemptWebSocketConnection(wsUrls, 0);
+
+        } catch (error) {
+            this.log('WebSocket setup failed, using polling only');
+            this.wsRetryCount++;
+            this.scheduleWebSocketRetry();
+        }
+    }
+
+    attemptWebSocketConnection(urls, index) {
+        if (index >= urls.length) {
+            this.log('All WebSocket URLs failed, using polling only');
+            this.wsRetryCount++;
+            this.scheduleWebSocketRetry();
+            return;
+        }
+
+        const url = urls[index];
+        this.log(`Attempting WebSocket: ${url}`);
+
+        try {
+            const ws = new WebSocket(url);
+
+            const connectionTimeout = setTimeout(() => {
+                ws.close();
+                this.attemptWebSocketConnection(urls, index + 1);
+            }, 5000);
+
+            ws.onopen = () => {
+                clearTimeout(connectionTimeout);
+                this.websocket = ws;
+                this.wsRetryCount = 0;
+                this.log(`📡 Config WebSocket connected: ${url}`);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    this.updateUI(data);
+                } catch (e) {
+                    this.error('WebSocket parse error', e);
+                }
+            };
+
+            ws.onerror = () => {
+                clearTimeout(connectionTimeout);
+            };
+
+            ws.onclose = () => {
+                clearTimeout(connectionTimeout);
+                if (this.websocket === ws) {
+                    this.websocket = null;
+                }
+
+                if (index < urls.length - 1) {
+                    this.attemptWebSocketConnection(urls, index + 1);
+                } else {
+                    this.wsRetryCount++;
+                    this.scheduleWebSocketRetry();
+                }
+            };
+
+        } catch (error) {
+            this.attemptWebSocketConnection(urls, index + 1);
+        }
+    }
+
+    scheduleWebSocketRetry() {
+        if (this.wsRetryCount >= this.maxWsRetries) {
+            this.log('WebSocket disabled after max retries');
+            this.useWebSockets = false;
+            return;
+        }
+
+        const delay = 1000 * Math.pow(2, this.wsRetryCount - 1);
+        setTimeout(() => {
+            if (this.useWebSockets) {
+                this.connectWebSocket();
+            }
+        }, delay);
     }
 
     async handleStart() {
@@ -153,26 +243,13 @@ class TwitchConfigPanel {
             this.setButtonDisabled('start-btn', true);
             this.showStatus('Starting...', 'running');
 
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-            const headers = {
-                'Content-Type': 'application/json'
-            };
-
-            // Add auth token if available
-            if (this.authToken) {
-                headers['Authorization'] = `Bearer ${this.authToken}`;
-            }
-
             const response = await fetch(`${this.EBS}/start`, {
                 method: 'POST',
-                headers,
-                body: JSON.stringify({}),
-                signal: controller.signal
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({})
             });
-
-            clearTimeout(timeoutId);
 
             this.log(`START response: ${response.status} ${response.statusText}`);
 
@@ -190,9 +267,6 @@ class TwitchConfigPanel {
                 this.showStatus('Session Active', 'running');
                 this.showSuccess('✅ Session started successfully!');
                 this.log('✅ Start successful');
-
-                // Trigger immediate poll for updated data
-                this.pollData();
             } else {
                 throw new Error(data.error || 'Start failed');
             }
@@ -212,25 +286,13 @@ class TwitchConfigPanel {
             this.setButtonDisabled('stop-btn', true);
             this.showStatus('Stopping...', 'stopped');
 
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-            const headers = {
-                'Content-Type': 'application/json'
-            };
-
-            if (this.authToken) {
-                headers['Authorization'] = `Bearer ${this.authToken}`;
-            }
-
             const response = await fetch(`${this.EBS}/stop`, {
                 method: 'POST',
-                headers,
-                body: JSON.stringify({}),
-                signal: controller.signal
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({})
             });
-
-            clearTimeout(timeoutId);
 
             this.log(`STOP response: ${response.status} ${response.statusText}`);
 
@@ -248,9 +310,6 @@ class TwitchConfigPanel {
                 this.showStatus('Session Stopped', 'stopped');
                 this.showSuccess('⏹️ Session stopped successfully!');
                 this.log('✅ Stop successful');
-
-                // Trigger immediate poll for updated data
-                this.pollData();
             } else {
                 throw new Error(data.error || 'Stop failed');
             }
@@ -274,25 +333,13 @@ class TwitchConfigPanel {
             this.log('Sending RESET request...');
             this.setButtonDisabled('reset-btn', true);
 
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-            const headers = {
-                'Content-Type': 'application/json'
-            };
-
-            if (this.authToken) {
-                headers['Authorization'] = `Bearer ${this.authToken}`;
-            }
-
             const response = await fetch(`${this.EBS}/reset`, {
                 method: 'POST',
-                headers,
-                body: JSON.stringify({}),
-                signal: controller.signal
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({})
             });
-
-            clearTimeout(timeoutId);
 
             this.log(`RESET response: ${response.status} ${response.statusText}`);
 
@@ -312,9 +359,6 @@ class TwitchConfigPanel {
                 if (this.renderer) {
                     this.renderer.updateClusters([]);
                 }
-
-                // Trigger immediate poll for updated data
-                this.pollData();
             } else {
                 throw new Error(data.error || 'Reset failed');
             }
@@ -332,34 +376,20 @@ class TwitchConfigPanel {
             clearInterval(this.pollInterval);
         }
 
-        this.pollInterval = setInterval(() => this.pollData(), this.POLL_RATE);
+        this.pollInterval = setInterval(() => this.pollData(), 1000);
         this.pollData(); // Initial poll
         this.log('✅ Polling started');
     }
 
-    stopPolling() {
-        if (this.pollInterval) {
-            clearInterval(this.pollInterval);
-            this.pollInterval = null;
-            this.log('⏸️ Polling stopped');
-        }
-    }
-
     async pollData() {
         try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 4000);
-
-            const response = await fetch(`${this.EBS}/heatmap?t=${Date.now()}`, {
+            const response = await fetch(`${this.EBS}/heatmap`, {
                 method: 'GET',
                 headers: {
                     'Content-Type': 'application/json',
                     'Cache-Control': 'no-cache'
-                },
-                signal: controller.signal
+                }
             });
-
-            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
@@ -372,10 +402,7 @@ class TwitchConfigPanel {
 
         } catch (error) {
             this.consecutiveErrors++;
-
-            if (error.name !== 'AbortError') {
-                this.error(`Polling failed (${this.consecutiveErrors}/${this.maxRetries})`, error);
-            }
+            this.error(`Polling failed (${this.consecutiveErrors}/${this.maxRetries})`, error);
 
             if (this.consecutiveErrors >= this.maxRetries) {
                 this.showError(`Connection lost after ${this.maxRetries} attempts. Check server.`);
@@ -468,50 +495,17 @@ class TwitchConfigPanel {
 
     showSuccess(message) {
         this.log(`SUCCESS: ${message}`);
+        // Could add a success toast here
         console.log(`✅ ${message}`);
-
-        // Show temporary success indicator
-        const indicator = document.createElement('div');
-        indicator.style.cssText = `
-            position: fixed;
-            bottom: 20px;
-            left: 20px;
-            background: rgba(34, 197, 94, 0.9);
-            color: white;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 12px;
-            z-index: 10002;
-            pointer-events: none;
-            animation: slideInOut 3s ease-in-out forwards;
-        `;
-        indicator.textContent = message;
-
-        // Add animation style if not exists
-        if (!document.getElementById('success-style')) {
-            const style = document.createElement('style');
-            style.id = 'success-style';
-            style.textContent = `
-                @keyframes slideInOut {
-                    0% { opacity: 0; transform: translateX(-100%); }
-                    20%, 80% { opacity: 1; transform: translateX(0); }
-                    100% { opacity: 0; transform: translateX(-100%); }
-                }
-            `;
-            document.head.appendChild(style);
-        }
-
-        document.body.appendChild(indicator);
-
-        setTimeout(() => {
-            if (indicator.parentNode) {
-                indicator.parentNode.removeChild(indicator);
-            }
-        }, 3000);
     }
 
     destroy() {
-        this.stopPolling();
+        if (this.pollInterval) {
+            clearInterval(this.pollInterval);
+        }
+        if (this.websocket) {
+            this.websocket.close();
+        }
         if (this.renderer) {
             this.renderer.destroy();
         }
@@ -522,7 +516,7 @@ class TwitchConfigPanel {
 // Initialize when DOM is ready with error handling
 function initializeConfig() {
     try {
-        window.configPanel = new TwitchConfigPanel();
+        window.configPanel = new BulletproofConfigPanel();
     } catch (error) {
         console.error('❌ Failed to initialize config panel:', error);
     }
@@ -535,4 +529,4 @@ if (document.readyState === 'loading') {
 }
 
 // Global reference for debugging
-window.TwitchConfigPanel = TwitchConfigPanel;
+window.BulletproofConfigPanel = BulletproofConfigPanel;

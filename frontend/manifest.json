@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "version": "0.0.2",
+  "version": "0.0.1",
   "author_name": "PhummyLW",
-  "description": "Smart Click Map - HTTP-only version for reliable Twitch extension compatibility",
+  "description": "Smart Click Map Replica",
   "permissions": [
     "EXTENSION_BACKEND"
   ],
@@ -19,10 +19,5 @@
       "width": 400
     }
   },
-  "content_security_policy": "default-src 'self'; script-src 'self' https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js; connect-src 'self' https://smart-clickmap-backend.onrender.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors https://www.twitch.tv",
-  "capabilities": [
-    {
-      "permission": "send"
-    }
-  ]
+  "content_security_policy": "default-src 'self'; script-src 'self' 'unsafe-eval' https://extension-files.twitch.tv; connect-src 'self' https://smart-clickmap-backend.onrender.com wss://smart-clickmap-backend.onrender.com ws://smart-clickmap-backend.onrender.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors https://www.twitch.tv https://*.twitch.tv; worker-src 'self' blob:;"
 }

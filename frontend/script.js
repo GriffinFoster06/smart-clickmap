@@ -1,4 +1,4 @@
-﻿// frontend/script.js - Bulletproof main extension script
+﻿// frontend/script.js - Enhanced with robust WebSocket fallback
 import { HeatmapRenderer } from './heatmap.js';
 
 class BulletproofExtension {
@@ -13,6 +13,9 @@ class BulletproofExtension {
         this.lastDataHash = '';
         this.consecutiveErrors = 0;
         this.maxRetries = 5;
+        this.wsRetryCount = 0;
+        this.maxWsRetries = 3;
+        this.useWebSocket = true; // Flag to disable WS after failures
 
         this.EBS = 'https://smart-clickmap-backend.onrender.com';
         this.POLL_RATE = 1000;
@@ -20,7 +23,7 @@ class BulletproofExtension {
         // Debug logging
         this.debug = true;
 
-        this.log('🎯 Bulletproof ClickMap Extension v3.0.0 initializing...');
+        this.log('🎯 Bulletproof ClickMap Extension v3.1.0 initializing...');
         this.init();
     }
 
@@ -241,9 +244,13 @@ class BulletproofExtension {
 
             this.log(`✅ Twitch auth: Channel ${this.channelId}`);
 
-            // Start polling and WebSocket
-            this.connectWebSocket();
+            // Start with HTTP polling immediately (more reliable)
             this.startPolling();
+
+            // Try WebSocket as enhancement (but don't depend on it)
+            if (this.useWebSocket) {
+                this.connectWebSocket();
+            }
         });
 
         Twitch.ext.onVisibilityChanged((isVisible) => {
@@ -251,8 +258,10 @@ class BulletproofExtension {
             this.log(`Visibility changed: ${isVisible}`);
 
             if (isVisible) {
-                this.connectWebSocket();
-                this.startPolling();
+                this.startPolling(); // Always ensure polling is active
+                if (this.useWebSocket) {
+                    this.connectWebSocket();
+                }
             } else {
                 this.stopPolling();
                 this.disconnectWebSocket();
@@ -263,14 +272,43 @@ class BulletproofExtension {
     }
 
     connectWebSocket() {
+        // Don't try WebSocket if we've failed too many times
+        if (!this.useWebSocket || this.wsRetryCount >= this.maxWsRetries) {
+            this.log('WebSocket disabled due to previous failures, using polling only');
+            return;
+        }
+
         if (this.websocket || !this.channelId) return;
 
         try {
-            const wsUrl = this.EBS.replace('https://', 'wss://').replace('http://', 'ws://');
-            this.websocket = new WebSocket(`${wsUrl}/ws/${this.channelId}`);
+            // More defensive URL construction
+            let wsUrl;
+            if (this.EBS.startsWith('https://')) {
+                wsUrl = this.EBS.replace('https://', 'wss://');
+            } else if (this.EBS.startsWith('http://')) {
+                wsUrl = this.EBS.replace('http://', 'ws://');
+            } else {
+                wsUrl = `wss://${this.EBS}`;
+            }
+
+            const fullWsUrl = `${wsUrl}/ws/${this.channelId}`;
+            this.log(`Attempting WebSocket connection to: ${fullWsUrl}`);
+
+            this.websocket = new WebSocket(fullWsUrl);
+
+            // Set a connection timeout
+            const connectionTimeout = setTimeout(() => {
+                if (this.websocket && this.websocket.readyState === WebSocket.CONNECTING) {
+                    this.log('WebSocket connection timeout');
+                    this.websocket.close();
+                    this.handleWebSocketFailure();
+                }
+            }, 5000);
 
             this.websocket.onopen = () => {
-                this.log('📡 WebSocket connected');
+                clearTimeout(connectionTimeout);
+                this.wsRetryCount = 0; // Reset on successful connection
+                this.log('📡 WebSocket connected successfully');
             };
 
             this.websocket.onmessage = (event) => {
@@ -283,22 +321,43 @@ class BulletproofExtension {
             };
 
             this.websocket.onerror = (error) => {
+                clearTimeout(connectionTimeout);
                 this.error('WebSocket error', error);
-                this.websocket = null;
+                this.handleWebSocketFailure();
             };
 
-            this.websocket.onclose = () => {
-                this.log('📡 WebSocket disconnected');
+            this.websocket.onclose = (event) => {
+                clearTimeout(connectionTimeout);
+                this.log(`📡 WebSocket disconnected: ${event.code} ${event.reason}`);
                 this.websocket = null;
 
-                // Retry connection after delay
-                if (this.isVisible) {
-                    setTimeout(() => this.connectWebSocket(), 5000);
+                // Only retry if we haven't exceeded max retries
+                if (this.isVisible && this.wsRetryCount < this.maxWsRetries) {
+                    setTimeout(() => {
+                        this.wsRetryCount++;
+                        this.connectWebSocket();
+                    }, Math.min(5000 * this.wsRetryCount, 30000));
+                } else if (this.wsRetryCount >= this.maxWsRetries) {
+                    this.handleWebSocketFailure();
                 }
             };
 
         } catch (error) {
             this.error('WebSocket connection failed', error);
+            this.handleWebSocketFailure();
+        }
+    }
+
+    handleWebSocketFailure() {
+        this.wsRetryCount++;
+        if (this.wsRetryCount >= this.maxWsRetries) {
+            this.useWebSocket = false;
+            this.log('⚠️ WebSocket permanently disabled, using HTTP polling only');
+
+            // Ensure polling is active
+            if (!this.pollInterval) {
+                this.startPolling();
+            }
         }
     }
 
@@ -317,8 +376,10 @@ class BulletproofExtension {
                 this.stopPolling();
                 this.disconnectWebSocket();
             } else if (this.isVisible) {
-                this.connectWebSocket();
-                this.startPolling();
+                this.startPolling(); // Always restart polling
+                if (this.useWebSocket) {
+                    this.connectWebSocket();
+                }
             }
         });
 
@@ -328,10 +389,13 @@ class BulletproofExtension {
     startPolling() {
         if (this.pollInterval || !this.channelId) return;
 
-        this.pollInterval = setInterval(() => this.pollHeatmapData(), this.POLL_RATE);
+        // Use more aggressive polling when WebSocket is disabled
+        const pollRate = this.useWebSocket ? this.POLL_RATE : 500;
+
+        this.pollInterval = setInterval(() => this.pollHeatmapData(), pollRate);
         this.pollHeatmapData(); // Initial poll
 
-        this.log('✅ Polling started');
+        this.log(`✅ Polling started (${pollRate}ms interval)`);
     }
 
     stopPolling() {
@@ -343,15 +407,18 @@ class BulletproofExtension {
     }
 
     async pollHeatmapData() {
-        // Skip polling if WebSocket is active
-        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+        // Always poll if WebSocket is disabled, otherwise only poll as fallback
+        if (this.useWebSocket && this.websocket && this.websocket.readyState === WebSocket.OPEN) {
             return;
         }
 
         try {
             const response = await fetch(`${this.EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`, {
                 method: 'GET',
-                headers: { 'Content-Type': 'application/json' }
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Cache-Control': 'no-cache'
+                }
             });
 
             if (!response.ok) {
@@ -364,7 +431,9 @@ class BulletproofExtension {
 
         } catch (error) {
             this.consecutiveErrors++;
-            this.error(`Polling failed (${this.consecutiveErrors}/${this.maxRetries})`, error);
+            if (this.consecutiveErrors <= 3) {
+                this.error(`Polling failed (${this.consecutiveErrors}/${this.maxRetries})`, error);
+            }
         }
     }
 

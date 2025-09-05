@@ -19,22 +19,51 @@ const connectedClients = new Map(); // channelId → Set of WebSocket connection
 
 const app = express();
 
-// CORS setup
+// Enhanced CORS setup for Twitch extensions
 app.use(cors({
-    origin: '*',
+    origin: [
+        '*',
+        'https://www.twitch.tv',
+        'https://*.twitch.tv',
+        'https://*.ext-twitch.tv',
+        /\.ext-twitch\.tv$/
+    ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Upgrade', 'Connection', 'Sec-WebSocket-Key', 'Sec-WebSocket-Version', 'Sec-WebSocket-Protocol'],
+    allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-Requested-With',
+        'Upgrade',
+        'Connection',
+        'Sec-WebSocket-Key',
+        'Sec-WebSocket-Version',
+        'Sec-WebSocket-Protocol',
+        'Origin',
+        'Cache-Control'
+    ],
     credentials: false
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Add WebSocket headers
+// Enhanced headers for WebSocket and Twitch compatibility
 app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
+    // More permissive CORS for Twitch extensions
+    const origin = req.headers.origin;
+    if (origin && (origin.includes('twitch.tv') || origin.includes('ext-twitch.tv'))) {
+        res.header('Access-Control-Allow-Origin', origin);
+    } else {
+        res.header('Access-Control-Allow-Origin', '*');
+    }
+
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, UPGRADE');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version, Sec-WebSocket-Protocol');
+    res.header('Access-Control-Allow-Credentials', 'false');
+
+    // WebSocket specific headers
+    res.header('Upgrade', 'websocket');
+    res.header('Connection', 'Upgrade');
 
     if (req.method === 'OPTIONS') {
         res.sendStatus(200);
@@ -47,7 +76,7 @@ app.use((req, res, next) => {
 // Logging middleware
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-    res.set('Cache-Control', 'no-store');
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     next();
 });
 
@@ -58,7 +87,7 @@ app.get('/health', (req, res) => {
         status: 'ok',
         running: gameState.running,
         timestamp: Date.now(),
-        version: '3.2.1',
+        version: '3.2.2',
         uptime: process.uptime(),
         websocket: {
             enabled: !!wss,
@@ -122,7 +151,9 @@ app.get('/ws-debug', (req, res) => {
 // WebSocket connection test helper
 app.get('/ws-test/:channelId', (req, res) => {
     const { channelId } = req.params;
-    const wsUrl = `wss://${req.get('host')}/ws/${channelId}`;
+    const host = req.get('host');
+    const protocol = req.secure || req.get('x-forwarded-proto') === 'https' ? 'wss' : 'ws';
+    const wsUrl = `${protocol}://${host}/ws/${channelId}`;
 
     res.json({
         test_url: wsUrl,
@@ -140,18 +171,17 @@ app.get('/ws-test/:channelId', (req, res) => {
     });
 });
 
+// [Previous endpoints remain the same: /start, /stop, /reset, /click, /heatmap]
+// ... (keeping the existing endpoint code for brevity)
+
 // START endpoint
 app.post('/start', (req, res) => {
     console.log('🚀 START endpoint called');
-
     try {
         gameState.running = true;
         gameState.clicks.clear();
         gameState.lastUpdate = Date.now();
-
         console.log('✅ Game started successfully');
-
-        // Broadcast to all connected clients
         broadcastToAll({
             running: true,
             clusters: [],
@@ -159,14 +189,12 @@ app.post('/start', (req, res) => {
             uniqueUsers: 0,
             action: 'start'
         });
-
         res.json({
             success: true,
             status: 'started',
             running: true,
             timestamp: gameState.lastUpdate
         });
-
     } catch (error) {
         console.error('❌ Start error:', error);
         res.status(500).json({
@@ -180,26 +208,20 @@ app.post('/start', (req, res) => {
 // STOP endpoint
 app.post('/stop', (req, res) => {
     console.log('⏹️ STOP endpoint called');
-
     try {
         gameState.running = false;
         gameState.lastUpdate = Date.now();
-
         console.log('✅ Game stopped successfully');
-
         const currentData = getCurrentHeatmapData('all');
         currentData.running = false;
         currentData.action = 'stop';
-
         broadcastToAll(currentData);
-
         res.json({
             success: true,
             status: 'stopped',
             running: false,
             timestamp: gameState.lastUpdate
         });
-
     } catch (error) {
         console.error('❌ Stop error:', error);
         res.status(500).json({
@@ -213,13 +235,10 @@ app.post('/stop', (req, res) => {
 // RESET endpoint
 app.post('/reset', (req, res) => {
     console.log('🗑️ RESET endpoint called');
-
     try {
         gameState.clicks.clear();
         gameState.lastUpdate = Date.now();
-
         console.log('✅ Data reset successfully');
-
         broadcastToAll({
             running: gameState.running,
             clusters: [],
@@ -227,14 +246,12 @@ app.post('/reset', (req, res) => {
             uniqueUsers: 0,
             action: 'reset'
         });
-
         res.json({
             success: true,
             status: 'reset',
             running: gameState.running,
             timestamp: gameState.lastUpdate
         });
-
     } catch (error) {
         console.error('❌ Reset error:', error);
         res.status(500).json({
@@ -245,10 +262,9 @@ app.post('/reset', (req, res) => {
     }
 });
 
-// Click handling with enhanced logging
+// Click handling
 app.post('/click', (req, res) => {
     console.log('🖱️ CLICK endpoint called');
-
     try {
         if (!gameState.running) {
             console.log('   ❌ Game not running');
@@ -293,7 +309,6 @@ app.post('/click', (req, res) => {
         console.log(`✅ Click stored: Channel ${channelId}, User ${uid}, Pos (${x.toFixed(3)}, ${y.toFixed(3)})`);
         console.log(`   Total clicks in channel: ${gameState.clicks.get(channelId).size}`);
 
-        // Get updated data and broadcast immediately
         const updatedData = getCurrentHeatmapData(channelId);
         console.log(`   📡 Broadcasting: ${updatedData.clusters.length} clusters to channel ${channelId}`);
         broadcastToChannel(channelId, updatedData);
@@ -315,7 +330,7 @@ app.post('/click', (req, res) => {
     }
 });
 
-// Enhanced heatmap endpoint with detailed logging
+// Enhanced heatmap endpoint
 app.get('/heatmap', (req, res) => {
     const channelId = req.query.channel;
     const threshold = parseInt(req.query.threshold) || 3;
@@ -341,31 +356,26 @@ app.get('/heatmap', (req, res) => {
     }
 });
 
-// Get current heatmap data with proper clustering
+// [Helper functions remain the same]
 function getCurrentHeatmapData(channelId, threshold = 3) {
-    // If no specific channel requested, aggregate all channels WITH clustering
     if (!channelId || channelId === 'all') {
         let allPoints = [];
         let totalClicks = 0;
         let totalUsers = 0;
 
-        // Collect all points from all channels
         gameState.clicks.forEach((channelClicks) => {
             totalClicks += channelClicks.size;
             totalUsers += channelClicks.size;
-
-            // Add all points to the aggregate
             Array.from(channelClicks.values()).forEach(point => {
                 allPoints.push(point);
             });
         });
 
-        // Process ALL points into clusters
         const clusters = processClicksIntoClusters(allPoints, threshold);
 
         return {
             running: gameState.running,
-            clusters,  // ✅ Now includes clusters from all channels
+            clusters,
             totalClicks,
             uniqueUsers: totalUsers,
             coverage: Math.min(100, clusters.length * 10),
@@ -374,7 +384,6 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
         };
     }
 
-    // Handle specific channel
     const channelClicks = gameState.clicks.get(channelId);
 
     if (!channelClicks || channelClicks.size === 0) {
@@ -403,15 +412,13 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     };
 }
 
-// Enhanced clustering algorithm with proper logic
 function processClicksIntoClusters(points, threshold) {
     if (points.length === 0) return [];
 
     const clusters = [];
-    const gridSize = 0.1; // 10% of screen
+    const gridSize = 0.1;
     const grid = new Map();
 
-    // Group points into grid cells
     points.forEach((point) => {
         const cellX = Math.floor(point.x / gridSize);
         const cellY = Math.floor(point.y / gridSize);
@@ -423,7 +430,6 @@ function processClicksIntoClusters(points, threshold) {
         grid.get(cellKey).push(point);
     });
 
-    // Convert grid cells to clusters
     let clusterId = 0;
     grid.forEach((cellPoints) => {
         const percentage = Math.round((cellPoints.length / points.length) * 100);
@@ -443,7 +449,6 @@ function processClicksIntoClusters(points, threshold) {
         }
     });
 
-    // Sort by percentage and mark top cluster
     clusters.sort((a, b) => b.percentage - a.percentage);
     if (clusters.length > 0) {
         clusters[0].isTop = true;
@@ -452,7 +457,6 @@ function processClicksIntoClusters(points, threshold) {
     return clusters;
 }
 
-// WebSocket broadcasting functions
 function broadcastToChannel(channelId, data) {
     const clients = connectedClients.get(channelId);
     if (!clients || clients.size === 0) return;
@@ -475,7 +479,7 @@ function broadcastToChannel(channelId, data) {
     });
 
     if (sentCount > 0) {
-        console.log(`📡 Broadcast to ${channelId}: ${sentCount} clients, ${data.clusters.length} clusters`);
+        console.log(`📡 Broadcast to ${channelId}: ${sentCount} clients, ${data.clusters?.length || 0} clusters`);
     }
 }
 
@@ -497,65 +501,88 @@ function broadcastToAll(data) {
 console.log('🔧 Creating HTTP server...');
 const httpServer = createServer(app);
 
-// ===== WEBSOCKET SERVER INTEGRATION =====
-console.log('🔧 Creating WebSocket server integrated with HTTP server...');
+// ===== ENHANCED WEBSOCKET SERVER INTEGRATION =====
+console.log('🔧 Creating enhanced WebSocket server...');
 let wss;
 try {
-    // CRITICAL: Use the HTTP server, not a separate port
     wss = new WebSocketServer({
-        server: httpServer,  // Use the same HTTP server - this is the key fix!
+        server: httpServer,
         perMessageDeflate: false,
-        clientTracking: true
+        clientTracking: true,
+        maxPayload: 16 * 1024, // 16KB max message size
+        // Enhanced verification for Twitch compatibility
+        verifyClient: (info) => {
+            const origin = info.origin;
+            console.log(`WebSocket connection attempt from origin: ${origin}`);
+
+            // Allow Twitch origins and localhost for testing
+            if (!origin) return true; // Allow no-origin connections
+            if (origin.includes('twitch.tv') || origin.includes('ext-twitch.tv')) return true;
+            if (origin.includes('localhost') || origin.includes('127.0.0.1')) return true;
+
+            console.log(`WebSocket connection rejected for origin: ${origin}`);
+            return false; // Reject other origins
+        }
     });
-    console.log('✅ WebSocket server integrated with HTTP server on single port');
+    console.log('✅ Enhanced WebSocket server created');
 } catch (error) {
     console.error('❌ WebSocket server creation failed:', error);
     process.exit(1);
 }
 
-// Handle WebSocket upgrade requests explicitly
+// Enhanced WebSocket upgrade handling
 httpServer.on('upgrade', (request, socket, head) => {
     console.log('🔗 WebSocket upgrade request received:');
     console.log(`   URL: ${request.url}`);
     console.log(`   Origin: ${request.headers.origin}`);
-    console.log(`   Connection: ${request.headers.connection}`);
-    console.log(`   Upgrade: ${request.headers.upgrade}`);
+    console.log(`   User-Agent: ${request.headers['user-agent']?.substring(0, 50)}...`);
 
-    // Only handle WebSocket upgrade requests for /ws/ paths
-    if (request.url && request.url.startsWith('/ws/')) {
+    // Handle both /ws/channelId and /ws?channel=channelId formats
+    const isValidWsPath = request.url && (
+        request.url.startsWith('/ws/') ||
+        request.url.startsWith('/ws?')
+    );
+
+    if (isValidWsPath) {
         console.log('✅ Valid WebSocket path, handling upgrade...');
         wss.handleUpgrade(request, socket, head, (ws) => {
             wss.emit('connection', ws, request);
         });
     } else {
         console.log('❌ Invalid WebSocket path, closing connection');
+        socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
         socket.destroy();
     }
 });
 
-// WebSocket connection handling
+// Enhanced WebSocket connection handling
 wss.on('connection', (ws, req) => {
     const startTime = Date.now();
     console.log(`🔗 NEW WEBSOCKET CONNECTION`);
     console.log(`   URL: ${req.url}`);
     console.log(`   Origin: ${req.headers.origin}`);
-    console.log(`   User-Agent: ${req.headers['user-agent']?.substring(0, 50)}...`);
 
-    // Extract channel ID from URL: /ws/channelId
+    // Extract channel ID from URL - support both formats
     let channelId = null;
     if (req.url) {
-        const match = req.url.match(/\/ws\/([^?&\/]+)/);
+        // Format 1: /ws/channelId
+        let match = req.url.match(/\/ws\/([^?&\/]+)/);
         if (match) {
             channelId = match[1];
-            console.log(`   Channel: ${channelId}`);
+        } else {
+            // Format 2: /ws?channel=channelId
+            const urlParams = new URLSearchParams(req.url.split('?')[1] || '');
+            channelId = urlParams.get('channel');
         }
     }
 
     if (!channelId) {
         console.error('❌ No channel ID found in WebSocket URL');
-        ws.close(1008, 'Channel ID required: /ws/CHANNEL_ID');
+        ws.close(1008, 'Channel ID required: /ws/CHANNEL_ID or /ws?channel=CHANNEL_ID');
         return;
     }
+
+    console.log(`   Channel: ${channelId}`);
 
     // Add to tracking
     if (!connectedClients.has(channelId)) {
@@ -615,11 +642,11 @@ wss.on('connection', (ws, req) => {
         console.error(`❌ WebSocket error for ${channelId}:`, error);
     });
 
-    // Keep-alive mechanism
+    // Enhanced keep-alive mechanism
     const keepAlive = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
             try {
-                ws.ping();
+                ws.ping(Buffer.from('heartbeat'));
             } catch (pingError) {
                 console.error('❌ Keep-alive ping error:', pingError);
                 clearInterval(keepAlive);
@@ -627,24 +654,24 @@ wss.on('connection', (ws, req) => {
         } else {
             clearInterval(keepAlive);
         }
-    }, 25000); // 25 second keep-alive
+    }, 30000); // 30 second keep-alive
 
     ws.on('close', () => {
         clearInterval(keepAlive);
     });
 
-    ws.on('pong', () => {
-        console.log(`🏓 Pong received from ${channelId}`);
+    ws.on('pong', (data) => {
+        console.log(`🏓 Pong received from ${channelId}: ${data.toString()}`);
     });
 });
 
-// WebSocket server error handling
+// Enhanced error handling
 wss.on('error', (error) => {
     console.error('❌ WebSocket server error:', error);
     console.error('   Stack:', error.stack);
 });
 
-// Error handling
+// Process error handling
 process.on('uncaughtException', (error) => {
     console.error('❌ Uncaught Exception:', error);
 });
@@ -657,7 +684,6 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('SIGTERM', () => {
     console.log('📝 Received SIGTERM, starting graceful shutdown...');
 
-    // Close all WebSocket connections
     connectedClients.forEach((clients, channelId) => {
         clients.forEach(ws => {
             try {
@@ -676,9 +702,10 @@ process.on('SIGTERM', () => {
 
 // Start server
 httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 ClickMap EBS v3.2.1 SINGLE PORT WEBSOCKET - FINAL VERSION');
+    console.log('🚀 ClickMap EBS v3.2.2 - ENHANCED WEBSOCKET COMPATIBILITY');
     console.log(`📡 HTTP Server: https://smart-clickmap-backend.onrender.com`);
     console.log(`🔗 WebSocket URL: wss://smart-clickmap-backend.onrender.com/ws/[CHANNEL_ID]`);
+    console.log(`🔗 WebSocket URL Alt: wss://smart-clickmap-backend.onrender.com/ws?channel=[CHANNEL_ID]`);
     console.log(`🎯 Health check: https://smart-clickmap-backend.onrender.com/health`);
     console.log(`🔍 Debug endpoint: https://smart-clickmap-backend.onrender.com/ws-debug`);
     console.log(`🧪 Test endpoint: https://smart-clickmap-backend.onrender.com/ws-test/167556274`);
@@ -694,7 +721,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
         console.log(`   WebSocket clients: ${wss ? wss.clients.size : 0}`);
         console.log(`   Connected channels: ${connectedClients.size}`);
         console.log(`   Single port mode: ${PORT}`);
-        console.log('🎉 Server fully operational!');
+        console.log('🎉 Enhanced server fully operational!');
     }, 1000);
 });
 

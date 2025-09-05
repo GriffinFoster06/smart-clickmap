@@ -1,7 +1,7 @@
-﻿// frontend/config.js - HTTP-only configuration panel
+﻿// frontend/config.js - HTTP-only configuration panel for Twitch extensions
 import { HeatmapRenderer } from './heatmap.js';
 
-class HTTPConfigPanel {
+class TwitchConfigPanel {
     constructor() {
         this.EBS = 'https://smart-clickmap-backend.onrender.com';
         this.pollInterval = null;
@@ -9,12 +9,16 @@ class HTTPConfigPanel {
         this.sessionStart = null;
         this.isRunning = false;
         this.consecutiveErrors = 0;
-        this.maxRetries = 5;
+        this.maxRetries = 3;
+        this.authToken = '';
+
+        // Optimized for config panel
+        this.POLL_RATE = 2000; // 2 seconds for config panel
 
         // Debug logging
         this.debug = true;
 
-        this.log('🎛️ HTTP Config Panel v3.2.0 initializing...');
+        this.log('🎛️ Config Panel v3.1.0 (HTTP-only) initializing...');
         this.init();
     }
 
@@ -30,6 +34,9 @@ class HTTPConfigPanel {
 
     async init() {
         try {
+            this.log('Setting up Twitch extension auth...');
+            this.setupTwitchAuth();
+
             this.log('Setting up canvas...');
             this.setupCanvas();
 
@@ -42,7 +49,7 @@ class HTTPConfigPanel {
             this.log('Starting polling...');
             this.startPolling();
 
-            this.log('✅ Configuration panel ready! (HTTP-only mode)');
+            this.log('✅ Configuration panel ready!');
 
         } catch (error) {
             this.error('Failed to initialize config panel', error);
@@ -50,12 +57,31 @@ class HTTPConfigPanel {
         }
     }
 
+    setupTwitchAuth() {
+        if (typeof Twitch === 'undefined' || !Twitch.ext) {
+            this.error('Twitch Extension Helper not available');
+            return;
+        }
+
+        Twitch.ext.onAuthorized((auth) => {
+            this.authToken = auth.token;
+            this.log('✅ Twitch auth received');
+        });
+    }
+
     async testConnection() {
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+
             const response = await fetch(`${this.EBS}/health`, {
                 method: 'GET',
-                headers: { 'Content-Type': 'application/json' }
+                headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
+                cache: 'no-cache'
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`Health check failed: ${response.status}`);
@@ -63,12 +89,11 @@ class HTTPConfigPanel {
 
             const data = await response.json();
             this.log(`✅ Backend connection OK - Version: ${data.version}, Running: ${data.running}`);
-            this.updateElement('server-status', 'Connected');
+            this.hideError();
             return data;
 
         } catch (error) {
             this.error('Backend connection failed', error);
-            this.updateElement('server-status', 'Error');
             throw error;
         }
     }
@@ -128,13 +153,26 @@ class HTTPConfigPanel {
             this.setButtonDisabled('start-btn', true);
             this.showStatus('Starting...', 'running');
 
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            // Add auth token if available
+            if (this.authToken) {
+                headers['Authorization'] = `Bearer ${this.authToken}`;
+            }
+
             const response = await fetch(`${this.EBS}/start`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({})
+                headers,
+                body: JSON.stringify({}),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             this.log(`START response: ${response.status} ${response.statusText}`);
 
@@ -153,8 +191,8 @@ class HTTPConfigPanel {
                 this.showSuccess('✅ Session started successfully!');
                 this.log('✅ Start successful');
 
-                // Speed up polling when active
-                this.restartPolling(500);
+                // Trigger immediate poll for updated data
+                this.pollData();
             } else {
                 throw new Error(data.error || 'Start failed');
             }
@@ -174,13 +212,25 @@ class HTTPConfigPanel {
             this.setButtonDisabled('stop-btn', true);
             this.showStatus('Stopping...', 'stopped');
 
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            if (this.authToken) {
+                headers['Authorization'] = `Bearer ${this.authToken}`;
+            }
+
             const response = await fetch(`${this.EBS}/stop`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({})
+                headers,
+                body: JSON.stringify({}),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             this.log(`STOP response: ${response.status} ${response.statusText}`);
 
@@ -199,8 +249,8 @@ class HTTPConfigPanel {
                 this.showSuccess('⏹️ Session stopped successfully!');
                 this.log('✅ Stop successful');
 
-                // Slow down polling when stopped
-                this.restartPolling(2000);
+                // Trigger immediate poll for updated data
+                this.pollData();
             } else {
                 throw new Error(data.error || 'Stop failed');
             }
@@ -224,13 +274,25 @@ class HTTPConfigPanel {
             this.log('Sending RESET request...');
             this.setButtonDisabled('reset-btn', true);
 
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            if (this.authToken) {
+                headers['Authorization'] = `Bearer ${this.authToken}`;
+            }
+
             const response = await fetch(`${this.EBS}/reset`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({})
+                headers,
+                body: JSON.stringify({}),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             this.log(`RESET response: ${response.status} ${response.statusText}`);
 
@@ -250,6 +312,9 @@ class HTTPConfigPanel {
                 if (this.renderer) {
                     this.renderer.updateClusters([]);
                 }
+
+                // Trigger immediate poll for updated data
+                this.pollData();
             } else {
                 throw new Error(data.error || 'Reset failed');
             }
@@ -267,30 +332,34 @@ class HTTPConfigPanel {
             clearInterval(this.pollInterval);
         }
 
-        const pollRate = this.isRunning ? 500 : 1000; // Faster when active
-        this.pollInterval = setInterval(() => this.pollData(), pollRate);
+        this.pollInterval = setInterval(() => this.pollData(), this.POLL_RATE);
         this.pollData(); // Initial poll
-        this.log(`✅ Polling started (${pollRate}ms interval)`);
+        this.log('✅ Polling started');
     }
 
-    restartPolling(newRate) {
+    stopPolling() {
         if (this.pollInterval) {
             clearInterval(this.pollInterval);
+            this.pollInterval = null;
+            this.log('⏸️ Polling stopped');
         }
-
-        this.pollInterval = setInterval(() => this.pollData(), newRate);
-        this.log(`🔄 Polling restarted (${newRate}ms interval)`);
     }
 
     async pollData() {
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 4000);
+
             const response = await fetch(`${this.EBS}/heatmap?t=${Date.now()}`, {
                 method: 'GET',
                 headers: {
                     'Content-Type': 'application/json',
                     'Cache-Control': 'no-cache'
-                }
+                },
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
@@ -303,11 +372,13 @@ class HTTPConfigPanel {
 
         } catch (error) {
             this.consecutiveErrors++;
-            this.error(`Polling failed (${this.consecutiveErrors}/${this.maxRetries})`, error);
+
+            if (error.name !== 'AbortError') {
+                this.error(`Polling failed (${this.consecutiveErrors}/${this.maxRetries})`, error);
+            }
 
             if (this.consecutiveErrors >= this.maxRetries) {
                 this.showError(`Connection lost after ${this.maxRetries} attempts. Check server.`);
-                this.updateElement('server-status', 'Error');
             }
         }
     }
@@ -399,28 +470,48 @@ class HTTPConfigPanel {
         this.log(`SUCCESS: ${message}`);
         console.log(`✅ ${message}`);
 
-        // Briefly show success in error area with green styling
-        const errorEl = document.getElementById('error');
-        if (errorEl) {
-            errorEl.style.background = 'rgba(34, 197, 94, 0.1)';
-            errorEl.style.borderColor = 'rgba(34, 197, 94, 0.3)';
-            errorEl.style.color = '#22c55e';
-            errorEl.textContent = message;
-            errorEl.style.display = 'block';
+        // Show temporary success indicator
+        const indicator = document.createElement('div');
+        indicator.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(34, 197, 94, 0.9);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            z-index: 10002;
+            pointer-events: none;
+            animation: slideInOut 3s ease-in-out forwards;
+        `;
+        indicator.textContent = message;
 
-            setTimeout(() => {
-                errorEl.style.display = 'none';
-                errorEl.style.background = '';
-                errorEl.style.borderColor = '';
-                errorEl.style.color = '';
-            }, 3000);
+        // Add animation style if not exists
+        if (!document.getElementById('success-style')) {
+            const style = document.createElement('style');
+            style.id = 'success-style';
+            style.textContent = `
+                @keyframes slideInOut {
+                    0% { opacity: 0; transform: translateX(-100%); }
+                    20%, 80% { opacity: 1; transform: translateX(0); }
+                    100% { opacity: 0; transform: translateX(-100%); }
+                }
+            `;
+            document.head.appendChild(style);
         }
+
+        document.body.appendChild(indicator);
+
+        setTimeout(() => {
+            if (indicator.parentNode) {
+                indicator.parentNode.removeChild(indicator);
+            }
+        }, 3000);
     }
 
     destroy() {
-        if (this.pollInterval) {
-            clearInterval(this.pollInterval);
-        }
+        this.stopPolling();
         if (this.renderer) {
             this.renderer.destroy();
         }
@@ -431,7 +522,7 @@ class HTTPConfigPanel {
 // Initialize when DOM is ready with error handling
 function initializeConfig() {
     try {
-        window.configPanel = new HTTPConfigPanel();
+        window.configPanel = new TwitchConfigPanel();
     } catch (error) {
         console.error('❌ Failed to initialize config panel:', error);
     }
@@ -444,4 +535,4 @@ if (document.readyState === 'loading') {
 }
 
 // Global reference for debugging
-window.HTTPConfigPanel = HTTPConfigPanel;
+window.TwitchConfigPanel = TwitchConfigPanel;

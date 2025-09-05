@@ -1,7 +1,7 @@
-﻿// frontend/script.js - WebSocket-free extension with smart HTTP polling
+﻿// frontend/script.js - HTTP-only approach optimized for Twitch extensions
 import { HeatmapRenderer } from './heatmap.js';
 
-class TwitchClickMapExtension {
+class TwitchExtensionClickMap {
     constructor() {
         this.authToken = '';
         this.channelId = '';
@@ -11,33 +11,34 @@ class TwitchClickMapExtension {
         this.isVisible = true;
         this.lastDataHash = '';
         this.consecutiveErrors = 0;
-        this.maxRetries = 5;
-        this.pollRate = 1000; // Base polling rate
-        this.activePollRate = 500; // Fast polling when active
-        this.idlePollRate = 2000; // Slower when idle
+        this.maxRetries = 3;
 
-        // Connection status
-        this.connectionStatus = 'connecting';
-        this.lastSuccessfulPoll = 0;
-        this.lastClickTime = 0;
-
+        // Optimized settings for HTTP-only approach
         this.EBS = 'https://smart-clickmap-backend.onrender.com';
+        this.POLL_RATE = 1500; // 1.5 seconds - balanced for responsiveness vs server load
+        this.FAST_POLL_RATE = 500; // Fast polling when game is active
+        this.SLOW_POLL_RATE = 5000; // Slow polling when inactive
+
+        // State management
+        this.lastPollTime = 0;
+        this.pendingClicks = [];
+        this.isPolling = false;
 
         // Debug logging
         this.debug = true;
 
-        this.log('🎯 Twitch ClickMap Extension v3.2.0 (HTTP-Only Mode)');
+        this.log('🎯 ClickMap Extension v3.1.0 (HTTP-only) initializing...');
         this.init();
     }
 
     log(message) {
         if (this.debug) {
-            console.log(`[CLICKMAP] ${message}`);
+            console.log(`[EXTENSION] ${message}`);
         }
     }
 
     error(message, err = null) {
-        console.error(`[CLICKMAP ERROR] ${message}`, err || '');
+        console.error(`[EXTENSION ERROR] ${message}`, err || '');
     }
 
     async init() {
@@ -57,21 +58,27 @@ class TwitchClickMapExtension {
             this.log('Testing backend connection...');
             await this.testConnection();
 
-            this.log('✅ Extension ready! (HTTP-only mode for Twitch compatibility)');
-            this.showConnectionStatus('connected');
+            this.log('✅ Extension ready! (HTTP polling mode)');
 
         } catch (error) {
             this.error('Failed to initialize extension', error);
-            this.showConnectionStatus('error');
+            this.showError('Failed to connect to ClickMap service');
         }
     }
 
     async testConnection() {
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+
             const response = await fetch(`${this.EBS}/health`, {
                 method: 'GET',
-                headers: { 'Content-Type': 'application/json' }
+                headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
+                cache: 'no-cache'
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`Health check failed: ${response.status}`);
@@ -79,12 +86,11 @@ class TwitchClickMapExtension {
 
             const data = await response.json();
             this.log(`✅ Backend connection OK - Version: ${data.version}`);
-            this.connectionStatus = 'connected';
+            this.hideError();
             return data;
 
         } catch (error) {
             this.error('Backend connection failed', error);
-            this.connectionStatus = 'error';
             throw error;
         }
     }
@@ -99,9 +105,10 @@ class TwitchClickMapExtension {
         this.renderer = new HeatmapRenderer(canvas);
         this.resizeCanvas();
 
+        // Debounced resize handler
         window.addEventListener('resize', () => {
             clearTimeout(this.resizeTimeout);
-            this.resizeTimeout = setTimeout(() => this.resizeCanvas(), 100);
+            this.resizeTimeout = setTimeout(() => this.resizeCanvas(), 150);
         });
 
         this.log('✅ Canvas setup complete');
@@ -115,29 +122,27 @@ class TwitchClickMapExtension {
 
     setupEventListeners() {
         let clickTimeout = null;
-        let clickCount = 0;
+        const CLICK_DEBOUNCE_MS = 100;
 
-        // Click handler with debouncing and validation
+        // Optimized click handler with batching
         const handleClick = (event) => {
             if (!this.running || !this.authToken || !this.channelId) {
-                this.log('Click ignored - extension not ready');
+                this.log('Click ignored - not ready');
                 return;
             }
 
             // Prevent spam clicking
             clearTimeout(clickTimeout);
-            clickCount++;
 
             clickTimeout = setTimeout(() => {
                 this.processClick(event);
-                clickCount = 0;
-            }, 50);
+            }, CLICK_DEBOUNCE_MS);
         };
 
         // Mouse clicks
-        document.addEventListener('click', handleClick);
+        document.addEventListener('click', handleClick, { passive: true });
 
-        // Touch support for mobile
+        // Touch support with better mobile handling
         document.addEventListener('touchstart', (event) => {
             if (event.touches.length === 1) {
                 event.preventDefault();
@@ -161,17 +166,11 @@ class TwitchClickMapExtension {
 
             this.log(`Processing click at (${x.toFixed(3)}, ${y.toFixed(3)})`);
 
-            // Record click time for smart polling
-            this.lastClickTime = Date.now();
-
             // Visual feedback
             this.showClickFeedback(event.clientX, event.clientY);
 
-            // Send to backend
+            // Send click immediately (don't batch for better UX)
             this.sendClick(x, y);
-
-            // Speed up polling temporarily after a click
-            this.adjustPollingRate();
 
         } catch (error) {
             this.error('Failed to process click', error);
@@ -185,44 +184,16 @@ class TwitchClickMapExtension {
             position: fixed;
             left: ${clientX}px;
             top: ${clientY}px;
-            width: 24px;
-            height: 24px;
-            border: 3px solid rgba(147, 51, 234, 0.9);
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(147, 51, 234, 0.8);
             border-radius: 50%;
             pointer-events: none;
             z-index: 10001;
-            margin: -12px 0 0 -12px;
+            margin: -10px 0 0 -10px;
             animation: clickPulse 0.6s ease-out forwards;
-            background: rgba(147, 51, 234, 0.2);
-            box-shadow: 0 0 20px rgba(147, 51, 234, 0.5);
+            background: rgba(147, 51, 234, 0.1);
         `;
-
-        // Add animation if not exists
-        if (!document.getElementById('click-animation-style')) {
-            const style = document.createElement('style');
-            style.id = 'click-animation-style';
-            style.textContent = `
-                @keyframes clickPulse {
-                    0% { 
-                        transform: scale(0); 
-                        opacity: 1; 
-                        border-color: rgba(147, 51, 234, 1);
-                        box-shadow: 0 0 20px rgba(147, 51, 234, 0.8);
-                    }
-                    50% { 
-                        border-color: rgba(0, 255, 255, 0.8);
-                        box-shadow: 0 0 30px rgba(0, 255, 255, 0.6);
-                    }
-                    100% { 
-                        transform: scale(4); 
-                        opacity: 0; 
-                        border-color: rgba(147, 51, 234, 0);
-                        box-shadow: 0 0 40px rgba(147, 51, 234, 0);
-                    }
-                }
-            `;
-            document.head.appendChild(style);
-        }
 
         document.body.appendChild(feedback);
 
@@ -235,15 +206,20 @@ class TwitchClickMapExtension {
 
     async sendClick(x, y) {
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
+
             const response = await fetch(`${this.EBS}/click`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.authToken}`,
-                    'Cache-Control': 'no-cache'
+                    'Authorization': `Bearer ${this.authToken}`
                 },
-                body: JSON.stringify({ x, y })
+                body: JSON.stringify({ x, y }),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -252,23 +228,24 @@ class TwitchClickMapExtension {
 
             const data = await response.json();
             if (data.success) {
-                this.log(`✅ Click sent successfully - Total: ${data.totalClicks}`);
-
-                // Immediate data refresh after click
-                setTimeout(() => this.pollHeatmapData(), 100);
+                this.log(`✅ Click sent successfully`);
+                // Trigger fast polling for immediate feedback
+                this.triggerFastPoll();
             } else {
                 throw new Error(data.error || 'Click failed');
             }
 
         } catch (error) {
             this.error('Failed to send click', error);
-            this.showConnectionStatus('error');
+            // Show brief error indicator
+            this.showTemporaryError('Click failed');
         }
     }
 
     setupTwitchExtension() {
         if (typeof Twitch === 'undefined' || !Twitch.ext) {
             this.error('Twitch Extension Helper not available');
+            // Continue without Twitch for testing
             return;
         }
 
@@ -278,8 +255,8 @@ class TwitchClickMapExtension {
 
             this.log(`✅ Twitch auth: Channel ${this.channelId}`);
 
-            // Start HTTP polling immediately
-            this.startSmartPolling();
+            // Start polling immediately after auth
+            this.startPolling();
         });
 
         Twitch.ext.onVisibilityChanged((isVisible) => {
@@ -287,13 +264,24 @@ class TwitchClickMapExtension {
             this.log(`Visibility changed: ${isVisible}`);
 
             if (isVisible) {
-                this.startSmartPolling();
-                this.showConnectionStatus(this.connectionStatus);
+                this.startPolling();
             } else {
                 this.stopPolling();
-                this.hideConnectionStatus();
             }
         });
+
+        // Listen for PubSub messages (if available)
+        if (Twitch.ext.listen) {
+            Twitch.ext.listen('broadcast', (target, contentType, data) => {
+                this.log('PubSub message received:', data);
+                try {
+                    const parsedData = JSON.parse(data);
+                    this.updateVisualization(parsedData);
+                } catch (e) {
+                    this.error('PubSub parse error', e);
+                }
+            });
+        }
 
         this.log('✅ Twitch extension setup complete');
     }
@@ -301,79 +289,126 @@ class TwitchClickMapExtension {
     setupVisibilityOptimization() {
         // Pause when tab is not visible
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
+            if (document.hidden && this.isVisible) {
+                this.log('Tab hidden - stopping polling');
                 this.stopPolling();
-            } else if (this.isVisible) {
-                this.startSmartPolling();
+            } else if (!document.hidden && this.isVisible) {
+                this.log('Tab visible - starting polling');
+                this.startPolling();
             }
+        });
+
+        // Page lifecycle events
+        window.addEventListener('beforeunload', () => {
+            this.stopPolling();
         });
 
         this.log('✅ Visibility optimization setup complete');
     }
 
-    adjustPollingRate() {
-        if (!this.pollInterval) return;
-
-        const timeSinceClick = Date.now() - this.lastClickTime;
-
-        let newRate;
-        if (timeSinceClick < 5000) {
-            // Very fast polling for 5 seconds after click
-            newRate = this.activePollRate;
-        } else if (timeSinceClick < 30000) {
-            // Medium polling for 30 seconds after click
-            newRate = this.pollRate;
-        } else {
-            // Slower polling when idle
-            newRate = this.idlePollRate;
+    triggerFastPoll() {
+        // Temporarily use fast polling after user interaction
+        if (this.fastPollTimeout) {
+            clearTimeout(this.fastPollTimeout);
         }
 
-        if (newRate !== this.currentPollRate) {
-            this.currentPollRate = newRate;
-            this.stopPolling();
-            this.startSmartPolling();
-        }
+        this.getCurrentPollRate = () => this.FAST_POLL_RATE;
+
+        this.fastPollTimeout = setTimeout(() => {
+            this.getCurrentPollRate = () => this.getAdaptivePollRate();
+        }, 5000); // Fast poll for 5 seconds
     }
 
-    startSmartPolling() {
+    getAdaptivePollRate() {
+        if (!this.running) {
+            return this.SLOW_POLL_RATE;
+        }
+        return this.POLL_RATE;
+    }
+
+    getCurrentPollRate() {
+        return this.getAdaptivePollRate();
+    }
+
+    startPolling() {
         if (this.pollInterval || !this.channelId) return;
 
-        // Determine initial poll rate
-        const timeSinceClick = Date.now() - this.lastClickTime;
-        if (timeSinceClick < 5000) {
-            this.currentPollRate = this.activePollRate;
-        } else {
-            this.currentPollRate = this.pollRate;
-        }
+        // Initial poll
+        this.pollHeatmapData();
 
-        this.pollInterval = setInterval(() => {
-            this.pollHeatmapData();
-            this.adjustPollingRate(); // Dynamically adjust rate
-        }, this.currentPollRate);
+        // Set up adaptive polling
+        const scheduleNextPoll = () => {
+            if (this.pollInterval) {
+                const rate = this.getCurrentPollRate();
+                this.pollInterval = setTimeout(() => {
+                    this.pollHeatmapData().finally(() => {
+                        if (this.isVisible && !document.hidden) {
+                            scheduleNextPoll();
+                        }
+                    });
+                }, rate);
+            }
+        };
 
-        this.pollHeatmapData(); // Initial poll
+        this.pollInterval = true; // Mark as active
+        scheduleNextPoll();
 
-        this.log(`✅ Smart polling started (${this.currentPollRate}ms interval)`);
+        this.log(`✅ Polling started (rate: ${this.getCurrentPollRate()}ms)`);
     }
 
     stopPolling() {
         if (this.pollInterval) {
-            clearInterval(this.pollInterval);
+            if (this.pollInterval !== true) {
+                clearTimeout(this.pollInterval);
+            }
             this.pollInterval = null;
             this.log('⏸️ Polling stopped');
+        }
+
+        if (this.fastPollTimeout) {
+            clearTimeout(this.fastPollTimeout);
+            this.fastPollTimeout = null;
         }
     }
 
     async pollHeatmapData() {
+        if (this.isPolling) {
+            this.log('Poll already in progress, skipping');
+            return;
+        }
+
+        this.isPolling = true;
+
         try {
-            const response = await fetch(`${this.EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}&t=${Date.now()}`, {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Cache-Control': 'no-cache, no-store, must-revalidate',
-                    'Pragma': 'no-cache'
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+            // Add cache-busting and conditional request headers
+            const headers = {
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache'
+            };
+
+            if (this.lastDataHash) {
+                headers['If-None-Match'] = this.lastDataHash;
+            }
+
+            const response = await fetch(
+                `${this.EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}&t=${Date.now()}`,
+                {
+                    method: 'GET',
+                    headers,
+                    signal: controller.signal
                 }
-            });
+            );
+
+            clearTimeout(timeoutId);
+
+            if (response.status === 304) {
+                // No changes
+                this.consecutiveErrors = 0;
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
@@ -381,28 +416,36 @@ class TwitchClickMapExtension {
 
             const data = await response.json();
 
-            // Track successful polls
-            this.lastSuccessfulPoll = Date.now();
-            this.consecutiveErrors = 0;
-
-            if (this.connectionStatus !== 'connected') {
-                this.connectionStatus = 'connected';
-                this.showConnectionStatus('connected');
+            // Update hash for caching
+            const etag = response.headers.get('etag');
+            if (etag) {
+                this.lastDataHash = etag;
             }
 
             this.updateVisualization(data);
+            this.consecutiveErrors = 0;
+            this.hideError();
 
         } catch (error) {
             this.consecutiveErrors++;
 
-            if (this.consecutiveErrors >= 3) {
-                this.connectionStatus = 'error';
-                this.showConnectionStatus('error');
-            }
-
-            if (this.consecutiveErrors <= 3) {
+            if (error.name === 'AbortError') {
+                this.log('Poll timeout');
+            } else {
                 this.error(`Polling failed (${this.consecutiveErrors}/${this.maxRetries})`, error);
             }
+
+            if (this.consecutiveErrors >= this.maxRetries) {
+                this.showError('Connection lost. Retrying...');
+                // Exponential backoff
+                const backoffDelay = Math.min(10000, 1000 * Math.pow(2, this.consecutiveErrors - this.maxRetries));
+                setTimeout(() => {
+                    this.consecutiveErrors = Math.max(0, this.consecutiveErrors - 1);
+                }, backoffDelay);
+            }
+        } finally {
+            this.isPolling = false;
+            this.lastPollTime = Date.now();
         }
     }
 
@@ -414,16 +457,16 @@ class TwitchClickMapExtension {
                 this.renderer.updateClusters(data.clusters || []);
             }
 
-            // Update body classes for CSS styling
+            // Update body classes for styling
             document.body.classList.toggle('clickmap-active', this.running);
             document.body.classList.toggle('clickmap-has-data', (data.clusters || []).length > 0);
 
-            // Update status indicator
+            // Update status indicator if present
             this.updateStatusIndicator(data);
 
             // Debug info
             if ((data.clusters || []).length > 0) {
-                this.log(`Updated: ${data.clusters.length} clusters, ${data.totalClicks} total clicks`);
+                this.log(`Updated: ${data.clusters.length} clusters, running: ${data.running}`);
             }
 
         } catch (error) {
@@ -431,78 +474,85 @@ class TwitchClickMapExtension {
         }
     }
 
-    // UI Status Methods
-    showConnectionStatus(status) {
-        let existingStatus = document.getElementById('connection-status');
-        if (!existingStatus) {
-            existingStatus = document.createElement('div');
-            existingStatus.id = 'connection-status';
-            existingStatus.style.cssText = `
-                position: fixed;
-                top: 20px;
-                right: 20px;
-                padding: 8px 16px;
-                border-radius: 20px;
-                font-size: 12px;
-                font-weight: 600;
-                z-index: 1002;
-                transition: all 0.3s ease;
-                pointer-events: none;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            `;
-            document.body.appendChild(existingStatus);
-        }
-
-        let bgColor, textColor, text;
-        switch (status) {
-            case 'connected':
-                bgColor = 'rgba(34, 197, 94, 0.15)';
-                textColor = '#22c55e';
-                text = '🟢 Connected';
-                break;
-            case 'error':
-                bgColor = 'rgba(239, 68, 68, 0.15)';
-                textColor = '#ef4444';
-                text = '🔴 Connection Error';
-                break;
-            default:
-                bgColor = 'rgba(107, 114, 128, 0.15)';
-                textColor = '#9ca3af';
-                text = '🟡 Connecting...';
-        }
-
-        existingStatus.style.background = bgColor;
-        existingStatus.style.color = textColor;
-        existingStatus.style.border = `1px solid ${textColor}40`;
-        existingStatus.textContent = text;
-        existingStatus.style.opacity = '1';
-
-        // Auto-hide success status after 3 seconds
-        if (status === 'connected') {
-            setTimeout(() => {
-                if (existingStatus.textContent === text) {
-                    existingStatus.style.opacity = '0';
-                }
-            }, 3000);
-        }
-    }
-
-    hideConnectionStatus() {
-        const status = document.getElementById('connection-status');
-        if (status) {
-            status.style.opacity = '0';
-        }
-    }
-
     updateStatusIndicator(data) {
-        // Update any status indicators with current data
-        const totalClicks = data.totalClicks || 0;
-        const clusterCount = (data.clusters || []).length;
-
-        // Add to page title for debugging
-        if (this.debug && totalClicks > 0) {
-            document.title = `ClickMap (${totalClicks} clicks, ${clusterCount} clusters)`;
+        const status = document.querySelector('.status-badge');
+        if (status) {
+            status.textContent = data.running ?
+                `Active • ${data.totalClicks || 0} clicks` :
+                'Stopped';
+            status.className = `status-badge visible ${data.running ? 'active' : 'inactive'}`;
         }
+    }
+
+    showError(message) {
+        const errorEl = document.getElementById('error-overlay');
+        if (errorEl) {
+            const messageEl = errorEl.querySelector('#error-message');
+            if (messageEl) messageEl.textContent = message;
+            errorEl.style.display = 'block';
+        }
+        this.log(`Error displayed: ${message}`);
+    }
+
+    hideError() {
+        const errorEl = document.getElementById('error-overlay');
+        if (errorEl) {
+            errorEl.style.display = 'none';
+        }
+    }
+
+    showTemporaryError(message) {
+        // Create temporary error indicator
+        const indicator = document.createElement('div');
+        indicator.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(239, 68, 68, 0.9);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            z-index: 10002;
+            pointer-events: none;
+            animation: fadeInOut 3s ease-in-out forwards;
+        `;
+        indicator.textContent = message;
+
+        // Add animation if not exists
+        if (!document.getElementById('temp-error-style')) {
+            const style = document.createElement('style');
+            style.id = 'temp-error-style';
+            style.textContent = `
+                @keyframes fadeInOut {
+                    0% { opacity: 0; transform: translateY(-10px); }
+                    20%, 80% { opacity: 1; transform: translateY(0); }
+                    100% { opacity: 0; transform: translateY(-10px); }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        document.body.appendChild(indicator);
+
+        setTimeout(() => {
+            if (indicator.parentNode) {
+                indicator.parentNode.removeChild(indicator);
+            }
+        }, 3000);
+    }
+
+    // Public API for debugging
+    getDebugInfo() {
+        return {
+            running: this.running,
+            channelId: this.channelId,
+            isVisible: this.isVisible,
+            pollRate: this.getCurrentPollRate(),
+            consecutiveErrors: this.consecutiveErrors,
+            lastPollTime: this.lastPollTime,
+            isPolling: this.isPolling
+        };
     }
 
     destroy() {
@@ -516,7 +566,9 @@ class TwitchClickMapExtension {
             clearTimeout(this.resizeTimeout);
         }
 
-        this.hideConnectionStatus();
+        if (this.fastPollTimeout) {
+            clearTimeout(this.fastPollTimeout);
+        }
 
         this.log('🧹 Extension destroyed');
     }
@@ -525,12 +577,13 @@ class TwitchClickMapExtension {
 // Initialize extension with error handling
 function initializeExtension() {
     try {
-        window.clickMapExtension = new TwitchClickMapExtension();
+        window.clickMapExtension = new TwitchExtensionClickMap();
     } catch (error) {
         console.error('❌ Failed to initialize ClickMap extension:', error);
     }
 }
 
+// Initialize when ready
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeExtension);
 } else {
@@ -538,4 +591,5 @@ if (document.readyState === 'loading') {
 }
 
 // Global reference for debugging
-window.TwitchClickMapExtension = TwitchClickMapExtension;
+window.TwitchExtensionClickMap = TwitchExtensionClickMap;
+window.TwitchExtensionClickMap = TwitchExtensionClickMap;

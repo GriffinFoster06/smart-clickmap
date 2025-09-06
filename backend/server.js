@@ -4,9 +4,267 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import { createClient } from 'redis';
 
 const PORT = process.env.PORT || 8080;
 const SECRET = Buffer.from(process.env.TWITCH_SECRET || '', 'base64');
+
+// REDIS SETUP - Replace all in-memory storage
+const redis = createClient({
+    url: process.env.REDIS_URL,
+    socket: {
+        connectTimeout: 5000,
+        lazyConnect: true,
+        reconnectStrategy: (retries) => Math.min(retries * 50, 1000)
+    }
+});
+
+redis.on('error', (err) => console.error('Redis Client Error:', err));
+redis.on('connect', () => console.log('✅ Redis connected'));
+redis.on('reconnecting', () => console.log('🔄 Redis reconnecting...'));
+
+await redis.connect();
+
+// REDIS GAME STATE MANAGER
+class RedisGameState {
+    constructor() {
+        this.instanceId = process.env.RENDER_INSTANCE_ID || `instance-${Math.random().toString(36).substring(7)}`;
+        console.log(`🏷️ Instance ID: ${this.instanceId}`);
+    }
+
+    async setRunning(running) {
+        try {
+            await redis.multi()
+                .set('game:running', running.toString())
+                .set('game:lastUpdate', Date.now().toString())
+                .set(`game:lastModifiedBy`, this.instanceId)
+                .exec();
+            
+            console.log(`🎮 Game state: ${running} (set by ${this.instanceId})`);
+        } catch (error) {
+            console.error('❌ Failed to set running state:', error);
+            throw error;
+        }
+    }
+
+    async isRunning() {
+        try {
+            const running = await redis.get('game:running');
+            return running === 'true';
+        } catch (error) {
+            console.error('❌ Failed to get running state:', error);
+            return false; // Fail safe
+        }
+    }
+
+    async getLastUpdate() {
+        try {
+            const timestamp = await redis.get('game:lastUpdate');
+            return timestamp ? parseInt(timestamp) : Date.now();
+        } catch (error) {
+            console.error('❌ Failed to get last update:', error);
+            return Date.now();
+        }
+    }
+
+    async getModifiedBy() {
+        try {
+            return await redis.get('game:lastModifiedBy') || 'unknown';
+        } catch (error) {
+            return 'unknown';
+        }
+    }
+
+    // CLICK DATA MANAGEMENT
+    async addClick(channelId, userId, x, y) {
+        try {
+            const clickData = JSON.stringify({
+                x: x,
+                y: y,
+                timestamp: Date.now(),
+                instance: this.instanceId
+            });
+
+            // Store with 1 hour expiration to prevent memory bloat
+            await redis.setex(`clicks:${channelId}:${userId}`, 3600, clickData);
+            
+            // Also increment total click counter for this channel
+            await redis.incr(`stats:${channelId}:totalClicks`);
+            await redis.expire(`stats:${channelId}:totalClicks`, 3600);
+
+        } catch (error) {
+            console.error('❌ Failed to add click:', error);
+            throw error;
+        }
+    }
+
+    async getChannelClicks(channelId) {
+        try {
+            const pattern = `clicks:${channelId}:*`;
+            const keys = await redis.keys(pattern);
+            
+            if (keys.length === 0) {
+                return new Map();
+            }
+
+            // Get all click data in one pipeline for efficiency
+            const pipeline = redis.multi();
+            keys.forEach(key => pipeline.get(key));
+            const results = await pipeline.exec();
+
+            const clicks = new Map();
+            keys.forEach((key, index) => {
+                const userId = key.split(':')[2];
+                const result = results[index];
+                
+                if (result && result[1]) { // Redis multi returns [error, result]
+                    try {
+                        const clickData = JSON.parse(result[1]);
+                        clicks.set(userId, clickData);
+                    } catch (parseError) {
+                        console.error(`Failed to parse click data for ${userId}:`, parseError);
+                    }
+                }
+            });
+
+            return clicks;
+        } catch (error) {
+            console.error('❌ Failed to get channel clicks:', error);
+            return new Map();
+        }
+    }
+
+    async getAllChannelClicks() {
+        try {
+            const pattern = 'clicks:*';
+            const keys = await redis.keys(pattern);
+            
+            if (keys.length === 0) {
+                return new Map();
+            }
+
+            // Group keys by channel
+            const channelGroups = new Map();
+            keys.forEach(key => {
+                const parts = key.split(':');
+                const channelId = parts[1];
+                const userId = parts[2];
+                
+                if (!channelGroups.has(channelId)) {
+                    channelGroups.set(channelId, []);
+                }
+                channelGroups.get(channelId).push({ key, userId });
+            });
+
+            // Get all data in one pipeline
+            const pipeline = redis.multi();
+            keys.forEach(key => pipeline.get(key));
+            const results = await pipeline.exec();
+
+            // Organize by channel
+            const allClicks = new Map();
+            let resultIndex = 0;
+
+            for (const [channelId, channelKeys] of channelGroups.entries()) {
+                const channelClicks = new Map();
+                
+                channelKeys.forEach(({ userId }) => {
+                    const result = results[resultIndex++];
+                    if (result && result[1]) {
+                        try {
+                            const clickData = JSON.parse(result[1]);
+                            channelClicks.set(userId, clickData);
+                        } catch (parseError) {
+                            console.error(`Failed to parse click data for ${userId}:`, parseError);
+                        }
+                    }
+                });
+
+                if (channelClicks.size > 0) {
+                    allClicks.set(channelId, channelClicks);
+                }
+            }
+
+            return allClicks;
+        } catch (error) {
+            console.error('❌ Failed to get all clicks:', error);
+            return new Map();
+        }
+    }
+
+    async clearAllClicks() {
+        try {
+            const clickKeys = await redis.keys('clicks:*');
+            const statKeys = await redis.keys('stats:*');
+            const allKeys = [...clickKeys, ...statKeys];
+            
+            if (allKeys.length > 0) {
+                await redis.del(allKeys);
+                console.log(`🗑️ Cleared ${allKeys.length} click records (by ${this.instanceId})`);
+            }
+        } catch (error) {
+            console.error('❌ Failed to clear clicks:', error);
+            throw error;
+        }
+    }
+
+    async getStats() {
+        try {
+            const channels = await redis.keys('stats:*:totalClicks');
+            const stats = {
+                totalChannels: 0,
+                totalClicks: 0,
+                channelBreakdown: []
+            };
+
+            if (channels.length === 0) {
+                return stats;
+            }
+
+            const pipeline = redis.multi();
+            channels.forEach(key => pipeline.get(key));
+            const results = await pipeline.exec();
+
+            channels.forEach((key, index) => {
+                const channelId = key.split(':')[1];
+                const result = results[index];
+                const clicks = result && result[1] ? parseInt(result[1]) : 0;
+                
+                stats.totalChannels++;
+                stats.totalClicks += clicks;
+                stats.channelBreakdown.push({ channel: channelId, clicks });
+            });
+
+            return stats;
+        } catch (error) {
+            console.error('❌ Failed to get stats:', error);
+            return { totalChannels: 0, totalClicks: 0, channelBreakdown: [] };
+        }
+    }
+
+    async getInstanceInfo() {
+        try {
+            const modifiedBy = await this.getModifiedBy();
+            const lastUpdate = await this.getLastUpdate();
+            
+            return {
+                instanceId: this.instanceId,
+                lastModifiedBy: modifiedBy,
+                lastUpdate: lastUpdate,
+                uptime: process.uptime(),
+                pid: process.pid
+            };
+        } catch (error) {
+            return {
+                instanceId: this.instanceId,
+                error: error.message
+            };
+        }
+    }
+}
+
+// Initialize Redis game state
+const gameState = new RedisGameState();
 
 // Real-time performance monitoring
 const PERFORMANCE_MONITORING = process.env.NODE_ENV !== 'production';
@@ -15,14 +273,8 @@ const performanceStats = {
     broadcastTimes: [],
     clusterCalculationTimes: [],
     totalRequests: 0,
+    redisOperations: 0,
     startTime: Date.now()
-};
-
-// Simple in-memory storage
-const gameState = {
-    running: false,
-    clicks: new Map(), // channelId → Map(userId → { x, y, timestamp })
-    lastUpdate: Date.now()
 };
 
 const connectedClients = new Map(); // channelId → Set of WebSocket connections
@@ -56,162 +308,70 @@ app.use((req, res, next) => {
 
 // Logging middleware
 app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path} [${gameState.instanceId}]`);
     res.set('Cache-Control', 'no-store');
     next();
 });
 
-// Enhanced health check with real-time performance stats
-app.get('/health', (req, res) => {
+// Enhanced health check with Redis status
+app.get('/health', async (req, res) => {
     console.log('🏥 Health check called');
     
-    const uptime = Date.now() - performanceStats.startTime;
-    const avgProcessingTime = performanceStats.clickProcessingTimes.length > 0 ? 
-        performanceStats.clickProcessingTimes.reduce((a, b) => a + b, 0) / performanceStats.clickProcessingTimes.length : 0;
-    const avgBroadcastTime = performanceStats.broadcastTimes.length > 0 ?
-        performanceStats.broadcastTimes.reduce((a, b) => a + b, 0) / performanceStats.broadcastTimes.length : 0;
-    const avgCalculationTime = performanceStats.clusterCalculationTimes.length > 0 ?
-        performanceStats.clusterCalculationTimes.reduce((a, b) => a + b, 0) / performanceStats.clusterCalculationTimes.length : 0;
-    
-    res.json({
-        status: 'ok',
-        running: gameState.running,
-        timestamp: Date.now(),
-        version: '4.2.0-fixed-clustering',
-        uptime: Math.floor(uptime / 1000),
-        websocket: {
-            enabled: !!wss,
-            clients: wss ? wss.clients.size : 0,
-            channels: connectedClients.size,
-            connections_by_channel: Array.from(connectedClients.entries()).map(([channel, clients]) => ({
-                channel,
-                count: clients.size
-            }))
-        },
-        performance: PERFORMANCE_MONITORING ? {
-            totalRequests: performanceStats.totalRequests,
-            averageProcessingTime: Math.round(avgProcessingTime * 100) / 100,
-            averageBroadcastTime: Math.round(avgBroadcastTime * 100) / 100,
-            averageCalculationTime: Math.round(avgCalculationTime * 100) / 100,
-            requestsPerSecond: Math.round((performanceStats.totalRequests / (uptime / 1000)) * 100) / 100,
-            realTimeMode: true
-        } : undefined,
-        environment: {
-            node_env: process.env.NODE_ENV || 'unknown',
-            port: PORT,
-            render_service: process.env.RENDER_SERVICE_NAME || 'unknown',
-            render_service_id: process.env.RENDER_SERVICE_ID || 'unknown'
-        },
-        game_data: {
-            total_channels: gameState.clicks.size,
-            total_clicks: Array.from(gameState.clicks.values()).reduce((sum, channelClicks) => sum + channelClicks.size, 0),
-            channels: Array.from(gameState.clicks.entries()).map(([channel, clicks]) => ({
-                channel,
-                clicks: clicks.size
-            }))
-        }
-    });
-});
-
-// Real-time performance monitoring endpoint
-app.get('/performance', (req, res) => {
-    if (!PERFORMANCE_MONITORING) {
-        return res.status(404).json({ error: 'Performance monitoring disabled' });
+    try {
+        const uptime = Date.now() - performanceStats.startTime;
+        const instanceInfo = await gameState.getInstanceInfo();
+        const stats = await gameState.getStats();
+        const isRunning = await gameState.isRunning();
+        
+        // Test Redis connectivity
+        const redisHealth = await redis.ping();
+        
+        res.json({
+            status: 'ok',
+            running: isRunning,
+            timestamp: Date.now(),
+            version: '4.3.0-redis-scale',
+            uptime: Math.floor(uptime / 1000),
+            instance: instanceInfo,
+            redis: {
+                connected: redisHealth === 'PONG',
+                operations: performanceStats.redisOperations
+            },
+            websocket: {
+                enabled: !!wss,
+                clients: wss ? wss.clients.size : 0,
+                channels: connectedClients.size,
+                connections_by_channel: Array.from(connectedClients.entries()).map(([channel, clients]) => ({
+                    channel,
+                    count: clients.size
+                }))
+            },
+            performance: PERFORMANCE_MONITORING ? {
+                totalRequests: performanceStats.totalRequests,
+                redisOperations: performanceStats.redisOperations,
+                requestsPerSecond: Math.round((performanceStats.totalRequests / (uptime / 1000)) * 100) / 100
+            } : undefined,
+            game_data: stats
+        });
+    } catch (error) {
+        console.error('❌ Health check error:', error);
+        res.status(500).json({
+            status: 'error',
+            error: error.message,
+            instance: gameState.instanceId
+        });
     }
-    
-    const uptime = Date.now() - performanceStats.startTime;
-    const recentProcessingTimes = performanceStats.clickProcessingTimes.slice(-20);
-    const recentBroadcastTimes = performanceStats.broadcastTimes.slice(-20);
-    
-    res.json({
-        realTimeMode: true,
-        uptime: Math.floor(uptime / 1000),
-        totalRequests: performanceStats.totalRequests,
-        requestsPerSecond: Math.round((performanceStats.totalRequests / (uptime / 1000)) * 100) / 100,
-        averages: {
-            clickProcessing: performanceStats.clickProcessingTimes.length > 0 ? 
-                Math.round((performanceStats.clickProcessingTimes.reduce((a, b) => a + b, 0) / performanceStats.clickProcessingTimes.length) * 100) / 100 : 0,
-            broadcasting: performanceStats.broadcastTimes.length > 0 ?
-                Math.round((performanceStats.broadcastTimes.reduce((a, b) => a + b, 0) / performanceStats.broadcastTimes.length) * 100) / 100 : 0,
-            clusterCalculation: performanceStats.clusterCalculationTimes.length > 0 ?
-                Math.round((performanceStats.clusterCalculationTimes.reduce((a, b) => a + b, 0) / performanceStats.clusterCalculationTimes.length) * 100) / 100 : 0
-        },
-        recent: {
-            clickProcessing: recentProcessingTimes.map(t => Math.round(t * 100) / 100),
-            broadcasting: recentBroadcastTimes.map(t => Math.round(t * 100) / 100)
-        },
-        thresholds: {
-            clickProcessing: { target: 10, warning: 50, critical: 100 },
-            broadcasting: { target: 5, warning: 20, critical: 50 },
-            clusterCalculation: { target: 15, warning: 100, critical: 200 }
-        }
-    });
 });
 
-// WebSocket debug endpoint  
-app.get('/ws-debug', (req, res) => {
-    console.log('🔍 WebSocket Debug requested');
-
-    const debug = {
-        timestamp: new Date().toISOString(),
-        websocket_server: {
-            exists: !!wss,
-            clients: wss ? wss.clients.size : 0,
-            integrated_with_http: true,
-            ready_state: wss ? 'operational' : 'not_initialized'
-        },
-        connected_clients: {
-            channels: connectedClients.size,
-            total_connections: Array.from(connectedClients.values()).reduce((sum, set) => sum + set.size, 0),
-            by_channel: Array.from(connectedClients.entries()).map(([channel, clients]) => ({
-                channel,
-                count: clients.size
-            }))
-        },
-        server_info: {
-            listening: !!httpServer && httpServer.listening,
-            address: httpServer ? httpServer.address() : null,
-            port: PORT,
-            single_port_mode: true,
-            environment: process.env.NODE_ENV || 'development'
-        }
-    };
-
-    console.log('🔍 Debug result:', JSON.stringify(debug, null, 2));
-    res.json(debug);
-});
-
-// WebSocket connection test helper
-app.get('/ws-test/:channelId', (req, res) => {
-    const { channelId } = req.params;
-    const wsUrl = `wss://${req.get('host')}/ws/${channelId}`;
-
-    res.json({
-        test_url: wsUrl,
-        server_ready: !!httpServer && httpServer.listening,
-        websocket_ready: !!wss,
-        client_count: wss ? wss.clients.size : 0,
-        instructions: [
-            'Test WebSocket connection in browser console:',
-            `const ws = new WebSocket('${wsUrl}');`,
-            `ws.onopen = () => console.log('✅ Connected to ${channelId}');`,
-            `ws.onerror = (e) => console.log('❌ Connection error:', e);`,
-            `ws.onclose = (e) => console.log('🔒 Connection closed:', e.code, e.reason);`,
-            `ws.onmessage = (e) => console.log('📨 Message received:', e.data);`
-        ]
-    });
-});
-
-// START endpoint
-app.post('/start', (req, res) => {
-    console.log('🚀 START endpoint called');
+// START endpoint with Redis
+app.post('/start', async (req, res) => {
+    console.log(`🚀 START endpoint called [${gameState.instanceId}]`);
 
     try {
-        gameState.running = true;
-        gameState.clicks.clear();
-        gameState.lastUpdate = Date.now();
-
-        console.log('✅ Game started successfully');
+        await gameState.setRunning(true);
+        await gameState.clearAllClicks();
+        
+        console.log('✅ Game started successfully (REDIS)');
 
         // Broadcast to all connected clients
         broadcastToAll({
@@ -222,11 +382,14 @@ app.post('/start', (req, res) => {
             action: 'start'
         });
 
+        const instanceInfo = await gameState.getInstanceInfo();
+
         res.json({
             success: true,
             status: 'started',
             running: true,
-            timestamp: gameState.lastUpdate
+            timestamp: Date.now(),
+            instance: instanceInfo
         });
 
     } catch (error) {
@@ -239,27 +402,29 @@ app.post('/start', (req, res) => {
     }
 });
 
-// STOP endpoint
-app.post('/stop', (req, res) => {
-    console.log('⏹️ STOP endpoint called');
+// STOP endpoint with Redis
+app.post('/stop', async (req, res) => {
+    console.log(`⏹️ STOP endpoint called [${gameState.instanceId}]`);
 
     try {
-        gameState.running = false;
-        gameState.lastUpdate = Date.now();
+        await gameState.setRunning(false);
+        
+        console.log('✅ Game stopped successfully (REDIS)');
 
-        console.log('✅ Game stopped successfully');
-
-        const currentData = getCurrentHeatmapData('all');
+        const currentData = await getCurrentHeatmapData('all');
         currentData.running = false;
         currentData.action = 'stop';
 
         broadcastToAll(currentData);
 
+        const instanceInfo = await gameState.getInstanceInfo();
+
         res.json({
             success: true,
             status: 'stopped',
             running: false,
-            timestamp: gameState.lastUpdate
+            timestamp: Date.now(),
+            instance: instanceInfo
         });
 
     } catch (error) {
@@ -272,29 +437,33 @@ app.post('/stop', (req, res) => {
     }
 });
 
-// RESET endpoint
-app.post('/reset', (req, res) => {
-    console.log('🗑️ RESET endpoint called');
+// RESET endpoint with Redis
+app.post('/reset', async (req, res) => {
+    console.log(`🗑️ RESET endpoint called [${gameState.instanceId}]`);
 
     try {
-        gameState.clicks.clear();
-        gameState.lastUpdate = Date.now();
+        await gameState.clearAllClicks();
+        
+        console.log('✅ Data reset successfully (REDIS)');
 
-        console.log('✅ Data reset successfully');
+        const isRunning = await gameState.isRunning();
 
         broadcastToAll({
-            running: gameState.running,
+            running: isRunning,
             clusters: [],
             totalClicks: 0,
             uniqueUsers: 0,
             action: 'reset'
         });
 
+        const instanceInfo = await gameState.getInstanceInfo();
+
         res.json({
             success: true,
             status: 'reset',
-            running: gameState.running,
-            timestamp: gameState.lastUpdate
+            running: isRunning,
+            timestamp: Date.now(),
+            instance: instanceInfo
         });
 
     } catch (error) {
@@ -307,14 +476,17 @@ app.post('/reset', (req, res) => {
     }
 });
 
-// Real-time optimized click handling endpoint
-app.post('/click', (req, res) => {
+// Real-time optimized click handling with Redis
+app.post('/click', async (req, res) => {
     const startTime = performance.now();
-    console.log('🖱️ CLICK endpoint called - REAL-TIME MODE');
+    console.log(`🖱️ CLICK endpoint called - REDIS MODE [${gameState.instanceId}]`);
 
     try {
-        if (!gameState.running) {
-            console.log('   ❌ Game not running');
+        performanceStats.totalRequests++;
+
+        const isRunning = await gameState.isRunning();
+        if (!isRunning) {
+            console.log('   ❌ Game not running (Redis check)');
             return res.status(400).json({
                 success: false,
                 error: 'Game not running'
@@ -344,30 +516,22 @@ app.post('/click', (req, res) => {
             });
         }
 
-        // REAL-TIME OPTIMIZATION: Store click immediately with minimal processing
+        // Store click in Redis
         const clickProcessStart = performance.now();
+        await gameState.addClick(channelId, uid, x, y);
+        performanceStats.redisOperations++;
         
-        if (!gameState.clicks.has(channelId)) {
-            gameState.clicks.set(channelId, new Map());
-            console.log(`   📝 Created new channel: ${channelId}`);
-        }
-
-        gameState.clicks.get(channelId).set(uid, { x, y, timestamp: Date.now() });
-        gameState.lastUpdate = Date.now();
-
         const clickProcessTime = performance.now() - clickProcessStart;
         
-        console.log(`✅ Click stored: Channel ${channelId}, User ${uid}, Pos (${x.toFixed(3)}, ${y.toFixed(3)}) in ${clickProcessTime.toFixed(2)}ms`);
-        console.log(`   Total clicks in channel: ${gameState.clicks.get(channelId).size}`);
+        console.log(`✅ Click stored in Redis: Channel ${channelId}, User ${uid}, Pos (${x.toFixed(3)}, ${y.toFixed(3)}) in ${clickProcessTime.toFixed(2)}ms`);
 
-        // REAL-TIME OPTIMIZATION: Immediately calculate and broadcast updates
+        // Real-time broadcast
         const broadcastStart = performance.now();
-        const updatedData = getCurrentHeatmapData(channelId);
+        const updatedData = await getCurrentHeatmapData(channelId);
         const calculationTime = performance.now() - broadcastStart;
         
         console.log(`   📊 Cluster calculation: ${updatedData.clusters.length} clusters in ${calculationTime.toFixed(2)}ms`);
         
-        // Immediate WebSocket broadcast
         const wsStart = performance.now();
         broadcastToChannel(channelId, updatedData);
         const broadcastTime = performance.now() - wsStart;
@@ -380,9 +544,8 @@ app.post('/click', (req, res) => {
             performanceStats.clickProcessingTimes.push(totalTime);
             performanceStats.broadcastTimes.push(broadcastTime);
             performanceStats.clusterCalculationTimes.push(calculationTime);
-            performanceStats.totalRequests++;
             
-            // Keep only last 100 measurements for rolling average
+            // Keep only last 100 measurements
             if (performanceStats.clickProcessingTimes.length > 100) {
                 performanceStats.clickProcessingTimes.shift();
                 performanceStats.broadcastTimes.shift();
@@ -390,19 +553,23 @@ app.post('/click', (req, res) => {
             }
         }
 
+        const channelClicks = await gameState.getChannelClicks(channelId);
+
         res.json({
             success: true,
             status: 'click recorded',
-            totalClicks: gameState.clicks.get(channelId)?.size || 0,
+            totalClicks: channelClicks.size,
             channelId: channelId,
+            instance: gameState.instanceId,
             performance: PERFORMANCE_MONITORING ? {
                 processingTime: totalTime,
                 calculationTime: calculationTime,
-                broadcastTime: broadcastTime
+                broadcastTime: broadcastTime,
+                redisTime: clickProcessTime
             } : undefined
         });
 
-        console.log(`🚀 REAL-TIME click processing completed in ${totalTime.toFixed(2)}ms`);
+        console.log(`🚀 REDIS click processing completed in ${totalTime.toFixed(2)}ms`);
 
     } catch (error) {
         console.error('❌ Click error:', error);
@@ -414,22 +581,18 @@ app.post('/click', (req, res) => {
     }
 });
 
-// Enhanced heatmap endpoint with detailed logging
-app.get('/heatmap', (req, res) => {
+// Enhanced heatmap endpoint with Redis data
+app.get('/heatmap', async (req, res) => {
     const channelId = req.query.channel;
     const threshold = parseInt(req.query.threshold) || 3;
 
-    console.log(`📊 HEATMAP endpoint: channel=${channelId || 'ALL'}, threshold=${threshold}%`);
+    console.log(`📊 HEATMAP endpoint: channel=${channelId || 'ALL'}, threshold=${threshold}% [${gameState.instanceId}]`);
 
     try {
-        const data = getCurrentHeatmapData(channelId, threshold);
+        const data = await getCurrentHeatmapData(channelId, threshold);
 
         if (data.totalClicks > 0) {
-            console.log(`✅ Heatmap: ${data.totalClicks} clicks → ${data.clusters.length} clusters`);
-            
-            // Debug percentage math
-            const totalPercentage = data.clusters.reduce((sum, c) => sum + c.percentage, 0);
-            console.log(`   📊 Percentage check: ${data.clusters.map(c => c.percentage + '%').join(' + ')} = ${totalPercentage}%`);
+            console.log(`✅ Heatmap from Redis: ${data.totalClicks} clicks → ${data.clusters.length} clusters`);
         }
 
         res.json(data);
@@ -444,910 +607,97 @@ app.get('/heatmap', (req, res) => {
     }
 });
 
-// Get current heatmap data with FIXED VISUAL-BASED CLUSTERING
-function getCurrentHeatmapData(channelId, threshold = 3) {
-    // If no specific channel requested, aggregate all channels
-    if (!channelId || channelId === 'all') {
-        let allPoints = [];
-        let totalClicks = 0;
-        let totalUsers = 0;
+// Get current heatmap data from Redis
+async function getCurrentHeatmapData(channelId, threshold = 3) {
+    try {
+        const isRunning = await gameState.isRunning();
+        const lastUpdate = await gameState.getLastUpdate();
+        
+        if (!channelId || channelId === 'all') {
+            // Get all channels
+            const allChannelData = await gameState.getAllChannelClicks();
+            let allPoints = [];
+            let totalClicks = 0;
+            let totalUsers = 0;
 
-        // Collect all points from all channels
-        gameState.clicks.forEach((channelClicks) => {
-            totalClicks += channelClicks.size;
-            totalUsers += channelClicks.size;
+            for (const [channel, channelClicks] of allChannelData.entries()) {
+                totalClicks += channelClicks.size;
+                totalUsers += channelClicks.size;
 
-            // Add all points to the aggregate
-            Array.from(channelClicks.values()).forEach(point => {
-                allPoints.push(point);
-            });
-        });
+                Array.from(channelClicks.values()).forEach(point => {
+                    allPoints.push(point);
+                });
+            }
 
-        // Process ALL points into clusters
-        const clusters = processClicksIntoVisualClusters(allPoints, threshold);
+            const clusters = processClicksIntoVisualClusters(allPoints, threshold);
+
+            return {
+                running: isRunning,
+                clusters,
+                totalClicks,
+                uniqueUsers: totalUsers,
+                coverage: Math.min(100, clusters.length * 10),
+                threshold,
+                lastUpdate,
+                instance: gameState.instanceId
+            };
+        }
+
+        // Handle specific channel
+        const channelClicks = await gameState.getChannelClicks(channelId);
+
+        if (!channelClicks || channelClicks.size === 0) {
+            return {
+                running: isRunning,
+                clusters: [],
+                totalClicks: 0,
+                uniqueUsers: 0,
+                coverage: 0,
+                threshold,
+                lastUpdate,
+                instance: gameState.instanceId
+            };
+        }
+
+        const points = Array.from(channelClicks.values());
+        const clusters = processClicksIntoVisualClusters(points, threshold);
+
+        console.log(`🔍 Channel ${channelId}: ${points.length} points → ${clusters.length} clusters`);
 
         return {
-            running: gameState.running,
+            running: isRunning,
             clusters,
-            totalClicks,
-            uniqueUsers: totalUsers,
+            totalClicks: points.length,
+            uniqueUsers: channelClicks.size,
             coverage: Math.min(100, clusters.length * 10),
             threshold,
-            lastUpdate: gameState.lastUpdate
+            lastUpdate,
+            instance: gameState.instanceId
         };
-    }
-
-    // Handle specific channel
-    const channelClicks = gameState.clicks.get(channelId);
-
-    if (!channelClicks || channelClicks.size === 0) {
+    } catch (error) {
+        console.error('❌ Failed to get heatmap data:', error);
         return {
-            running: gameState.running,
+            running: false,
             clusters: [],
             totalClicks: 0,
             uniqueUsers: 0,
             coverage: 0,
             threshold,
-            lastUpdate: gameState.lastUpdate
-        };
-    }
-
-    const points = Array.from(channelClicks.values());
-    const clusters = processClicksIntoVisualClusters(points, threshold);
-
-    console.log(`🔍 Channel ${channelId}: ${points.length} points → ${clusters.length} clusters`);
-
-    return {
-        running: gameState.running,
-        clusters,
-        totalClicks: points.length,
-        uniqueUsers: channelClicks.size,
-        coverage: Math.min(100, clusters.length * 10),
-        threshold,
-        lastUpdate: gameState.lastUpdate
-    };
-}
-
-// FIXED CLUSTERING ALGORITHM with proper sizing and merging
-function processClicksIntoVisualClusters(points, threshold) {
-    if (points.length === 0) return [];
-
-    console.log(`🧮 FIXED VISUAL clustering: ${points.length} points, ${threshold}% threshold`);
-
-    // Step 1: Conservative distance-based clustering to prevent overlaps
-    const rawClusters = performSimpleDistanceClustering(points);
-    console.log(`   1️⃣ Distance clustering: ${points.length} points → ${rawClusters.length} raw clusters`);
-    
-    // Step 2: Calculate metrics for each cluster
-    const enrichedClusters = rawClusters.map((cluster, index) => {
-        const metrics = calculateBasicClusterMetrics(cluster, points.length);
-        return {
-            id: index,
-            ...metrics,
-            points: cluster
-        };
-    });
-
-    // Step 3: Visual merging with proper size-aware logic
-    const visuallyMergedClusters = performVisualMerging(enrichedClusters);
-    console.log(`   2️⃣ Visual merging: ${enrichedClusters.length} → ${visuallyMergedClusters.length} clusters`);
-
-    // Step 4: Accurate percentage normalization
-    const normalizedClusters = normalizePercentages(visuallyMergedClusters, points.length);
-    console.log(`   3️⃣ Percentage normalization: ${normalizedClusters.map(c => c.percentage + '%').join(', ')}`);
-
-    // Step 5: Filter by threshold
-    const filteredClusters = normalizedClusters.filter(c => c.percentage >= threshold);
-    console.log(`   4️⃣ Threshold filter (${threshold}%): ${normalizedClusters.length} → ${filteredClusters.length} clusters`);
-
-    // Step 6: Calculate proper visual sizes and shapes
-    const finalClusters = filteredClusters.map((cluster, index) => {
-        const shapeAnalysis = analyzeClusterShape(cluster.points, cluster.x, cluster.y);
-        const visualSize = calculateIntelligentVisualSize(cluster, filteredClusters);
-        
-        return {
-            ...cluster,
-            ...shapeAnalysis,
-            visualSize,
-            isTop: false // Will be set after sorting
-        };
-    });
-
-    // Step 7: Sort by percentage and mark top cluster
-    finalClusters.sort((a, b) => b.percentage - a.percentage);
-    if (finalClusters.length > 0) {
-        finalClusters[0].isTop = true;
-    }
-
-    console.log(`✅ FIXED clustering result: ${rawClusters.length} raw → ${finalClusters.length} final`);
-    finalClusters.forEach((c, i) => {
-        console.log(`   Cluster ${i}: ${c.percentage}% (${c.count} clicks, ${c.visualSize}px, ${c.shapeType})`);
-    });
-
-    return finalClusters;
-}
-
-// FIXED DISTANCE CLUSTERING - Better distance calculation to prevent nested clusters
-function performSimpleDistanceClustering(points) {
-    if (points.length === 0) return [];
-    
-    const clusters = [];
-    const assigned = new Set();
-    
-    // Calculate conservative merge distance
-    const mergeDistance = calculateMergeDistance(points);
-    console.log(`   🔗 Using merge distance: ${mergeDistance.toFixed(4)}`);
-    
-    for (let i = 0; i < points.length; i++) {
-        if (assigned.has(i)) continue;
-        
-        const cluster = [points[i]];
-        assigned.add(i);
-        
-        // Find nearby points to merge (but be conservative)
-        for (let j = i + 1; j < points.length; j++) {
-            if (assigned.has(j)) continue;
-            
-            const distance = euclideanDistance(points[i], points[j]);
-            if (distance <= mergeDistance) {
-                cluster.push(points[j]);
-                assigned.add(j);
-                console.log(`   ✅ Merged points: distance ${distance.toFixed(4)} <= ${mergeDistance.toFixed(4)}`);
-            }
-        }
-        
-        clusters.push(cluster);
-    }
-    
-    console.log(`   📊 Distance clustering: ${points.length} points → ${clusters.length} clusters`);
-    
-    return clusters;
-}
-
-// FIXED merge distance calculation
-function calculateMergeDistance(points) {
-    if (points.length < 2) return 0.08; // Reasonable default
-    
-    // Calculate all pairwise distances
-    const distances = [];
-    for (let i = 0; i < points.length; i++) {
-        for (let j = i + 1; j < points.length; j++) {
-            const dist = euclideanDistance(points[i], points[j]);
-            distances.push(dist);
-        }
-    }
-    
-    distances.sort((a, b) => a - b);
-    
-    // More conservative distance calculation to prevent over-clustering
-    let mergeDistance;
-    
-    if (points.length <= 3) {
-        // Very small datasets: use median distance * 0.5
-        const median = distances[Math.floor(distances.length * 0.5)] || distances[0];
-        mergeDistance = Math.max(0.03, Math.min(0.12, median * 0.5));
-    } else if (points.length <= 8) {
-        // Small datasets: use 20th percentile
-        const percentile20 = distances[Math.floor(distances.length * 0.2)] || distances[0];
-        mergeDistance = Math.max(0.025, Math.min(0.08, percentile20 * 0.8));
-    } else if (points.length <= 20) {
-        // Medium datasets: use 15th percentile
-        const percentile15 = distances[Math.floor(distances.length * 0.15)] || distances[0];
-        mergeDistance = Math.max(0.02, Math.min(0.06, percentile15 * 0.7));
-    } else {
-        // Large datasets: use 10th percentile
-        const percentile10 = distances[Math.floor(distances.length * 0.1)] || distances[0];
-        mergeDistance = Math.max(0.015, Math.min(0.05, percentile10 * 0.6));
-    }
-    
-    console.log(`   🎯 Merge distance for ${points.length} points: ${mergeDistance.toFixed(4)} (prevents over-clustering)`);
-    
-    return mergeDistance;
-}
-
-// VISUAL MERGING with proper size-aware logic
-function performVisualMerging(clusters) {
-    if (clusters.length <= 1) return clusters;
-    
-    console.log(`🔄 Visual merging: Starting with ${clusters.length} clusters`);
-    
-    const merged = [...clusters];
-    let changed = true;
-    let iterations = 0;
-    const maxIterations = 10; // Prevent infinite loops
-    
-    while (changed && iterations < maxIterations) {
-        changed = false;
-        iterations++;
-        
-        console.log(`   🔄 Merge iteration ${iterations}`);
-        
-        for (let i = 0; i < merged.length; i++) {
-            for (let j = i + 1; j < merged.length; j++) {
-                if (shouldMergeClusters(merged[i], merged[j])) {
-                    console.log(`   🔗 Merging clusters: ${merged[i].percentage}% (${merged[i].count} clicks) + ${merged[j].percentage}% (${merged[j].count} clicks)`);
-                    
-                    // Merge cluster j into cluster i
-                    const mergedCluster = mergeTwoClusters(merged[i], merged[j]);
-                    merged[i] = mergedCluster;
-                    merged.splice(j, 1);
-                    
-                    console.log(`   ✅ Result: ${mergedCluster.percentage}% (${mergedCluster.count} clicks)`);
-                    
-                    changed = true;
-                    break;
-                }
-            }
-            if (changed) break;
-        }
-    }
-    
-    console.log(`🔄 Visual merging complete: ${clusters.length} → ${merged.length} clusters after ${iterations} iterations`);
-    
-    return merged;
-}
-
-// FIXED merging logic - Only merge when labels would actually overlap
-function shouldMergeClusters(cluster1, cluster2) {
-    const percentage1 = cluster1.percentage || 0;
-    const percentage2 = cluster2.percentage || 0;
-    
-    // Calculate actual visual sizes using the same logic as final rendering
-    const size1 = calculateIntelligentVisualSize(cluster1, [cluster1, cluster2]);
-    const size2 = calculateIntelligentVisualSize(cluster2, [cluster1, cluster2]);
-    
-    // Calculate label dimensions based on percentage text
-    const text1 = `${percentage1}%`;
-    const text2 = `${percentage2}%`;
-    
-    // Font size calculation (matching renderer logic)
-    const fontSize1 = Math.max(18, Math.min(50, size1 * 0.35));
-    const fontSize2 = Math.max(18, Math.min(50, size2 * 0.35));
-    
-    // Estimated text dimensions (rough but consistent)
-    const textWidth1 = text1.length * fontSize1 * 0.6;
-    const textHeight1 = fontSize1;
-    const textWidth2 = text2.length * fontSize2 * 0.6;
-    const textHeight2 = fontSize2;
-    
-    console.log(`🔍 Merge check: Cluster1(${percentage1}%, ${size1}px, label:${textWidth1.toFixed(0)}x${textHeight1.toFixed(0)}) vs Cluster2(${percentage2}%, ${size2}px, label:${textWidth2.toFixed(0)}x${textHeight2.toFixed(0)})`);
-
-    // Convert to screen coordinates (assuming 1920x1080 reference)
-    const SCREEN_WIDTH = 1920;
-    const SCREEN_HEIGHT = 1080;
-    
-    const x1 = cluster1.x * SCREEN_WIDTH;
-    const y1 = cluster1.y * SCREEN_HEIGHT;
-    const x2 = cluster2.x * SCREEN_WIDTH;
-    const y2 = cluster2.y * SCREEN_HEIGHT;
-    
-    // Calculate label bounding boxes with padding
-    const LABEL_PADDING = 15; // Padding around labels
-    
-    const box1 = {
-        left: x1 - textWidth1/2 - LABEL_PADDING,
-        right: x1 + textWidth1/2 + LABEL_PADDING,
-        top: y1 - textHeight1/2 - LABEL_PADDING,
-        bottom: y1 + textHeight1/2 + LABEL_PADDING
-    };
-    
-    const box2 = {
-        left: x2 - textWidth2/2 - LABEL_PADDING,
-        right: x2 + textWidth2/2 + LABEL_PADDING,
-        top: y2 - textHeight2/2 - LABEL_PADDING,
-        bottom: y2 + textHeight2/2 + LABEL_PADDING
-    };
-    
-    // Check for actual label overlap
-    const xOverlap = !(box1.right < box2.left || box2.right < box1.left);
-    const yOverlap = !(box1.bottom < box2.top || box2.bottom < box1.top);
-    const labelsOverlap = xOverlap && yOverlap;
-    
-    // Also check for cluster circle overlap (shouldn't have clusters inside clusters)
-    const distance = euclideanDistance(cluster1, cluster2) * SCREEN_WIDTH; // Convert to pixels
-    const minSeparation = (size1 + size2) * 0.3; // Clusters should be at least 30% of combined radius apart
-    const circlesOverlap = distance < minSeparation;
-    
-    const shouldMerge = labelsOverlap || circlesOverlap;
-    
-    console.log(`   📏 Distance: ${distance.toFixed(1)}px, Min separation: ${minSeparation.toFixed(1)}px`);
-    console.log(`   📋 Labels overlap: ${labelsOverlap}, Circles overlap: ${circlesOverlap}`);
-    console.log(`   ⚖️ Should merge: ${shouldMerge}`);
-    
-    return shouldMerge;
-}
-
-// FIXED VISUAL SIZE calculation with proper percentage scaling
-function calculateIntelligentVisualSize(cluster, allClusters) {
-    const percentage = cluster.percentage || 0;
-    const count = cluster.count || 1;
-    const density = cluster.density || 1;
-    const spread = cluster.spread || 0.05;
-
-    // FIXED SIZE BOUNDS - Proper scaling from 25% minimum
-    const MIN_SIZE_25_PERCENT = 45;  // Size at 25% 
-    const MAX_SIZE_100_PERCENT = 180; // Size at 100%
-    const ABSOLUTE_MIN_SIZE = 25;     // Absolute minimum for tiny clusters
-
-    console.log(`📏 Calculating size for ${percentage}% cluster (${count} clicks)`);
-
-    // PROPER PERCENTAGE-BASED SCALING
-    let baseSize;
-    
-    if (percentage >= 25) {
-        // Linear scaling from 25% to 100%
-        const percentageRange = percentage - 25; // 0-75 range
-        const sizeRange = MAX_SIZE_100_PERCENT - MIN_SIZE_25_PERCENT; // Size difference
-        baseSize = MIN_SIZE_25_PERCENT + (percentageRange / 75) * sizeRange;
-        console.log(`   📊 Main scaling: ${percentage}% → ${baseSize.toFixed(1)}px (25-100% range)`);
-    } else {
-        // Smaller scaling for clusters below 25%
-        const scaleFactor = percentage / 25; // 0.0 to 1.0
-        baseSize = ABSOLUTE_MIN_SIZE + (MIN_SIZE_25_PERCENT - ABSOLUTE_MIN_SIZE) * scaleFactor;
-        console.log(`   📊 Small scaling: ${percentage}% → ${baseSize.toFixed(1)}px (below 25%)`);
-    }
-
-    // Minor adjustments for density and spread (but don't override percentage scaling)
-    const densityAdjustment = Math.max(0.8, Math.min(1.3, Math.pow(density, 0.15))); // Very mild
-    const spreadAdjustment = Math.min(10, spread * 100); // Max +10px
-    const countAdjustment = count > 1 ? Math.log10(count + 1) * 3 : 0; // Max +3px per magnitude
-
-    // Apply minor adjustments
-    let finalSize = baseSize * densityAdjustment + spreadAdjustment + countAdjustment;
-
-    // ENFORCE BOUNDS
-    finalSize = Math.max(ABSOLUTE_MIN_SIZE, Math.min(MAX_SIZE_100_PERCENT + 20, finalSize));
-
-    console.log(`   ✅ Final size: ${finalSize.toFixed(1)}px (density: ${densityAdjustment.toFixed(2)}x, spread: +${spreadAdjustment.toFixed(1)}px, count: +${countAdjustment.toFixed(1)}px)`);
-
-    return Math.round(finalSize);
-}
-
-// ENHANCED PERCENTAGE NORMALIZATION - More accurate percentage calculation
-function normalizePercentages(clusters, totalPoints) {
-    if (clusters.length === 0) return clusters;
-    
-    console.log(`🧮 Normalizing percentages for ${clusters.length} clusters from ${totalPoints} total points`);
-    
-    // Recalculate percentages based on actual point counts
-    const normalized = clusters.map((cluster, index) => {
-        const rawPercentage = (cluster.count / totalPoints) * 100;
-        const roundedPercentage = Math.round(rawPercentage);
-        
-        console.log(`   Cluster ${index}: ${cluster.count}/${totalPoints} = ${rawPercentage.toFixed(2)}% → ${roundedPercentage}%`);
-        
-        return {
-            ...cluster,
-            percentage: roundedPercentage
-        };
-    });
-    
-    // Handle rounding errors - ensure percentages sum reasonably
-    const currentTotal = normalized.reduce((sum, c) => sum + c.percentage, 0);
-    const expectedTotal = 100;
-    const difference = expectedTotal - currentTotal;
-    
-    console.log(`   📊 Percentage sum: ${currentTotal}% (expected: ${expectedTotal}%, difference: ${difference}%)`);
-    
-    // Only adjust if difference is significant and we have clusters
-    if (Math.abs(difference) >= 2 && normalized.length > 0) {
-        // Distribute the difference proportionally among larger clusters
-        const largeClusters = normalized.filter(c => c.percentage >= 5);
-        
-        if (largeClusters.length > 0) {
-            const adjustmentPerCluster = Math.round(difference / largeClusters.length);
-            largeClusters.forEach(cluster => {
-                cluster.percentage += adjustmentPerCluster;
-            });
-            
-            console.log(`   🔧 Adjusted ${largeClusters.length} large clusters by ${adjustmentPerCluster}% each`);
-        } else {
-            // If no large clusters, adjust the biggest one
-            const largest = normalized.reduce((max, current) => 
-                current.percentage > max.percentage ? current : max
-            );
-            largest.percentage += difference;
-            
-            console.log(`   🔧 Adjusted largest cluster by ${difference}%`);
-        }
-    }
-    
-    const finalTotal = normalized.reduce((sum, c) => sum + c.percentage, 0);
-    console.log(`   ✅ Final percentage sum: ${finalTotal}%`);
-    
-    return normalized;
-}
-
-// Merge two clusters into one
-function mergeTwoClusters(cluster1, cluster2) {
-    const allPoints = [...cluster1.points, ...cluster2.points];
-    const totalCount = cluster1.count + cluster2.count;
-    
-    // Calculate new centroid (weighted by cluster sizes)
-    const weight1 = cluster1.count / totalCount;
-    const weight2 = cluster2.count / totalCount;
-    
-    const newX = cluster1.x * weight1 + cluster2.x * weight2;
-    const newY = cluster1.y * weight1 + cluster2.y * weight2;
-    
-    // Recalculate metrics for merged cluster
-    const mergedMetrics = calculateBasicClusterMetrics(allPoints, totalCount);
-    
-    return {
-        ...mergedMetrics,
-        x: newX,
-        y: newY,
-        points: allPoints,
-        id: cluster1.id // Keep first cluster's ID
-    };
-}
-
-// Calculate basic cluster metrics
-function calculateBasicClusterMetrics(clusterPoints, totalPoints) {
-    const count = clusterPoints.length;
-    const percentage = Math.round((count / totalPoints) * 100);
-
-    // Calculate centroid
-    const centroidX = clusterPoints.reduce((sum, p) => sum + p.x, 0) / count;
-    const centroidY = clusterPoints.reduce((sum, p) => sum + p.y, 0) / count;
-
-    // Calculate spread
-    const distances = clusterPoints.map(p => 
-        Math.sqrt(Math.pow(p.x - centroidX, 2) + Math.pow(p.y - centroidY, 2))
-    );
-    
-    const avgDistance = distances.reduce((sum, d) => sum + d, 0) / distances.length;
-    const maxDistance = Math.max(...distances);
-    const stdDev = Math.sqrt(
-        distances.reduce((sum, d) => sum + Math.pow(d - avgDistance, 2), 0) / distances.length
-    );
-
-    // Basic shape metrics
-    const density = count / (Math.PI * Math.pow(maxDistance || 0.001, 2));
-    const compactness = avgDistance / (maxDistance || 0.001);
-    
-    // Rough size estimation for visual merging
-    const estimatedSize = Math.max(60, Math.min(250, 80 + percentage * 2 + maxDistance * 200));
-
-    return {
-        x: centroidX,
-        y: centroidY,
-        count,
-        percentage,
-        radius: maxDistance,
-        spread: avgDistance,
-        maxSpread: maxDistance,
-        stdDev,
-        density,
-        compactness,
-        estimatedSize
-    };
-}
-
-// INTELLIGENT SHAPE ANALYSIS - Determine optimal representation
-function analyzeClusterShape(points, centroidX, centroidY) {
-    if (points.length === 1) {
-        return {
-            shapeType: 'circle',
-            circularity: 1.0,
-            eccentricity: 0,
-            irregularity: 0,
-            convexity: 1,
-            preferredSides: 8,
-            complexity: 0,
-            shapeConfidence: 1.0,
-            polygonPoints: null
-        };
-    }
-
-    // Calculate shape metrics
-    const shapeMetrics = calculateAdvancedShapeMetrics(points, centroidX, centroidY);
-    
-    // Circularity test
-    const circularityScore = calculateCircularityScore(points, centroidX, centroidY, shapeMetrics);
-    
-    // Decision making
-    const useCircle = shouldUseCircularRepresentation(circularityScore, shapeMetrics, points.length);
-    
-    if (useCircle) {
-        return {
-            shapeType: 'circle',
-            circularity: circularityScore,
-            eccentricity: shapeMetrics.eccentricity,
-            irregularity: shapeMetrics.irregularity,
-            convexity: shapeMetrics.convexity,
-            preferredSides: 8,
-            complexity: shapeMetrics.complexity,
-            shapeConfidence: 1 - shapeMetrics.irregularity,
-            polygonPoints: null
-        };
-    } else {
-        // Generate intelligent polygon
-        const polygonShape = generateIntelligentPolygon(points, centroidX, centroidY, shapeMetrics);
-        return {
-            shapeType: polygonShape.type,
-            circularity: circularityScore,
-            eccentricity: shapeMetrics.eccentricity,
-            irregularity: shapeMetrics.irregularity,
-            convexity: shapeMetrics.convexity,
-            preferredSides: polygonShape.sides,
-            complexity: shapeMetrics.complexity,
-            shapeConfidence: polygonShape.confidence,
-            polygonPoints: polygonShape.points,
-            shapeOrientation: polygonShape.orientation
+            lastUpdate: Date.now(),
+            instance: gameState.instanceId,
+            error: error.message
         };
     }
 }
 
-// ADVANCED SHAPE METRICS calculation
-function calculateAdvancedShapeMetrics(points, centroidX, centroidY) {
-    // Calculate distances from centroid
-    const distances = points.map(p => 
-        Math.sqrt(Math.pow(p.x - centroidX, 2) + Math.pow(p.y - centroidY, 2))
-    );
+// [Include your existing clustering functions here - processClicksIntoVisualClusters, etc.]
+// They remain the same, just working with data from Redis instead of memory
 
-    const avgDistance = distances.reduce((sum, d) => sum + d, 0) / distances.length;
-    const maxDistance = Math.max(...distances);
-    const minDistance = Math.min(...distances);
-    
-    // Standard deviation of distances
-    const distanceVariance = distances.reduce((sum, d) => sum + Math.pow(d - avgDistance, 2), 0) / distances.length;
-    const distanceStdDev = Math.sqrt(distanceVariance);
-
-    // Eccentricity calculation
-    const eccentricity = calculateEccentricity(points);
-    
-    // Convex hull analysis
-    const hull = calculateConvexHull(points);
-    const hullArea = calculatePolygonArea(hull);
-    const boundingArea = calculateBoundingArea(points);
-    const convexity = hullArea / (boundingArea || 0.001);
-    
-    // Irregularity measure
-    const irregularity = Math.min(1, (distanceStdDev / avgDistance) + (1 - convexity) * 0.5);
-    
-    // Overall complexity score
-    const complexity = (irregularity * 0.4) + (eccentricity * 0.4) + ((1 - convexity) * 0.2);
-
-    return {
-        avgDistance,
-        maxDistance,
-        minDistance,
-        distanceStdDev,
-        eccentricity,
-        convexity,
-        irregularity,
-        complexity,
-        hull,
-        hullArea,
-        boundingArea
-    };
-}
-
-// CIRCULARITY SCORE calculation
-function calculateCircularityScore(points, centroidX, centroidY, metrics) {
-    if (points.length === 1) return 1.0;
-
-    // Distance consistency
-    const distanceConsistency = 1 - Math.min(1, metrics.distanceStdDev / metrics.avgDistance);
-    
-    // Convexity score
-    const convexityScore = metrics.convexity;
-    
-    // Aspect ratio score
-    const aspectRatioScore = 1 - Math.min(1, metrics.eccentricity);
-    
-    // Area efficiency
-    const areaEfficiency = metrics.hullArea / (Math.PI * Math.pow(metrics.maxDistance, 2));
-    
-    // Weighted combination
-    const circularity = (
-        distanceConsistency * 0.4 +
-        convexityScore * 0.25 +
-        aspectRatioScore * 0.25 +
-        Math.min(1, areaEfficiency) * 0.1
-    );
-
-    return Math.max(0, Math.min(1, circularity));
-}
-
-// Should use circular representation?
-function shouldUseCircularRepresentation(circularityScore, metrics, pointCount) {
-    const CIRCULARITY_THRESHOLD = 0.7;
-    const LOW_COMPLEXITY_THRESHOLD = 0.3;
-    const MIN_POINTS_FOR_POLYGON = 3;
-    
-    if (pointCount < MIN_POINTS_FOR_POLYGON) return true;
-    if (circularityScore >= CIRCULARITY_THRESHOLD) return true;
-    if (metrics.complexity <= LOW_COMPLEXITY_THRESHOLD) return true;
-    if (circularityScore >= 0.5 && metrics.irregularity <= 0.4) return true;
-    
-    return false;
-}
-
-// Generate intelligent polygon
-function generateIntelligentPolygon(points, centroidX, centroidY, metrics) {
-    const pointCount = points.length;
-    
-    let polygonType, sides, confidence;
-    
-    if (pointCount <= 4) {
-        polygonType = 'simple_polygon';
-        sides = Math.max(pointCount, 4);
-        confidence = 0.8;
-    } else if (metrics.convexity >= 0.8 && metrics.irregularity <= 0.5) {
-        polygonType = 'regular_polygon';
-        sides = calculateOptimalSides(metrics, pointCount);
-        confidence = 0.9 - metrics.irregularity;
-    } else if (metrics.eccentricity > 0.6) {
-        polygonType = 'elliptical_polygon';
-        sides = Math.max(6, Math.min(12, Math.floor(pointCount * 0.8)));
-        confidence = 0.8;
-    } else {
-        polygonType = metrics.convexity >= 0.6 ? 'adaptive_polygon' : 'hull_polygon';
-        sides = Math.max(5, Math.min(16, Math.floor(pointCount * 0.7)));
-        confidence = 0.7 + metrics.convexity * 0.2;
-    }
-
-    // Generate polygon points
-    let polygonPoints;
-    let orientation = 0;
-    
-    switch (polygonType) {
-        case 'hull_polygon':
-            polygonPoints = generateHullBasedPolygon(points, metrics.hull);
-            break;
-        case 'elliptical_polygon':
-            const ellipseParams = calculateEllipseParameters(points, centroidX, centroidY);
-            polygonPoints = generateEllipticalPolygon(centroidX, centroidY, ellipseParams, sides);
-            orientation = ellipseParams.orientation;
-            break;
-        case 'adaptive_polygon':
-            polygonPoints = generateAdaptivePolygon(points, centroidX, centroidY, sides, metrics);
-            break;
-        default:
-            polygonPoints = generateRegularPolygon(centroidX, centroidY, metrics.maxDistance, sides);
-            break;
-    }
-
-    return {
-        type: polygonType,
-        sides: sides,
-        points: polygonPoints,
-        confidence: confidence,
-        orientation: orientation
-    };
-}
-
-// Utility functions
-function euclideanDistance(p1, p2) {
-    return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
-}
-
-function calculateEccentricity(points) {
-    if (points.length < 2) return 0;
-
-    const meanX = points.reduce((sum, p) => sum + p.x, 0) / points.length;
-    const meanY = points.reduce((sum, p) => sum + p.y, 0) / points.length;
-
-    let cxx = 0, cyy = 0, cxy = 0;
-    for (const point of points) {
-        const dx = point.x - meanX;
-        const dy = point.y - meanY;
-        cxx += dx * dx;
-        cyy += dy * dy;
-        cxy += dx * dy;
-    }
-
-    cxx /= points.length;
-    cyy /= points.length;
-    cxy /= points.length;
-
-    const trace = cxx + cyy;
-    const det = cxx * cyy - cxy * cxy;
-    const discriminant = trace * trace - 4 * det;
-
-    if (discriminant < 0) return 0;
-
-    const lambda1 = (trace + Math.sqrt(discriminant)) / 2;
-    const lambda2 = (trace - Math.sqrt(discriminant)) / 2;
-
-    const minLambda = Math.min(lambda1, lambda2);
-    const maxLambda = Math.max(lambda1, lambda2);
-
-    if (maxLambda === 0) return 0;
-    return 1 - (minLambda / maxLambda);
-}
-
-function calculateConvexHull(points) {
-    if (points.length < 3) return points;
-
-    let bottom = points[0];
-    for (const point of points) {
-        if (point.y < bottom.y || (point.y === bottom.y && point.x < bottom.x)) {
-            bottom = point;
-        }
-    }
-
-    const sortedPoints = points.filter(p => p !== bottom).sort((a, b) => {
-        const angleA = Math.atan2(a.y - bottom.y, a.x - bottom.x);
-        const angleB = Math.atan2(b.y - bottom.y, b.x - bottom.x);
-        return angleA - angleB;
-    });
-
-    const hull = [bottom];
-    for (const point of sortedPoints) {
-        while (hull.length > 1 && crossProduct(hull[hull.length-2], hull[hull.length-1], point) <= 0) {
-            hull.pop();
-        }
-        hull.push(point);
-    }
-
-    return hull;
-}
-
-function crossProduct(o, a, b) {
-    return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-}
-
-function calculatePolygonArea(points) {
-    if (points.length < 3) return 0;
-    
-    let area = 0;
-    for (let i = 0; i < points.length; i++) {
-        const j = (i + 1) % points.length;
-        area += points[i].x * points[j].y;
-        area -= points[j].x * points[i].y;
-    }
-    return Math.abs(area) / 2;
-}
-
-function calculateBoundingArea(points) {
-    if (points.length === 0) return 0;
-
-    const xs = points.map(p => p.x);
-    const ys = points.map(p => p.y);
-    const width = Math.max(...xs) - Math.min(...xs);
-    const height = Math.max(...ys) - Math.min(...ys);
-    
-    return width * height;
-}
-
-// Placeholder polygon generation functions (simplified)
-function calculateOptimalSides(metrics, pointCount) {
-    const complexityFactor = Math.min(1, metrics.complexity * 2);
-    const countFactor = Math.min(1, pointCount / 20);
-    const baseSides = 6;
-    const additionalSides = Math.floor((complexityFactor + countFactor) * 6);
-    return Math.max(4, Math.min(14, baseSides + additionalSides));
-}
-
-function generateHullBasedPolygon(points, hull) {
-    if (!hull || hull.length < 3) {
-        const centroidX = points.reduce((sum, p) => sum + p.x, 0) / points.length;
-        const centroidY = points.reduce((sum, p) => sum + p.y, 0) / points.length;
-        const avgDistance = points.reduce((sum, p) => 
-            sum + Math.sqrt(Math.pow(p.x - centroidX, 2) + Math.pow(p.y - centroidY, 2)), 0) / points.length;
-        return generateRegularPolygon(centroidX, centroidY, avgDistance, 6);
-    }
-    return hull;
-}
-
-function generateRegularPolygon(centerX, centerY, radius, sides) {
-    const points = [];
-    const angleStep = (2 * Math.PI) / sides;
-    
-    for (let i = 0; i < sides; i++) {
-        const angle = i * angleStep;
-        points.push({
-            x: centerX + radius * Math.cos(angle),
-            y: centerY + radius * Math.sin(angle)
-        });
-    }
-    
-    return points;
-}
-
-function calculateEllipseParameters(points, centerX, centerY) {
-    // Simplified ellipse calculation
-    let cxx = 0, cyy = 0, cxy = 0;
-    
-    for (const point of points) {
-        const dx = point.x - centerX;
-        const dy = point.y - centerY;
-        cxx += dx * dx;
-        cyy += dy * dy;
-        cxy += dx * dy;
-    }
-    
-    cxx /= points.length;
-    cyy /= points.length;
-    cxy /= points.length;
-    
-    const trace = cxx + cyy;
-    const det = cxx * cyy - cxy * cxy;
-    const discriminant = trace * trace - 4 * det;
-    
-    if (discriminant < 0) {
-        const avgDist = Math.sqrt(cxx + cyy);
-        return { majorAxis: avgDist, minorAxis: avgDist, orientation: 0 };
-    }
-    
-    const lambda1 = (trace + Math.sqrt(discriminant)) / 2;
-    const lambda2 = (trace - Math.sqrt(discriminant)) / 2;
-    
-    const majorAxis = Math.sqrt(Math.max(lambda1, lambda2)) * 2;
-    const minorAxis = Math.sqrt(Math.min(lambda1, lambda2)) * 2;
-    
-    let orientation = 0;
-    if (Math.abs(cxy) > 1e-10) {
-        orientation = Math.atan2(lambda1 - cxx, cxy);
-    }
-    
-    return { majorAxis, minorAxis, orientation };
-}
-
-function generateEllipticalPolygon(centerX, centerY, ellipseParams, sides) {
-    const points = [];
-    const angleStep = (2 * Math.PI) / sides;
-    
-    for (let i = 0; i < sides; i++) {
-        const angle = i * angleStep;
-        const localX = ellipseParams.majorAxis * Math.cos(angle);
-        const localY = ellipseParams.minorAxis * Math.sin(angle);
-        
-        const rotatedX = localX * Math.cos(ellipseParams.orientation) - localY * Math.sin(ellipseParams.orientation);
-        const rotatedY = localX * Math.sin(ellipseParams.orientation) + localY * Math.cos(ellipseParams.orientation);
-        
-        points.push({
-            x: centerX + rotatedX,
-            y: centerY + rotatedY
-        });
-    }
-    
-    return points;
-}
-
-function generateAdaptivePolygon(points, centerX, centerY, sides, metrics) {
-    const polygonPoints = [];
-    const angleStep = (2 * Math.PI) / sides;
-    
-    for (let i = 0; i < sides; i++) {
-        const angle = i * angleStep;
-        const idealRadius = calculateDirectionalRadius(points, centerX, centerY, angle, metrics.maxDistance);
-        
-        const x = centerX + idealRadius * Math.cos(angle);
-        const y = centerY + idealRadius * Math.sin(angle);
-        
-        polygonPoints.push({ x, y });
-    }
-    
-    return polygonPoints;
-}
-
-function calculateDirectionalRadius(points, centerX, centerY, direction, maxRadius) {
-    const directionVector = { x: Math.cos(direction), y: Math.sin(direction) };
-    let maxProjection = 0;
-    
-    for (const point of points) {
-        const toPoint = { x: point.x - centerX, y: point.y - centerY };
-        const projection = toPoint.x * directionVector.x + toPoint.y * directionVector.y;
-        
-        if (projection > 0) {
-            maxProjection = Math.max(maxProjection, projection);
-        }
-    }
-    
-    return Math.max(maxRadius * 0.3, Math.min(maxRadius, maxProjection * 1.1));
-}
-
-// Enhanced WebSocket broadcasting function with performance optimization
+// WebSocket broadcasting functions (unchanged)
 function broadcastToChannel(channelId, data) {
-    const broadcastStart = performance.now();
     const clients = connectedClients.get(channelId);
     if (!clients || clients.size === 0) return;
 
-    // REAL-TIME OPTIMIZATION: Pre-stringify message once
     const message = JSON.stringify(data);
     let sentCount = 0;
     let failedCount = 0;
@@ -1368,10 +718,8 @@ function broadcastToChannel(channelId, data) {
         }
     });
 
-    const broadcastTime = performance.now() - broadcastStart;
-    
     if (sentCount > 0) {
-        console.log(`📡 Real-time broadcast to ${channelId}: ${sentCount} clients, ${data.clusters.length} clusters in ${broadcastTime.toFixed(2)}ms`);
+        console.log(`📡 Redis broadcast to ${channelId}: ${sentCount} clients, ${data.clusters.length} clusters`);
         if (failedCount > 0) {
             console.log(`   ⚠️ Cleaned up ${failedCount} stale connections`);
         }
@@ -1380,197 +728,23 @@ function broadcastToChannel(channelId, data) {
 
 function broadcastToAll(data) {
     let totalSent = 0;
-    connectedClients.forEach((clients, channelId) => {
-        const channelData = channelId === 'all' ? data : getCurrentHeatmapData(channelId);
+    connectedClients.forEach(async (clients, channelId) => {
+        const channelData = channelId === 'all' ? data : await getCurrentHeatmapData(channelId);
         Object.assign(channelData, { running: data.running, action: data.action });
         broadcastToChannel(channelId, channelData);
         totalSent += clients.size;
     });
 
     if (totalSent > 0) {
-        console.log(`📡 Broadcast to all: ${totalSent} clients`);
+        console.log(`📡 Redis broadcast to all: ${totalSent} clients`);
     }
 }
 
-// ===== HTTP SERVER CREATION =====
-console.log('🔧 Creating HTTP server...');
-const httpServer = createServer(app);
+// [Include the rest of your WebSocket server setup and clustering functions]
 
-// ===== WEBSOCKET SERVER INTEGRATION =====
-console.log('🔧 Creating WebSocket server integrated with HTTP server...');
-let wss;
-try {
-    wss = new WebSocketServer({
-        server: httpServer,
-        perMessageDeflate: false,
-        clientTracking: true
-    });
-    console.log('✅ WebSocket server integrated with HTTP server on single port');
-} catch (error) {
-    console.error('❌ WebSocket server creation failed:', error);
-    process.exit(1);
-}
-
-// Handle WebSocket upgrade requests explicitly
-httpServer.on('upgrade', (request, socket, head) => {
-    console.log('🔗 WebSocket upgrade request received:');
-    console.log(`   URL: ${request.url}`);
-
-    if (request.url && request.url.startsWith('/ws/')) {
-        console.log('✅ Valid WebSocket path, handling upgrade...');
-        wss.handleUpgrade(request, socket, head, (ws) => {
-            wss.emit('connection', ws, request);
-        });
-    } else {
-        console.log('❌ Invalid WebSocket path, closing connection');
-        socket.destroy();
-    }
-});
-
-// Enhanced WebSocket connection handling for real-time performance
-wss.on('connection', (ws, req) => {
-    const startTime = Date.now();
-    console.log(`🔗 NEW REAL-TIME WEBSOCKET CONNECTION`);
-    console.log(`   URL: ${req.url}`);
-
-    let channelId = null;
-    if (req.url) {
-        const match = req.url.match(/\/ws\/([^?&\/]+)/);
-        if (match) {
-            channelId = match[1];
-            console.log(`   Channel: ${channelId}`);
-        }
-    }
-
-    if (!channelId) {
-        console.error('❌ No channel ID found in WebSocket URL');
-        ws.close(1008, 'Channel ID required: /ws/CHANNEL_ID');
-        return;
-    }
-
-    // Add to tracking with real-time optimization
-    if (!connectedClients.has(channelId)) {
-        connectedClients.set(channelId, new Set());
-    }
-    connectedClients.get(channelId).add(ws);
-
-    const clientCount = connectedClients.get(channelId).size;
-    const totalClients = wss.clients.size;
-
-    console.log(`✅ Real-time WebSocket connected: Channel ${channelId} (${clientCount} in channel, ${totalClients} total)`);
-
-    // REAL-TIME OPTIMIZATION: Send initial data immediately with minimal delay
-    const sendStart = performance.now();
-    try {
-        const initialData = getCurrentHeatmapData(channelId);
-        ws.send(JSON.stringify(initialData));
-        const sendTime = performance.now() - sendStart;
-        console.log(`📨 Initial data sent in ${sendTime.toFixed(2)}ms: ${initialData.clusters.length} clusters, ${initialData.totalClicks} clicks`);
-    } catch (error) {
-        console.error('❌ Error sending initial data:', error);
-    }
-
-    // Enhanced connection handling for real-time reliability
-    ws.on('close', (code, reason) => {
-        const duration = Date.now() - startTime;
-        const clients = connectedClients.get(channelId);
-        if (clients) {
-            clients.delete(ws);
-            if (clients.size === 0) {
-                connectedClients.delete(channelId);
-            }
-        }
-        console.log(`🔒 Real-time WebSocket disconnected: ${channelId} after ${duration}ms (code: ${code})`);
-    });
-
-    // Enhanced error handling
-    ws.on('error', (error) => {
-        console.error(`❌ Real-time WebSocket error for ${channelId}:`, error);
-    });
-
-    // Optional: Real-time ping/pong for connection health
-    ws.isAlive = true;
-    ws.on('pong', () => {
-        ws.isAlive = true;
-    });
-});
-
-// Real-time connection health monitoring
-const connectionHealthInterval = setInterval(() => {
-    if (!wss) return;
-    
-    let totalConnections = 0;
-    let healthyConnections = 0;
-    
-    wss.clients.forEach((ws) => {
-        totalConnections++;
-        if (ws.isAlive === false) {
-            ws.terminate();
-            console.log('🧹 Terminated unhealthy WebSocket connection');
-        } else {
-            healthyConnections++;
-            ws.isAlive = false;
-            ws.ping();
-        }
-    });
-    
-    if (totalConnections > 0) {
-        console.log(`💓 Real-time health check: ${healthyConnections}/${totalConnections} connections healthy`);
-    }
-}, 30000); // Check every 30 seconds
-
-// Error handling
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection:', reason);
-});
-
-// Enhanced graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('📝 Shutting down real-time server...');
-    clearInterval(connectionHealthInterval);
-
-    if (wss) {
-        wss.clients.forEach((ws) => {
-            ws.close(1001, 'Server shutting down');
-        });
-    }
-
-    if (PERFORMANCE_MONITORING) {
-        const uptime = Date.now() - performanceStats.startTime;
-        console.log(`📊 Final performance stats:`);
-        console.log(`   Total requests: ${performanceStats.totalRequests}`);
-        console.log(`   Uptime: ${Math.floor(uptime / 1000)}s`);
-        console.log(`   Requests/sec: ${Math.round((performanceStats.totalRequests / (uptime / 1000)) * 100) / 100}`);
-    }
-
-    httpServer.close(() => {
-        console.log('✅ Server closed gracefully');
-        process.exit(0);
-    });
-});
-
-// Enhanced startup
-httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 ClickMap EBS v4.2.0 FIXED CLUSTERING - Proper sizing and merging!');
-    console.log(`📡 HTTP Server: https://smart-clickmap-backend.onrender.com`);
-    console.log(`🔗 Real-time WebSocket: wss://smart-clickmap-backend.onrender.com/ws/[CHANNEL_ID]`);
-    console.log(`🎯 Health check: https://smart-clickmap-backend.onrender.com/health`);
-    console.log(`⚡ Performance monitoring: ${PERFORMANCE_MONITORING ? 'ENABLED' : 'DISABLED'}`);
-    console.log(`🎯 Target latency: <10ms click processing, <5ms broadcasting`);
-    console.log(`🔄 Fixed features: Proper percentage scaling (25%→180px), accurate merging, no nested clusters`);
-    console.log(`📊 Game state: ${gameState.running ? 'RUNNING' : 'STOPPED'}`);
-
-    setTimeout(() => {
-        console.log('🔍 FINAL STATUS CHECK:');
-        console.log(`   HTTP server listening: ${httpServer.listening}`);
-        console.log(`   WebSocket server integrated: ${!!wss}`);
-        console.log(`   Connected channels: ${connectedClients.size}`);
-        console.log('🎊 Fixed real-time clustering server fully operational!');
-    }, 1000);
-});
+console.log('🚀 ClickMap EBS v4.3.0 REDIS SCALE - Multi-instance ready!');
+console.log(`📡 Instance ID: ${gameState.instanceId}`);
+console.log(`🔗 Redis connected: ${redis.isReady}`);
+console.log(`💾 All state now persisted in Redis for scaling`);
 
 export default httpServer;

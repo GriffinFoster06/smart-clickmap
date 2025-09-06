@@ -58,7 +58,7 @@ app.get('/health', (req, res) => {
         status: 'ok',
         running: gameState.running,
         timestamp: Date.now(),
-        version: '3.3.0',
+        version: '3.3.1',
         uptime: process.uptime(),
         websocket: {
             enabled: !!wss,
@@ -341,7 +341,7 @@ app.get('/heatmap', (req, res) => {
     }
 });
 
-// Get current heatmap data with advanced clustering
+// Get current heatmap data with FIXED clustering
 function getCurrentHeatmapData(channelId, threshold = 3) {
     // If no specific channel requested, aggregate all channels WITH clustering
     if (!channelId || channelId === 'all') {
@@ -392,6 +392,8 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     const points = Array.from(channelClicks.values());
     const clusters = processClicksIntoAdvancedClusters(points, threshold);
 
+    console.log(`🔍 Channel ${channelId}: ${points.length} points → ${clusters.length} clusters`);
+
     return {
         running: gameState.running,
         clusters,
@@ -403,16 +405,45 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     };
 }
 
-// ADVANCED CLUSTERING ALGORITHM
+// FIXED CLUSTERING ALGORITHM - Handles small datasets properly
 function processClicksIntoAdvancedClusters(points, threshold) {
     if (points.length === 0) return [];
 
-    console.log(`🧮 Advanced clustering: ${points.length} points, ${threshold}% threshold`);
+    console.log(`🧮 FIXED clustering: ${points.length} points, ${threshold}% threshold`);
 
-    // Step 1: Adaptive density-based clustering
-    const rawClusters = performDensityBasedClustering(points);
+    // For small datasets (< 5 points), treat each click as its own cluster
+    if (points.length < 5) {
+        console.log(`   Using simple mode for ${points.length} points`);
+        return points.map((point, index) => {
+            const percentage = Math.round(100 / points.length);
+            return {
+                id: index,
+                x: point.x,
+                y: point.y,
+                count: 1,
+                percentage: percentage,
+                radius: 60, // Fixed visual size
+                spread: 0.05,
+                maxSpread: 0.05,
+                stdDev: 0,
+                density: 1,
+                compactness: 1,
+                area: 0.01,
+                complexity: 0,
+                eccentricity: 0,
+                irregularity: 0,
+                convexity: 1,
+                preferredSides: 8,
+                isTop: index === 0, // First click is "top"
+                isSplit: false
+            };
+        });
+    }
+
+    // For larger datasets, use improved clustering logic
+    const rawClusters = performImprovedDensityBasedClustering(points);
     
-    // Step 2: Calculate comprehensive metrics for each cluster
+    // Calculate comprehensive metrics for each cluster
     const enrichedClusters = rawClusters.map((cluster, index) => {
         const metrics = calculateClusterMetrics(cluster, points.length);
         return {
@@ -423,39 +454,47 @@ function processClicksIntoAdvancedClusters(points, threshold) {
         };
     });
 
-    // Step 3: Filter by threshold
+    // Filter by threshold
     const filteredClusters = enrichedClusters.filter(c => c.percentage >= threshold);
 
-    // Step 4: Smart cluster splitting for oversized clusters
+    // Smart cluster splitting for oversized clusters
     const splitClusters = [];
     for (const cluster of filteredClusters) {
         const splits = smartClusterSplitting(cluster);
         splitClusters.push(...splits);
     }
 
-    // Step 5: Sort and mark top cluster
+    // Sort and mark top cluster
     splitClusters.sort((a, b) => b.percentage - a.percentage);
     if (splitClusters.length > 0) {
         splitClusters[0].isTop = true;
     }
 
-    console.log(`✅ Clustering result: ${rawClusters.length} raw → ${filteredClusters.length} filtered → ${splitClusters.length} final`);
+    console.log(`✅ FIXED clustering result: ${rawClusters.length} raw → ${filteredClusters.length} filtered → ${splitClusters.length} final`);
 
     return splitClusters;
 }
 
-// Density-based clustering with adaptive parameters
-function performDensityBasedClustering(points) {
+// IMPROVED density-based clustering with better handling of small datasets
+function performImprovedDensityBasedClustering(points) {
     const clusters = [];
     const visited = new Set();
     const noise = new Set();
 
-    // Adaptive parameters based on point density
     const totalPoints = points.length;
     const adaptiveEps = calculateAdaptiveEps(points);
-    const minPts = Math.max(2, Math.floor(totalPoints * 0.05)); // 5% of points minimum
+    
+    // FIXED: More reasonable minPts for small datasets
+    let minPts;
+    if (totalPoints <= 2) {
+        minPts = 1; // Single points form clusters
+    } else if (totalPoints <= 5) {
+        minPts = 2; // Pairs can form clusters
+    } else {
+        minPts = Math.max(2, Math.floor(totalPoints * 0.03)); // 3% minimum for larger sets
+    }
 
-    console.log(`   Clustering params: eps=${adaptiveEps.toFixed(4)}, minPts=${minPts}`);
+    console.log(`   IMPROVED clustering params: eps=${adaptiveEps.toFixed(4)}, minPts=${minPts}`);
 
     for (let i = 0; i < points.length; i++) {
         if (visited.has(i)) continue;
@@ -464,7 +503,13 @@ function performDensityBasedClustering(points) {
         const neighbors = findNeighbors(points, i, adaptiveEps);
 
         if (neighbors.length < minPts) {
-            noise.add(i);
+            // FIXED: For small datasets, treat isolated points as single-point clusters
+            if (totalPoints <= 5) {
+                clusters.push([points[i]]);
+                console.log(`   Created single-point cluster for point ${i}`);
+            } else {
+                noise.add(i);
+            }
         } else {
             const cluster = [];
             expandCluster(points, i, neighbors, cluster, visited, adaptiveEps, minPts);
@@ -474,6 +519,7 @@ function performDensityBasedClustering(points) {
         }
     }
 
+    console.log(`   IMPROVED result: ${clusters.length} clusters, ${noise.size} noise points`);
     return clusters;
 }
 
@@ -1063,7 +1109,7 @@ process.on('SIGTERM', () => {
 
 // Start server
 httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 ClickMap EBS v3.3.0 ADVANCED CLUSTERING - ENHANCED VERSION');
+    console.log('🚀 ClickMap EBS v3.3.1 FIXED CLUSTERING - Single Clicks Work!');
     console.log(`📡 HTTP Server: https://smart-clickmap-backend.onrender.com`);
     console.log(`🔗 WebSocket URL: wss://smart-clickmap-backend.onrender.com/ws/[CHANNEL_ID]`);
     console.log(`🎯 Health check: https://smart-clickmap-backend.onrender.com/health`);
@@ -1081,7 +1127,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
         console.log(`   WebSocket clients: ${wss ? wss.clients.size : 0}`);
         console.log(`   Connected channels: ${connectedClients.size}`);
         console.log(`   Single port mode: ${PORT}`);
-        console.log('🎉 Advanced clustering server fully operational!');
+        console.log('🎉 FIXED clustering server fully operational - single clicks work!');
     }, 1000);
 });
 

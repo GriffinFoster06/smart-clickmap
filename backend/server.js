@@ -551,20 +551,24 @@ function calculateAdaptiveEps(points) {
     return distances[percentile] || 0.1;
 }
 
-// Find neighbors within epsilon distance
+// Find neighbors within epsilon distance with DEBUG logging
 function findNeighbors(points, pointIndex, eps) {
     const neighbors = [];
     const point = points[pointIndex];
 
+    console.log(`   🔍 Finding neighbors for point ${pointIndex}(${point.x.toFixed(3)},${point.y.toFixed(3)}) within eps=${eps.toFixed(4)}`);
+
     for (let i = 0; i < points.length; i++) {
         if (i !== pointIndex) {
             const distance = euclideanDistance(point, points[i]);
+            console.log(`      Point ${i}(${points[i].x.toFixed(3)},${points[i].y.toFixed(3)}): distance=${distance.toFixed(4)} ${distance <= eps ? '✅ NEIGHBOR' : '❌ too far'}`);
             if (distance <= eps) {
                 neighbors.push(i);
             }
         }
     }
 
+    console.log(`   🔍 Point ${pointIndex} found ${neighbors.length} neighbors: [${neighbors.join(', ')}]`);
     return neighbors;
 }
 

@@ -693,7 +693,313 @@ async function getCurrentHeatmapData(channelId, threshold = 3) {
 // [Include your existing clustering functions here - processClicksIntoVisualClusters, etc.]
 // They remain the same, just working with data from Redis instead of memory
 
-// WebSocket broadcasting functions (unchanged)
+// WebSocket broadcasting functions
+function broadcastToChannel(channelId, data) {
+    const clients = connectedClients.get(channelId);
+    if (!clients || clients.size === 0) return;
+
+    const message = JSON.stringify(data);
+    let sentCount = 0;
+    let failedCount = 0;
+
+    clients.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) {
+            try {
+                ws.send(message);
+                sentCount++;
+            } catch (error) {
+                console.error('WebSocket send error:', error);
+                clients.delete(ws);
+                failedCount++;
+            }
+        } else {
+            clients.delete(ws);
+            failedCount++;
+        }
+    });
+
+    if (sentCount > 0) {
+        console.log(`📡 Redis broadcast to ${channelId}: ${sentCount} clients, ${data.clusters.length} clusters`);
+        if (failedCount > 0) {
+            console.log(`   ⚠️ Cleaned up ${failedCount} stale connections`);
+        }
+    }
+}
+
+function broadcastToAll(data) {
+    let totalSent = 0;
+    connectedClients.forEach(async (clients, channelId) => {
+        const channelData = channelId === 'all' ? data : await getCurrentHeatmapData(channelId);
+        Object.assign(channelData, { running: data.running, action: data.action });
+        broadcastToChannel(channelId, channelData);
+        totalSent += clients.size;
+    });
+
+    if (totalSent > 0) {
+        console.log(`📡 Redis broadcast to all: ${totalSent} clients`);
+    }
+}
+
+// HTTP SERVER CREATION
+console.log('🔧 Creating HTTP server...');
+const httpServer = createServer(app);
+
+// WEBSOCKET SERVER INTEGRATION
+console.log('🔧 Creating WebSocket server integrated with HTTP server...');
+let wss;
+try {
+    wss = new WebSocketServer({
+        server: httpServer,
+        perMessageDeflate: false,
+        clientTracking: true
+    });
+    console.log('✅ WebSocket server integrated with HTTP server on single port');
+} catch (error) {
+    console.error('❌ WebSocket server creation failed:', error);
+    process.exit(1);
+}
+
+// Handle WebSocket upgrade requests
+httpServer.on('upgrade', (request, socket, head) => {
+    console.log('🔗 WebSocket upgrade request received:');
+    console.log(`   URL: ${request.url}`);
+
+    if (request.url && request.url.startsWith('/ws/')) {
+        console.log('✅ Valid WebSocket path, handling upgrade...');
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, request);
+        });
+    } else {
+        console.log('❌ Invalid WebSocket path, closing connection');
+        socket.destroy();
+    }
+});
+
+// Enhanced WebSocket connection handling for Redis
+wss.on('connection', (ws, req) => {
+    const startTime = Date.now();
+    console.log(`🔗 NEW REDIS WEBSOCKET CONNECTION [${gameState.instanceId}]`);
+    console.log(`   URL: ${req.url}`);
+
+    let channelId = null;
+    if (req.url) {
+        const match = req.url.match(/\/ws\/([^?&\/]+)/);
+        if (match) {
+            channelId = match[1];
+            console.log(`   Channel: ${channelId}`);
+        }
+    }
+
+    if (!channelId) {
+        console.error('❌ No channel ID found in WebSocket URL');
+        ws.close(1008, 'Channel ID required: /ws/CHANNEL_ID');
+        return;
+    }
+
+    // Add to tracking
+    if (!connectedClients.has(channelId)) {
+        connectedClients.set(channelId, new Set());
+    }
+    connectedClients.get(channelId).add(ws);
+
+    const clientCount = connectedClients.get(channelId).size;
+    const totalClients = wss.clients.size;
+
+    console.log(`✅ Redis WebSocket connected: Channel ${channelId} (${clientCount} in channel, ${totalClients} total) [${gameState.instanceId}]`);
+
+    // Send initial data from Redis
+    const sendStart = performance.now();
+    getCurrentHeatmapData(channelId).then(initialData => {
+        try {
+            ws.send(JSON.stringify(initialData));
+            const sendTime = performance.now() - sendStart;
+            console.log(`📨 Initial Redis data sent in ${sendTime.toFixed(2)}ms: ${initialData.clusters.length} clusters, ${initialData.totalClicks} clicks`);
+        } catch (error) {
+            console.error('❌ Error sending initial Redis data:', error);
+        }
+    }).catch(error => {
+        console.error('❌ Error getting initial Redis data:', error);
+    });
+
+    // Connection handling
+    ws.on('close', (code, reason) => {
+        const duration = Date.now() - startTime;
+        const clients = connectedClients.get(channelId);
+        if (clients) {
+            clients.delete(ws);
+            if (clients.size === 0) {
+                connectedClients.delete(channelId);
+            }
+        }
+        console.log(`🔒 Redis WebSocket disconnected: ${channelId} after ${duration}ms (code: ${code}) [${gameState.instanceId}]`);
+    });
+
+    ws.on('error', (error) => {
+        console.error(`❌ Redis WebSocket error for ${channelId}:`, error);
+    });
+
+    // Connection health monitoring
+    ws.isAlive = true;
+    ws.on('pong', () => {
+        ws.isAlive = true;
+    });
+});
+
+// Connection health monitoring interval
+const connectionHealthInterval = setInterval(() => {
+    if (!wss) return;
+    
+    let totalConnections = 0;
+    let healthyConnections = 0;
+    
+    wss.clients.forEach((ws) => {
+        totalConnections++;
+        if (ws.isAlive === false) {
+            ws.terminate();
+            console.log('🧹 Terminated unhealthy WebSocket connection');
+        } else {
+            healthyConnections++;
+            ws.isAlive = false;
+            ws.ping();
+        }
+    });
+    
+    if (totalConnections > 0) {
+        console.log(`💓 Redis health check: ${healthyConnections}/${totalConnections} connections healthy [${gameState.instanceId}]`);
+    }
+}, 30000);
+
+// WebSocket debug endpoints
+app.get('/ws-debug', (req, res) => {
+    console.log('🔍 WebSocket Debug requested');
+
+    const debug = {
+        timestamp: new Date().toISOString(),
+        instance: gameState.instanceId,
+        websocket_server: {
+            exists: !!wss,
+            clients: wss ? wss.clients.size : 0,
+            integrated_with_http: true,
+            ready_state: wss ? 'operational' : 'not_initialized'
+        },
+        connected_clients: {
+            channels: connectedClients.size,
+            total_connections: Array.from(connectedClients.values()).reduce((sum, set) => sum + set.size, 0),
+            by_channel: Array.from(connectedClients.entries()).map(([channel, clients]) => ({
+                channel,
+                count: clients.size
+            }))
+        },
+        server_info: {
+            listening: !!httpServer && httpServer.listening,
+            address: httpServer ? httpServer.address() : null,
+            port: PORT,
+            single_port_mode: true,
+            environment: process.env.NODE_ENV || 'development'
+        },
+        redis: {
+            connected: redis.isReady
+        }
+    };
+
+    console.log('🔍 Debug result:', JSON.stringify(debug, null, 2));
+    res.json(debug);
+});
+
+app.get('/ws-test/:channelId', (req, res) => {
+    const { channelId } = req.params;
+    const wsUrl = `wss://${req.get('host')}/ws/${channelId}`;
+
+    res.json({
+        test_url: wsUrl,
+        server_ready: !!httpServer && httpServer.listening,
+        websocket_ready: !!wss,
+        client_count: wss ? wss.clients.size : 0,
+        instance: gameState.instanceId,
+        redis_ready: redis.isReady,
+        instructions: [
+            'Test WebSocket connection in browser console:',
+            `const ws = new WebSocket('${wsUrl}');`,
+            `ws.onopen = () => console.log('✅ Connected to ${channelId}');`,
+            `ws.onerror = (e) => console.log('❌ Connection error:', e);`,
+            `ws.onclose = (e) => console.log('🔒 Connection closed:', e.code, e.reason);`,
+            `ws.onmessage = (e) => console.log('📨 Message received:', e.data);`
+        ]
+    });
+});
+
+// Error handling
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection:', reason);
+});
+
+// Enhanced graceful shutdown with Redis cleanup
+process.on('SIGTERM', async () => {
+    console.log('📝 Shutting down Redis server...');
+    clearInterval(connectionHealthInterval);
+
+    if (wss) {
+        wss.clients.forEach((ws) => {
+            ws.close(1001, 'Server shutting down');
+        });
+    }
+
+    try {
+        await redis.quit();
+        console.log('✅ Redis connection closed');
+    } catch (error) {
+        console.error('❌ Error closing Redis:', error);
+    }
+
+    if (PERFORMANCE_MONITORING) {
+        const uptime = Date.now() - performanceStats.startTime;
+        console.log(`📊 Final performance stats:`);
+        console.log(`   Total requests: ${performanceStats.totalRequests}`);
+        console.log(`   Redis operations: ${performanceStats.redisOperations}`);
+        console.log(`   Uptime: ${Math.floor(uptime / 1000)}s`);
+        console.log(`   Requests/sec: ${Math.round((performanceStats.totalRequests / (uptime / 1000)) * 100) / 100}`);
+    }
+
+    httpServer.close(() => {
+        console.log('✅ Server closed gracefully');
+        process.exit(0);
+    });
+});
+
+// Enhanced startup
+httpServer.listen(PORT, '0.0.0.0', async () => {
+    console.log('🚀 ClickMap EBS v4.3.0 REDIS SCALE - Multi-instance ready!');
+    console.log(`📡 HTTP Server: https://smart-clickmap-backend.onrender.com`);
+    console.log(`🔗 WebSocket: wss://smart-clickmap-backend.onrender.com/ws/[CHANNEL_ID]`);
+    console.log(`🎯 Health check: https://smart-clickmap-backend.onrender.com/health`);
+    console.log(`💾 Redis URL: ${process.env.REDIS_URL ? 'Connected' : 'Not configured'}`);
+    console.log(`🏷️ Instance ID: ${gameState.instanceId}`);
+    console.log(`⚡ Performance monitoring: ${PERFORMANCE_MONITORING ? 'ENABLED' : 'DISABLED'}`);
+    console.log(`🎯 Target latency: <10ms click processing, <5ms broadcasting`);
+    console.log(`🔄 Redis features: Persistent state, shared clicks, multi-instance safe`);
+    
+    try {
+        const isRunning = await gameState.isRunning();
+        console.log(`📊 Game state: ${isRunning ? 'RUNNING' : 'STOPPED'} (from Redis)`);
+    } catch (error) {
+        console.error('❌ Failed to get initial game state from Redis:', error);
+    }
+
+    setTimeout(() => {
+        console.log('🔍 FINAL STATUS CHECK:');
+        console.log(`   HTTP server listening: ${httpServer.listening}`);
+        console.log(`   WebSocket server integrated: ${!!wss}`);
+        console.log(`   Connected channels: ${connectedClients.size}`);
+        console.log(`   Redis connected: ${redis.isReady}`);
+        console.log('🎊 Redis-powered multi-instance server fully operational!');
+    }, 1000);
+});
+
+export default httpServer; (unchanged)
 function broadcastToChannel(channelId, data) {
     const clients = connectedClients.get(channelId);
     if (!clients || clients.size === 0) return;

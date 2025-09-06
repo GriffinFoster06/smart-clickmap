@@ -4,9 +4,132 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import { createClient } from 'redis';
 
 const PORT = process.env.PORT || 8080;
 const SECRET = Buffer.from(process.env.TWITCH_SECRET || '', 'base64');
+
+// REDIS SETUP - Replace in-memory storage
+const redis = createClient({
+    url: process.env.REDIS_URL,
+    socket: {
+        connectTimeout: 5000,
+        lazyConnect: true,
+        reconnectStrategy: (retries) => Math.min(retries * 50, 1000)
+    }
+});
+
+redis.on('error', (err) => console.error('Redis Client Error:', err));
+redis.on('connect', () => console.log('✅ Redis connected'));
+redis.on('reconnecting', () => console.log('🔄 Redis reconnecting...'));
+
+await redis.connect();
+
+// REDIS GAME STATE HELPERS
+const gameState = {
+    async setRunning(running) {
+        await redis.set('game:running', running.toString());
+        await redis.set('game:lastUpdate', Date.now().toString());
+    },
+
+    async isRunning() {
+        const running = await redis.get('game:running');
+        return running === 'true';
+    },
+
+    async getLastUpdate() {
+        const timestamp = await redis.get('game:lastUpdate');
+        return timestamp ? parseInt(timestamp) : Date.now();
+    },
+
+    async addClick(channelId, userId, x, y) {
+        const clickData = JSON.stringify({ x, y, timestamp: Date.now() });
+        await redis.setex(`clicks:${channelId}:${userId}`, 3600, clickData);
+    },
+
+    async getChannelClicks(channelId) {
+        const pattern = `clicks:${channelId}:*`;
+        const keys = await redis.keys(pattern);
+        
+        if (keys.length === 0) return new Map();
+
+        const pipeline = redis.multi();
+        keys.forEach(key => pipeline.get(key));
+        const results = await pipeline.exec();
+
+        const clicks = new Map();
+        keys.forEach((key, index) => {
+            const userId = key.split(':')[2];
+            const result = results[index];
+            
+            if (result && result[1]) {
+                try {
+                    const clickData = JSON.parse(result[1]);
+                    clicks.set(userId, clickData);
+                } catch (parseError) {
+                    console.error(`Failed to parse click data for ${userId}:`, parseError);
+                }
+            }
+        });
+
+        return clicks;
+    },
+
+    async getAllChannelClicks() {
+        const pattern = 'clicks:*';
+        const keys = await redis.keys(pattern);
+        
+        if (keys.length === 0) return new Map();
+
+        const channelGroups = new Map();
+        keys.forEach(key => {
+            const parts = key.split(':');
+            const channelId = parts[1];
+            const userId = parts[2];
+            
+            if (!channelGroups.has(channelId)) {
+                channelGroups.set(channelId, []);
+            }
+            channelGroups.get(channelId).push({ key, userId });
+        });
+
+        const pipeline = redis.multi();
+        keys.forEach(key => pipeline.get(key));
+        const results = await pipeline.exec();
+
+        const allClicks = new Map();
+        let resultIndex = 0;
+
+        for (const [channelId, channelKeys] of channelGroups.entries()) {
+            const channelClicks = new Map();
+            
+            channelKeys.forEach(({ userId }) => {
+                const result = results[resultIndex++];
+                if (result && result[1]) {
+                    try {
+                        const clickData = JSON.parse(result[1]);
+                        channelClicks.set(userId, clickData);
+                    } catch (parseError) {
+                        console.error(`Failed to parse click data for ${userId}:`, parseError);
+                    }
+                }
+            });
+
+            if (channelClicks.size > 0) {
+                allClicks.set(channelId, channelClicks);
+            }
+        }
+
+        return allClicks;
+    },
+
+    async clearAllClicks() {
+        const clickKeys = await redis.keys('clicks:*');
+        if (clickKeys.length > 0) {
+            await redis.del(clickKeys);
+        }
+    }
+};
 
 // Real-time performance monitoring
 const PERFORMANCE_MONITORING = process.env.NODE_ENV !== 'production';
@@ -16,13 +139,6 @@ const performanceStats = {
     clusterCalculationTimes: [],
     totalRequests: 0,
     startTime: Date.now()
-};
-
-// Simple in-memory storage
-const gameState = {
-    running: false,
-    clicks: new Map(), // channelId → Map(userId → { x, y, timestamp })
-    lastUpdate: Date.now()
 };
 
 const connectedClients = new Map(); // channelId → Set of WebSocket connections
@@ -62,7 +178,7 @@ app.use((req, res, next) => {
 });
 
 // Enhanced health check with real-time performance stats
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
     console.log('🏥 Health check called');
     
     const uptime = Date.now() - performanceStats.startTime;
@@ -73,11 +189,14 @@ app.get('/health', (req, res) => {
     const avgCalculationTime = performanceStats.clusterCalculationTimes.length > 0 ?
         performanceStats.clusterCalculationTimes.reduce((a, b) => a + b, 0) / performanceStats.clusterCalculationTimes.length : 0;
     
+    const running = await gameState.isRunning();
+    const allClicks = await gameState.getAllChannelClicks();
+    
     res.json({
         status: 'ok',
-        running: gameState.running,
+        running: running,
         timestamp: Date.now(),
-        version: '4.2.0-fixed-clustering',
+        version: '4.2.0-redis-clustering',
         uptime: Math.floor(uptime / 1000),
         websocket: {
             enabled: !!wss,
@@ -102,10 +221,13 @@ app.get('/health', (req, res) => {
             render_service: process.env.RENDER_SERVICE_NAME || 'unknown',
             render_service_id: process.env.RENDER_SERVICE_ID || 'unknown'
         },
+        redis: {
+            connected: redis.isReady
+        },
         game_data: {
-            total_channels: gameState.clicks.size,
-            total_clicks: Array.from(gameState.clicks.values()).reduce((sum, channelClicks) => sum + channelClicks.size, 0),
-            channels: Array.from(gameState.clicks.entries()).map(([channel, clicks]) => ({
+            total_channels: allClicks.size,
+            total_clicks: Array.from(allClicks.values()).reduce((sum, channelClicks) => sum + channelClicks.size, 0),
+            channels: Array.from(allClicks.entries()).map(([channel, clicks]) => ({
                 channel,
                 clicks: clicks.size
             }))
@@ -174,6 +296,9 @@ app.get('/ws-debug', (req, res) => {
             port: PORT,
             single_port_mode: true,
             environment: process.env.NODE_ENV || 'development'
+        },
+        redis: {
+            connected: redis.isReady
         }
     };
 
@@ -191,6 +316,7 @@ app.get('/ws-test/:channelId', (req, res) => {
         server_ready: !!httpServer && httpServer.listening,
         websocket_ready: !!wss,
         client_count: wss ? wss.clients.size : 0,
+        redis_ready: redis.isReady,
         instructions: [
             'Test WebSocket connection in browser console:',
             `const ws = new WebSocket('${wsUrl}');`,
@@ -202,16 +328,15 @@ app.get('/ws-test/:channelId', (req, res) => {
     });
 });
 
-// START endpoint
-app.post('/start', (req, res) => {
+// START endpoint - Updated for Redis
+app.post('/start', async (req, res) => {
     console.log('🚀 START endpoint called');
 
     try {
-        gameState.running = true;
-        gameState.clicks.clear();
-        gameState.lastUpdate = Date.now();
+        await gameState.setRunning(true);
+        await gameState.clearAllClicks();
 
-        console.log('✅ Game started successfully');
+        console.log('✅ Game started successfully (Redis)');
 
         // Broadcast to all connected clients
         broadcastToAll({
@@ -222,11 +347,13 @@ app.post('/start', (req, res) => {
             action: 'start'
         });
 
+        const lastUpdate = await gameState.getLastUpdate();
+
         res.json({
             success: true,
             status: 'started',
             running: true,
-            timestamp: gameState.lastUpdate
+            timestamp: lastUpdate
         });
 
     } catch (error) {
@@ -239,27 +366,28 @@ app.post('/start', (req, res) => {
     }
 });
 
-// STOP endpoint
-app.post('/stop', (req, res) => {
+// STOP endpoint - Updated for Redis
+app.post('/stop', async (req, res) => {
     console.log('⏹️ STOP endpoint called');
 
     try {
-        gameState.running = false;
-        gameState.lastUpdate = Date.now();
+        await gameState.setRunning(false);
 
-        console.log('✅ Game stopped successfully');
+        console.log('✅ Game stopped successfully (Redis)');
 
-        const currentData = getCurrentHeatmapData('all');
+        const currentData = await getCurrentHeatmapData('all');
         currentData.running = false;
         currentData.action = 'stop';
 
         broadcastToAll(currentData);
 
+        const lastUpdate = await gameState.getLastUpdate();
+
         res.json({
             success: true,
             status: 'stopped',
             running: false,
-            timestamp: gameState.lastUpdate
+            timestamp: lastUpdate
         });
 
     } catch (error) {
@@ -272,29 +400,32 @@ app.post('/stop', (req, res) => {
     }
 });
 
-// RESET endpoint
-app.post('/reset', (req, res) => {
+// RESET endpoint - Updated for Redis
+app.post('/reset', async (req, res) => {
     console.log('🗑️ RESET endpoint called');
 
     try {
-        gameState.clicks.clear();
-        gameState.lastUpdate = Date.now();
+        await gameState.clearAllClicks();
 
-        console.log('✅ Data reset successfully');
+        console.log('✅ Data reset successfully (Redis)');
+
+        const running = await gameState.isRunning();
 
         broadcastToAll({
-            running: gameState.running,
+            running: running,
             clusters: [],
             totalClicks: 0,
             uniqueUsers: 0,
             action: 'reset'
         });
 
+        const lastUpdate = await gameState.getLastUpdate();
+
         res.json({
             success: true,
             status: 'reset',
-            running: gameState.running,
-            timestamp: gameState.lastUpdate
+            running: running,
+            timestamp: lastUpdate
         });
 
     } catch (error) {
@@ -307,14 +438,15 @@ app.post('/reset', (req, res) => {
     }
 });
 
-// Real-time optimized click handling endpoint
-app.post('/click', (req, res) => {
+// Real-time optimized click handling endpoint - Updated for Redis
+app.post('/click', async (req, res) => {
     const startTime = performance.now();
-    console.log('🖱️ CLICK endpoint called - REAL-TIME MODE');
+    console.log('🖱️ CLICK endpoint called - REDIS MODE');
 
     try {
-        if (!gameState.running) {
-            console.log('   ❌ Game not running');
+        const running = await gameState.isRunning();
+        if (!running) {
+            console.log('   ❌ Game not running (Redis check)');
             return res.status(400).json({
                 success: false,
                 error: 'Game not running'
@@ -344,25 +476,20 @@ app.post('/click', (req, res) => {
             });
         }
 
-        // REAL-TIME OPTIMIZATION: Store click immediately with minimal processing
+        // Store click in Redis
         const clickProcessStart = performance.now();
-        
-        if (!gameState.clicks.has(channelId)) {
-            gameState.clicks.set(channelId, new Map());
-            console.log(`   📝 Created new channel: ${channelId}`);
-        }
-
-        gameState.clicks.get(channelId).set(uid, { x, y, timestamp: Date.now() });
-        gameState.lastUpdate = Date.now();
-
+        await gameState.addClick(channelId, uid, x, y);
         const clickProcessTime = performance.now() - clickProcessStart;
         
-        console.log(`✅ Click stored: Channel ${channelId}, User ${uid}, Pos (${x.toFixed(3)}, ${y.toFixed(3)}) in ${clickProcessTime.toFixed(2)}ms`);
-        console.log(`   Total clicks in channel: ${gameState.clicks.get(channelId).size}`);
+        console.log(`✅ Click stored in Redis: Channel ${channelId}, User ${uid}, Pos (${x.toFixed(3)}, ${y.toFixed(3)}) in ${clickProcessTime.toFixed(2)}ms`);
+
+        // Get channel clicks for logging
+        const channelClicks = await gameState.getChannelClicks(channelId);
+        console.log(`   Total clicks in channel: ${channelClicks.size}`);
 
         // REAL-TIME OPTIMIZATION: Immediately calculate and broadcast updates
         const broadcastStart = performance.now();
-        const updatedData = getCurrentHeatmapData(channelId);
+        const updatedData = await getCurrentHeatmapData(channelId);
         const calculationTime = performance.now() - broadcastStart;
         
         console.log(`   📊 Cluster calculation: ${updatedData.clusters.length} clusters in ${calculationTime.toFixed(2)}ms`);
@@ -393,7 +520,7 @@ app.post('/click', (req, res) => {
         res.json({
             success: true,
             status: 'click recorded',
-            totalClicks: gameState.clicks.get(channelId)?.size || 0,
+            totalClicks: channelClicks.size,
             channelId: channelId,
             performance: PERFORMANCE_MONITORING ? {
                 processingTime: totalTime,
@@ -402,7 +529,7 @@ app.post('/click', (req, res) => {
             } : undefined
         });
 
-        console.log(`🚀 REAL-TIME click processing completed in ${totalTime.toFixed(2)}ms`);
+        console.log(`🚀 REDIS click processing completed in ${totalTime.toFixed(2)}ms`);
 
     } catch (error) {
         console.error('❌ Click error:', error);
@@ -414,18 +541,18 @@ app.post('/click', (req, res) => {
     }
 });
 
-// Enhanced heatmap endpoint with detailed logging
-app.get('/heatmap', (req, res) => {
+// Enhanced heatmap endpoint with detailed logging - Updated for Redis
+app.get('/heatmap', async (req, res) => {
     const channelId = req.query.channel;
     const threshold = parseInt(req.query.threshold) || 3;
 
     console.log(`📊 HEATMAP endpoint: channel=${channelId || 'ALL'}, threshold=${threshold}%`);
 
     try {
-        const data = getCurrentHeatmapData(channelId, threshold);
+        const data = await getCurrentHeatmapData(channelId, threshold);
 
         if (data.totalClicks > 0) {
-            console.log(`✅ Heatmap: ${data.totalClicks} clicks → ${data.clusters.length} clusters`);
+            console.log(`✅ Heatmap from Redis: ${data.totalClicks} clicks → ${data.clusters.length} clusters`);
             
             // Debug percentage math
             const totalPercentage = data.clusters.reduce((sum, c) => sum + c.percentage, 0);
@@ -444,8 +571,11 @@ app.get('/heatmap', (req, res) => {
     }
 });
 
-// Get current heatmap data with FIXED VISUAL-BASED CLUSTERING
-function getCurrentHeatmapData(channelId, threshold = 3) {
+// Get current heatmap data with FIXED VISUAL-BASED CLUSTERING - Updated for Redis
+async function getCurrentHeatmapData(channelId, threshold = 3) {
+    const running = await gameState.isRunning();
+    const lastUpdate = await gameState.getLastUpdate();
+
     // If no specific channel requested, aggregate all channels
     if (!channelId || channelId === 'all') {
         let allPoints = [];
@@ -453,7 +583,8 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
         let totalUsers = 0;
 
         // Collect all points from all channels
-        gameState.clicks.forEach((channelClicks) => {
+        const allChannelData = await gameState.getAllChannelClicks();
+        allChannelData.forEach((channelClicks) => {
             totalClicks += channelClicks.size;
             totalUsers += channelClicks.size;
 
@@ -467,28 +598,28 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
         const clusters = processClicksIntoVisualClusters(allPoints, threshold);
 
         return {
-            running: gameState.running,
+            running: running,
             clusters,
             totalClicks,
             uniqueUsers: totalUsers,
             coverage: Math.min(100, clusters.length * 10),
             threshold,
-            lastUpdate: gameState.lastUpdate
+            lastUpdate: lastUpdate
         };
     }
 
     // Handle specific channel
-    const channelClicks = gameState.clicks.get(channelId);
+    const channelClicks = await gameState.getChannelClicks(channelId);
 
     if (!channelClicks || channelClicks.size === 0) {
         return {
-            running: gameState.running,
+            running: running,
             clusters: [],
             totalClicks: 0,
             uniqueUsers: 0,
             coverage: 0,
             threshold,
-            lastUpdate: gameState.lastUpdate
+            lastUpdate: lastUpdate
         };
     }
 
@@ -498,13 +629,13 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     console.log(`🔍 Channel ${channelId}: ${points.length} points → ${clusters.length} clusters`);
 
     return {
-        running: gameState.running,
+        running: running,
         clusters,
         totalClicks: points.length,
         uniqueUsers: channelClicks.size,
         coverage: Math.min(100, clusters.length * 10),
         threshold,
-        lastUpdate: gameState.lastUpdate
+        lastUpdate: lastUpdate
     };
 }
 
@@ -1378,14 +1509,23 @@ function broadcastToChannel(channelId, data) {
     }
 }
 
-function broadcastToAll(data) {
+async function broadcastToAll(data) {
     let totalSent = 0;
+    const channelPromises = [];
+    
     connectedClients.forEach((clients, channelId) => {
-        const channelData = channelId === 'all' ? data : getCurrentHeatmapData(channelId);
-        Object.assign(channelData, { running: data.running, action: data.action });
-        broadcastToChannel(channelId, channelData);
-        totalSent += clients.size;
+        const channelPromise = (async () => {
+            const channelData = channelId === 'all' ? data : await getCurrentHeatmapData(channelId);
+            Object.assign(channelData, { running: data.running, action: data.action });
+            broadcastToChannel(channelId, channelData);
+            return clients.size;
+        })();
+        
+        channelPromises.push(channelPromise);
     });
+    
+    const results = await Promise.all(channelPromises);
+    totalSent = results.reduce((sum, count) => sum + count, 0);
 
     if (totalSent > 0) {
         console.log(`📡 Broadcast to all: ${totalSent} clients`);
@@ -1428,7 +1568,7 @@ httpServer.on('upgrade', (request, socket, head) => {
 });
 
 // Enhanced WebSocket connection handling for real-time performance
-wss.on('connection', (ws, req) => {
+wss.on('connection', async (ws, req) => {
     const startTime = Date.now();
     console.log(`🔗 NEW REAL-TIME WEBSOCKET CONNECTION`);
     console.log(`   URL: ${req.url}`);
@@ -1462,7 +1602,7 @@ wss.on('connection', (ws, req) => {
     // REAL-TIME OPTIMIZATION: Send initial data immediately with minimal delay
     const sendStart = performance.now();
     try {
-        const initialData = getCurrentHeatmapData(channelId);
+        const initialData = await getCurrentHeatmapData(channelId);
         ws.send(JSON.stringify(initialData));
         const sendTime = performance.now() - sendStart;
         console.log(`📨 Initial data sent in ${sendTime.toFixed(2)}ms: ${initialData.clusters.length} clusters, ${initialData.totalClicks} clicks`);
@@ -1528,8 +1668,8 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection:', reason);
 });
 
-// Enhanced graceful shutdown
-process.on('SIGTERM', () => {
+// Enhanced graceful shutdown with Redis cleanup
+process.on('SIGTERM', async () => {
     console.log('📝 Shutting down real-time server...');
     clearInterval(connectionHealthInterval);
 
@@ -1537,6 +1677,13 @@ process.on('SIGTERM', () => {
         wss.clients.forEach((ws) => {
             ws.close(1001, 'Server shutting down');
         });
+    }
+
+    try {
+        await redis.quit();
+        console.log('✅ Redis connection closed');
+    } catch (error) {
+        console.error('❌ Error closing Redis:', error);
     }
 
     if (PERFORMANCE_MONITORING) {
@@ -1554,22 +1701,30 @@ process.on('SIGTERM', () => {
 });
 
 // Enhanced startup
-httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 ClickMap EBS v4.2.0 FIXED CLUSTERING - Proper sizing and merging!');
+httpServer.listen(PORT, '0.0.0.0', async () => {
+    console.log('🚀 ClickMap EBS v4.2.0 REDIS CLUSTERING - Proper sizing and merging!');
     console.log(`📡 HTTP Server: https://smart-clickmap-backend.onrender.com`);
     console.log(`🔗 Real-time WebSocket: wss://smart-clickmap-backend.onrender.com/ws/[CHANNEL_ID]`);
     console.log(`🎯 Health check: https://smart-clickmap-backend.onrender.com/health`);
+    console.log(`💾 Redis connected: ${redis.isReady}`);
     console.log(`⚡ Performance monitoring: ${PERFORMANCE_MONITORING ? 'ENABLED' : 'DISABLED'}`);
     console.log(`🎯 Target latency: <10ms click processing, <5ms broadcasting`);
     console.log(`🔄 Fixed features: Proper percentage scaling (25%→180px), accurate merging, no nested clusters`);
-    console.log(`📊 Game state: ${gameState.running ? 'RUNNING' : 'STOPPED'}`);
+    
+    try {
+        const running = await gameState.isRunning();
+        console.log(`📊 Game state from Redis: ${running ? 'RUNNING' : 'STOPPED'}`);
+    } catch (error) {
+        console.error('❌ Failed to get initial game state from Redis:', error);
+    }
 
     setTimeout(() => {
         console.log('🔍 FINAL STATUS CHECK:');
         console.log(`   HTTP server listening: ${httpServer.listening}`);
         console.log(`   WebSocket server integrated: ${!!wss}`);
         console.log(`   Connected channels: ${connectedClients.size}`);
-        console.log('🎊 Fixed real-time clustering server fully operational!');
+        console.log(`   Redis ready: ${redis.isReady}`);
+        console.log('🎊 Redis-powered real-time clustering server fully operational!');
     }, 1000);
 });
 

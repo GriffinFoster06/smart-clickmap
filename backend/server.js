@@ -58,7 +58,7 @@ app.get('/health', (req, res) => {
         status: 'ok',
         running: gameState.running,
         timestamp: Date.now(),
-        version: '3.3.1',
+        version: '3.4.0',
         uptime: process.uptime(),
         websocket: {
             enabled: !!wss,
@@ -341,7 +341,7 @@ app.get('/heatmap', (req, res) => {
     }
 });
 
-// Get current heatmap data with FIXED clustering
+// Get current heatmap data with INTELLIGENT SHAPE ANALYSIS
 function getCurrentHeatmapData(channelId, threshold = 3) {
     // If no specific channel requested, aggregate all channels WITH clustering
     if (!channelId || channelId === 'all') {
@@ -405,45 +405,17 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     };
 }
 
-// FIXED CLUSTERING ALGORITHM - Handles small datasets properly
+// ADVANCED CLUSTERING ALGORITHM WITH INTELLIGENT SHAPE ANALYSIS
 function processClicksIntoAdvancedClusters(points, threshold) {
     if (points.length === 0) return [];
 
-    console.log(`🧮 FIXED clustering: ${points.length} points, ${threshold}% threshold`);
+    console.log(`🧮 ADVANCED clustering: ${points.length} points, ${threshold}% threshold`);
 
-    // For small datasets (< 5 points), treat each click as its own cluster
-    if (points.length < 5) {
-        console.log(`   Using simple mode for ${points.length} points`);
-        return points.map((point, index) => {
-            const percentage = Math.round(100 / points.length);
-            return {
-                id: index,
-                x: point.x,
-                y: point.y,
-                count: 1,
-                percentage: percentage,
-                radius: 60, // Fixed visual size
-                spread: 0.05,
-                maxSpread: 0.05,
-                stdDev: 0,
-                density: 1,
-                compactness: 1,
-                area: 0.01,
-                complexity: 0,
-                eccentricity: 0,
-                irregularity: 0,
-                convexity: 1,
-                preferredSides: 8,
-                isTop: index === 0, // First click is "top"
-                isSplit: false
-            };
-        });
-    }
-
-    // For larger datasets, use improved clustering logic
+    // Step 1: Always perform spatial clustering (even for small datasets)
     const rawClusters = performImprovedDensityBasedClustering(points);
+    console.log(`   Raw clustering: ${points.length} points → ${rawClusters.length} spatial clusters`);
     
-    // Calculate comprehensive metrics for each cluster
+    // Step 2: Calculate comprehensive metrics for each cluster  
     const enrichedClusters = rawClusters.map((cluster, index) => {
         const metrics = calculateClusterMetrics(cluster, points.length);
         return {
@@ -454,101 +426,164 @@ function processClicksIntoAdvancedClusters(points, threshold) {
         };
     });
 
-    // Filter by threshold
-    const filteredClusters = enrichedClusters.filter(c => c.percentage >= threshold);
+    // Step 3: Filter by threshold (but be more lenient for small datasets)
+    const effectiveThreshold = points.length < 10 ? Math.min(threshold, 5) : threshold;
+    const filteredClusters = enrichedClusters.filter(c => c.percentage >= effectiveThreshold);
+    console.log(`   Threshold filter: ${enrichedClusters.length} → ${filteredClusters.length} (threshold: ${effectiveThreshold}%)`);
 
-    // Smart cluster splitting for oversized clusters
+    // Step 4: Smart cluster splitting for oversized clusters
     const splitClusters = [];
     for (const cluster of filteredClusters) {
         const splits = smartClusterSplitting(cluster);
         splitClusters.push(...splits);
     }
+    console.log(`   Cluster splitting: ${filteredClusters.length} → ${splitClusters.length} final clusters`);
 
-    // Sort and mark top cluster
+    // Step 5: Sort and mark top cluster
     splitClusters.sort((a, b) => b.percentage - a.percentage);
     if (splitClusters.length > 0) {
         splitClusters[0].isTop = true;
     }
 
-    console.log(`✅ FIXED clustering result: ${rawClusters.length} raw → ${filteredClusters.length} filtered → ${splitClusters.length} final`);
+    // Step 6: Calculate intelligent visual sizes
+    const finalClusters = splitClusters.map(cluster => ({
+        ...cluster,
+        visualSize: calculateIntelligentVisualSize(cluster, splitClusters)
+    }));
 
-    return splitClusters;
+    console.log(`✅ ADVANCED clustering result: ${rawClusters.length} raw → ${filteredClusters.length} filtered → ${finalClusters.length} final`);
+    finalClusters.forEach((c, i) => {
+        if (i < 3) { // Log first few for debugging
+            console.log(`   Cluster ${i}: ${c.percentage}% (${c.count} clicks, shape: ${c.shapeType}, size: ${c.visualSize}px, confidence: ${c.shapeConfidence?.toFixed(2)})`);
+        }
+    });
+
+    return finalClusters;
 }
 
-// IMPROVED density-based clustering with better handling of small datasets
+// IMPROVED density-based clustering with FIXED neighbor logic
 function performImprovedDensityBasedClustering(points) {
     const clusters = [];
     const visited = new Set();
     const noise = new Set();
 
     const totalPoints = points.length;
-    const adaptiveEps = calculateAdaptiveEps(points);
     
-    // FIXED: More reasonable minPts for small datasets
+    // INTELLIGENT epsilon calculation based on point distribution
+    const adaptiveEps = calculateIntelligentEps(points);
+    
+    // FIXED minPts logic - account for the point itself in cluster formation
     let minPts;
-    if (totalPoints <= 2) {
-        minPts = 1; // Single points form clusters
-    } else if (totalPoints <= 5) {
-        minPts = 2; // Pairs can form clusters
+    if (totalPoints === 1) {
+        minPts = 0; // Single point = cluster (0 additional neighbors needed)
+    } else if (totalPoints <= 4) {
+        minPts = 1; // Need only 1 neighbor (+ itself = 2 point cluster minimum)
+    } else if (totalPoints <= 10) {
+        minPts = 2; // Need 2 neighbors (+ itself = 3 point cluster minimum)  
     } else {
-        minPts = Math.max(2, Math.floor(totalPoints * 0.03)); // 3% minimum for larger sets
+        minPts = Math.max(2, Math.floor(totalPoints * 0.04)); // 4% minimum for larger sets
     }
 
-    console.log(`   IMPROVED clustering params: eps=${adaptiveEps.toFixed(4)}, minPts=${minPts}`);
+    console.log(`   INTELLIGENT clustering params: eps=${adaptiveEps.toFixed(4)}, minPts=${minPts}+1, total=${totalPoints}`);
 
     for (let i = 0; i < points.length; i++) {
         if (visited.has(i)) continue;
 
         visited.add(i);
         const neighbors = findNeighbors(points, i, adaptiveEps);
+        
+        console.log(`   Point ${i}: found ${neighbors.length} neighbors (need ${minPts})`);
 
-        if (neighbors.length < minPts) {
-            // FIXED: For small datasets, treat isolated points as single-point clusters
-            if (totalPoints <= 5) {
-                clusters.push([points[i]]);
-                console.log(`   Created single-point cluster for point ${i}`);
-            } else {
-                noise.add(i);
-            }
-        } else {
+        // FIXED: Use >= instead of < for neighbor comparison
+        if (neighbors.length >= minPts) {
+            // This point can start a cluster
             const cluster = [];
             expandCluster(points, i, neighbors, cluster, visited, adaptiveEps, minPts);
             if (cluster.length > 0) {
                 clusters.push(cluster);
+                console.log(`   ✅ Created cluster with ${cluster.length} points (started from point ${i})`);
+            }
+        } else {
+            // For small datasets, isolated points still form single-point clusters
+            if (totalPoints <= 10) {
+                clusters.push([points[i]]);
+                console.log(`   ➡️ Single-point cluster: point ${i} (${neighbors.length} neighbors < ${minPts} required)`);
+            } else {
+                noise.add(i);
+                console.log(`   ❌ Marked as noise: point ${i} (${neighbors.length} neighbors < ${minPts} required)`);
             }
         }
     }
 
-    console.log(`   IMPROVED result: ${clusters.length} clusters, ${noise.size} noise points`);
+    console.log(`   INTELLIGENT result: ${clusters.length} clusters, ${noise.size} noise points`);
+    
+    // Debug: log cluster details
+    clusters.forEach((cluster, idx) => {
+        const points_str = cluster.map(p => `(${p.x.toFixed(3)},${p.y.toFixed(3)})`).join(',');
+        console.log(`   Cluster ${idx}: ${cluster.length} points - ${points_str}`);
+    });
+    
     return clusters;
 }
 
-// Calculate adaptive epsilon based on k-distance
-function calculateAdaptiveEps(points) {
-    if (points.length < 4) return 0.15;
+// INTELLIGENT epsilon calculation with DEBUG logging
+function calculateIntelligentEps(points) {
+    if (points.length < 2) return 0.15;
 
-    const k = Math.max(3, Math.floor(Math.sqrt(points.length)));
+    // Calculate all pairwise distances
     const distances = [];
-
     for (let i = 0; i < points.length; i++) {
-        const pointDistances = [];
-        for (let j = 0; j < points.length; j++) {
-            if (i !== j) {
-                const dist = euclideanDistance(points[i], points[j]);
-                pointDistances.push(dist);
-            }
-        }
-        pointDistances.sort((a, b) => a - b);
-        if (pointDistances.length >= k) {
-            distances.push(pointDistances[k - 1]);
+        for (let j = i + 1; j < points.length; j++) {
+            const dist = euclideanDistance(points[i], points[j]);
+            distances.push(dist);
+            console.log(`   Distance between point ${i}(${points[i].x.toFixed(3)},${points[i].y.toFixed(3)}) and point ${j}(${points[j].x.toFixed(3)},${points[j].y.toFixed(3)}): ${dist.toFixed(4)}`);
         }
     }
-
-    distances.sort((a, b) => a - b);
     
-    // Use elbow method approximation
-    const percentile = Math.floor(distances.length * 0.7);
-    return distances[percentile] || 0.1;
+    distances.sort((a, b) => a - b);
+    console.log(`   All distances sorted: [${distances.map(d => d.toFixed(4)).join(', ')}]`);
+    
+    if (distances.length === 0) return 0.15;
+    
+    let epsilon;
+    
+    // For small datasets, use a more generous epsilon
+    if (points.length <= 5) {
+        // Use median distance, but not too small
+        const median = distances[Math.floor(distances.length / 2)];
+        epsilon = Math.max(0.08, Math.min(0.25, median * 1.5));
+        console.log(`   Small dataset: median=${median.toFixed(4)}, epsilon=${epsilon.toFixed(4)}`);
+    } else if (points.length <= 10) {
+        // Use 30th percentile for small-medium datasets  
+        const percentile30 = distances[Math.floor(distances.length * 0.3)];
+        epsilon = Math.max(0.06, Math.min(0.20, percentile30 * 1.2));
+        console.log(`   Medium dataset: 30th percentile=${percentile30.toFixed(4)}, epsilon=${epsilon.toFixed(4)}`);
+    } else {
+        // Use k-distance method for larger datasets
+        const k = Math.max(3, Math.floor(Math.sqrt(points.length)));
+        const kDistances = [];
+        
+        for (let i = 0; i < points.length; i++) {
+            const pointDistances = [];
+            for (let j = 0; j < points.length; j++) {
+                if (i !== j) {
+                    const dist = euclideanDistance(points[i], points[j]);
+                    pointDistances.push(dist);
+                }
+            }
+            pointDistances.sort((a, b) => a - b);
+            if (pointDistances.length >= k) {
+                kDistances.push(pointDistances[k - 1]);
+            }
+        }
+        
+        kDistances.sort((a, b) => a - b);
+        const percentile70 = kDistances[Math.floor(kDistances.length * 0.7)];
+        epsilon = Math.max(0.05, Math.min(0.15, percentile70));
+        console.log(`   Large dataset: k=${k}, 70th percentile of k-distances=${percentile70.toFixed(4)}, epsilon=${epsilon.toFixed(4)}`);
+    }
+    
+    return epsilon;
 }
 
 // Find neighbors within epsilon distance with DEBUG logging
@@ -599,7 +634,7 @@ function expandCluster(points, pointIndex, neighbors, cluster, visited, eps, min
     }
 }
 
-// Calculate comprehensive cluster metrics
+// Calculate comprehensive cluster metrics with INTELLIGENT SHAPE DETECTION
 function calculateClusterMetrics(clusterPoints, totalPoints) {
     const count = clusterPoints.length;
     const percentage = Math.round((count / totalPoints) * 100);
@@ -611,8 +646,8 @@ function calculateClusterMetrics(clusterPoints, totalPoints) {
     // Calculate spatial metrics
     const spatialMetrics = calculateSpatialMetrics(clusterPoints, centroidX, centroidY);
 
-    // Calculate shape complexity
-    const shapeMetrics = calculateShapeComplexity(clusterPoints);
+    // INTELLIGENT SHAPE ANALYSIS - determine if circle or polygon is better
+    const shapeAnalysis = analyzeClusterShape(clusterPoints, centroidX, centroidY);
 
     return {
         x: centroidX,
@@ -620,8 +655,403 @@ function calculateClusterMetrics(clusterPoints, totalPoints) {
         count,
         percentage,
         ...spatialMetrics,
-        ...shapeMetrics
+        ...shapeAnalysis
     };
+}
+
+// INTELLIGENT SHAPE ANALYSIS - determines optimal representation
+function analyzeClusterShape(points, centroidX, centroidY) {
+    if (points.length === 1) {
+        return {
+            shapeType: 'circle',
+            circularity: 1.0,
+            eccentricity: 0,
+            irregularity: 0,
+            convexity: 1,
+            preferredSides: 8,
+            complexity: 0,
+            shapeConfidence: 1.0,
+            polygonPoints: null
+        };
+    }
+
+    // 1. CALCULATE SHAPE METRICS
+    const shapeMetrics = calculateAdvancedShapeMetrics(points, centroidX, centroidY);
+    
+    // 2. CIRCULARITY TEST - how well does a circle represent this cluster?
+    const circularityScore = calculateCircularityScore(points, centroidX, centroidY, shapeMetrics);
+    
+    // 3. DECISION MAKING - circle vs polygon
+    const useCircle = shouldUseCircularRepresentation(circularityScore, shapeMetrics, points.length);
+    
+    if (useCircle) {
+        console.log(`   📍 Cluster shape: CIRCLE (circularity: ${circularityScore.toFixed(2)}, confidence: ${(1 - shapeMetrics.irregularity).toFixed(2)})`);
+        return {
+            shapeType: 'circle',
+            circularity: circularityScore,
+            eccentricity: shapeMetrics.eccentricity,
+            irregularity: shapeMetrics.irregularity,
+            convexity: shapeMetrics.convexity,
+            preferredSides: 8,
+            complexity: shapeMetrics.complexity,
+            shapeConfidence: 1 - shapeMetrics.irregularity,
+            polygonPoints: null
+        };
+    } else {
+        // 4. GENERATE INTELLIGENT POLYGON
+        const polygonShape = generateIntelligentPolygon(points, centroidX, centroidY, shapeMetrics);
+        console.log(`   🔷 Cluster shape: ${polygonShape.type.toUpperCase()} (${polygonShape.sides} sides, confidence: ${polygonShape.confidence.toFixed(2)})`);
+        return {
+            shapeType: polygonShape.type,
+            circularity: circularityScore,
+            eccentricity: shapeMetrics.eccentricity,
+            irregularity: shapeMetrics.irregularity,
+            convexity: shapeMetrics.convexity,
+            preferredSides: polygonShape.sides,
+            complexity: shapeMetrics.complexity,
+            shapeConfidence: polygonShape.confidence,
+            polygonPoints: polygonShape.points,
+            shapeOrientation: polygonShape.orientation
+        };
+    }
+}
+
+// ADVANCED SHAPE METRICS calculation
+function calculateAdvancedShapeMetrics(points, centroidX, centroidY) {
+    // Calculate distances from centroid
+    const distances = points.map(p => 
+        Math.sqrt(Math.pow(p.x - centroidX, 2) + Math.pow(p.y - centroidY, 2))
+    );
+
+    const avgDistance = distances.reduce((sum, d) => sum + d, 0) / distances.length;
+    const maxDistance = Math.max(...distances);
+    const minDistance = Math.min(...distances);
+    
+    // Standard deviation of distances (measures how "circular" the distribution is)
+    const distanceVariance = distances.reduce((sum, d) => sum + Math.pow(d - avgDistance, 2), 0) / distances.length;
+    const distanceStdDev = Math.sqrt(distanceVariance);
+
+    // Eccentricity calculation using covariance matrix
+    const eccentricity = calculateEccentricity(points);
+    
+    // Convex hull analysis
+    const hull = calculateConvexHull(points);
+    const hullArea = calculatePolygonArea(hull);
+    const boundingArea = calculateBoundingArea(points);
+    const convexity = hullArea / (boundingArea || 0.001);
+    
+    // Irregularity measure (how much the shape deviates from a perfect form)
+    const irregularity = Math.min(1, (distanceStdDev / avgDistance) + (1 - convexity) * 0.5);
+    
+    // Overall complexity score
+    const complexity = (irregularity * 0.4) + (eccentricity * 0.4) + ((1 - convexity) * 0.2);
+
+    return {
+        avgDistance,
+        maxDistance,
+        minDistance,
+        distanceStdDev,
+        eccentricity,
+        convexity,
+        irregularity,
+        complexity,
+        hull,
+        hullArea,
+        boundingArea
+    };
+}
+
+// CIRCULARITY SCORE - how well would a circle represent this cluster?
+function calculateCircularityScore(points, centroidX, centroidY, metrics) {
+    if (points.length === 1) return 1.0;
+
+    // Factor 1: Distance variation from centroid (perfect circle = all equal distances)
+    const distanceConsistency = 1 - Math.min(1, metrics.distanceStdDev / metrics.avgDistance);
+    
+    // Factor 2: Convexity (circles are convex)
+    const convexityScore = metrics.convexity;
+    
+    // Factor 3: Aspect ratio (circles have aspect ratio = 1)
+    const aspectRatioScore = 1 - Math.min(1, metrics.eccentricity);
+    
+    // Factor 4: Area efficiency (how much of bounding area is used)
+    const areaEfficiency = metrics.hullArea / (Math.PI * Math.pow(metrics.maxDistance, 2));
+    
+    // Weighted combination
+    const circularity = (
+        distanceConsistency * 0.4 +
+        convexityScore * 0.25 +
+        aspectRatioScore * 0.25 +
+        Math.min(1, areaEfficiency) * 0.1
+    );
+
+    return Math.max(0, Math.min(1, circularity));
+}
+
+// DECISION: Should we use circular representation?
+function shouldUseCircularRepresentation(circularityScore, metrics, pointCount) {
+    // Thresholds for using circles
+    const CIRCULARITY_THRESHOLD = 0.7;  // High circularity required
+    const LOW_COMPLEXITY_THRESHOLD = 0.3; // Low complexity preferred
+    const MIN_POINTS_FOR_POLYGON = 3;    // Need enough points for meaningful polygon
+    
+    // Always use circle for very small clusters
+    if (pointCount < MIN_POINTS_FOR_POLYGON) return true;
+    
+    // Use circle if highly circular
+    if (circularityScore >= CIRCULARITY_THRESHOLD) return true;
+    
+    // Use circle if low complexity regardless of circularity
+    if (metrics.complexity <= LOW_COMPLEXITY_THRESHOLD) return true;
+    
+    // Use circle if moderately circular AND low irregularity
+    if (circularityScore >= 0.5 && metrics.irregularity <= 0.4) return true;
+    
+    // Otherwise, use polygon for better representation
+    return false;
+}
+
+// GENERATE INTELLIGENT POLYGON based on cluster shape
+function generateIntelligentPolygon(points, centroidX, centroidY, metrics) {
+    const pointCount = points.length;
+    
+    // Determine polygon type and complexity
+    let polygonType, sides, confidence;
+    
+    if (pointCount <= 4) {
+        // Small clusters: simple polygons
+        polygonType = 'simple_polygon';
+        sides = Math.max(pointCount, 4);
+        confidence = 0.8;
+    } else if (metrics.convexity >= 0.8 && metrics.irregularity <= 0.5) {
+        // Regular-ish distribution: regular polygon
+        polygonType = 'regular_polygon';
+        sides = calculateOptimalSides(metrics, pointCount);
+        confidence = 0.9 - metrics.irregularity;
+    } else if (metrics.eccentricity > 0.6) {
+        // Elongated distribution: elliptical polygon  
+        polygonType = 'elliptical_polygon';
+        sides = Math.max(6, Math.min(12, Math.floor(pointCount * 0.8)));
+        confidence = 0.8;
+    } else {
+        // Irregular distribution: hull-based or adaptive polygon
+        polygonType = metrics.convexity >= 0.6 ? 'adaptive_polygon' : 'hull_polygon';
+        sides = Math.max(5, Math.min(16, Math.floor(pointCount * 0.7)));
+        confidence = 0.7 + metrics.convexity * 0.2;
+    }
+
+    // Generate polygon points based on type
+    let polygonPoints;
+    let orientation = 0;
+    
+    switch (polygonType) {
+        case 'hull_polygon':
+            polygonPoints = generateHullBasedPolygon(points, metrics.hull);
+            break;
+            
+        case 'elliptical_polygon':
+            const ellipseParams = calculateEllipseParameters(points, centroidX, centroidY);
+            polygonPoints = generateEllipticalPolygon(centroidX, centroidY, ellipseParams, sides);
+            orientation = ellipseParams.orientation;
+            break;
+            
+        case 'adaptive_polygon':
+            polygonPoints = generateAdaptivePolygon(points, centroidX, centroidY, sides, metrics);
+            break;
+            
+        default: // regular_polygon, simple_polygon
+            polygonPoints = generateRegularPolygon(centroidX, centroidY, metrics.maxDistance, sides);
+            break;
+    }
+
+    return {
+        type: polygonType,
+        sides: sides,
+        points: polygonPoints,
+        confidence: confidence,
+        orientation: orientation
+    };
+}
+
+// Calculate optimal number of sides for regular polygons
+function calculateOptimalSides(metrics, pointCount) {
+    // Base sides on complexity and point count
+    const complexityFactor = Math.min(1, metrics.complexity * 2);
+    const countFactor = Math.min(1, pointCount / 20);
+    
+    const baseSides = 6; // Hexagon as default
+    const additionalSides = Math.floor((complexityFactor + countFactor) * 6);
+    
+    return Math.max(4, Math.min(14, baseSides + additionalSides));
+}
+
+// GENERATE HULL-BASED POLYGON (follows actual point distribution)
+function generateHullBasedPolygon(points, hull) {
+    if (!hull || hull.length < 3) {
+        // Fallback to regular polygon
+        const centroidX = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+        const centroidY = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+        const avgDistance = points.reduce((sum, p) => 
+            sum + Math.sqrt(Math.pow(p.x - centroidX, 2) + Math.pow(p.y - centroidY, 2)), 0) / points.length;
+        return generateRegularPolygon(centroidX, centroidY, avgDistance, 6);
+    }
+    
+    // Use convex hull directly, but smooth it slightly
+    return smoothPolygonPoints(hull, 0.1);
+}
+
+// GENERATE ELLIPTICAL POLYGON (for elongated clusters)
+function generateEllipticalPolygon(centerX, centerY, ellipseParams, sides) {
+    const points = [];
+    const angleStep = (2 * Math.PI) / sides;
+    
+    for (let i = 0; i < sides; i++) {
+        const angle = i * angleStep;
+        
+        // Ellipse equation with rotation
+        const localX = ellipseParams.majorAxis * Math.cos(angle);
+        const localY = ellipseParams.minorAxis * Math.sin(angle);
+        
+        // Rotate by orientation
+        const rotatedX = localX * Math.cos(ellipseParams.orientation) - localY * Math.sin(ellipseParams.orientation);
+        const rotatedY = localX * Math.sin(ellipseParams.orientation) + localY * Math.cos(ellipseParams.orientation);
+        
+        points.push({
+            x: centerX + rotatedX,
+            y: centerY + rotatedY
+        });
+    }
+    
+    return points;
+}
+
+// GENERATE ADAPTIVE POLYGON (adapts to point density in different directions)
+function generateAdaptivePolygon(points, centerX, centerY, sides, metrics) {
+    const polygonPoints = [];
+    const angleStep = (2 * Math.PI) / sides;
+    
+    for (let i = 0; i < sides; i++) {
+        const angle = i * angleStep;
+        
+        // Calculate ideal radius in this direction based on actual point distribution
+        const idealRadius = calculateDirectionalRadius(points, centerX, centerY, angle, metrics.maxDistance);
+        
+        const x = centerX + idealRadius * Math.cos(angle);
+        const y = centerY + idealRadius * Math.sin(angle);
+        
+        polygonPoints.push({ x, y });
+    }
+    
+    return smoothPolygonPoints(polygonPoints, 0.2);
+}
+
+// GENERATE REGULAR POLYGON (fallback)
+function generateRegularPolygon(centerX, centerY, radius, sides) {
+    const points = [];
+    const angleStep = (2 * Math.PI) / sides;
+    
+    for (let i = 0; i < sides; i++) {
+        const angle = i * angleStep;
+        points.push({
+            x: centerX + radius * Math.cos(angle),
+            y: centerY + radius * Math.sin(angle)
+        });
+    }
+    
+    return points;
+}
+
+// Calculate ellipse parameters for elongated clusters
+function calculateEllipseParameters(points, centerX, centerY) {
+    // Calculate covariance matrix
+    let cxx = 0, cyy = 0, cxy = 0;
+    
+    for (const point of points) {
+        const dx = point.x - centerX;
+        const dy = point.y - centerY;
+        cxx += dx * dx;
+        cyy += dy * dy;
+        cxy += dx * dy;
+    }
+    
+    cxx /= points.length;
+    cyy /= points.length;
+    cxy /= points.length;
+    
+    // Calculate eigenvalues and eigenvectors
+    const trace = cxx + cyy;
+    const det = cxx * cyy - cxy * cxy;
+    const discriminant = trace * trace - 4 * det;
+    
+    if (discriminant < 0) {
+        // Fallback to circular
+        const avgDist = Math.sqrt(cxx + cyy);
+        return {
+            majorAxis: avgDist,
+            minorAxis: avgDist,
+            orientation: 0
+        };
+    }
+    
+    const lambda1 = (trace + Math.sqrt(discriminant)) / 2;
+    const lambda2 = (trace - Math.sqrt(discriminant)) / 2;
+    
+    const majorAxis = Math.sqrt(Math.max(lambda1, lambda2)) * 2;
+    const minorAxis = Math.sqrt(Math.min(lambda1, lambda2)) * 2;
+    
+    // Calculate orientation (angle of major axis)
+    let orientation = 0;
+    if (Math.abs(cxy) > 1e-10) {
+        orientation = Math.atan2(lambda1 - cxx, cxy);
+    } else if (cxx > cyy) {
+        orientation = 0;
+    } else {
+        orientation = Math.PI / 2;
+    }
+    
+    return { majorAxis, minorAxis, orientation };
+}
+
+// Calculate ideal radius in a specific direction
+function calculateDirectionalRadius(points, centerX, centerY, direction, maxRadius) {
+    const directionVector = { x: Math.cos(direction), y: Math.sin(direction) };
+    let maxProjection = 0;
+    
+    for (const point of points) {
+        const toPoint = { x: point.x - centerX, y: point.y - centerY };
+        
+        // Project point onto direction vector
+        const projection = toPoint.x * directionVector.x + toPoint.y * directionVector.y;
+        
+        if (projection > 0) { // Only consider points in the positive direction
+            maxProjection = Math.max(maxProjection, projection);
+        }
+    }
+    
+    // Add some padding and ensure minimum radius
+    return Math.max(maxRadius * 0.3, Math.min(maxRadius, maxProjection * 1.1));
+}
+
+// Smooth polygon points to reduce jaggedness
+function smoothPolygonPoints(points, smoothingFactor) {
+    if (points.length < 3 || smoothingFactor <= 0) return points;
+    
+    const smoothed = [];
+    const n = points.length;
+    
+    for (let i = 0; i < n; i++) {
+        const prev = points[(i - 1 + n) % n];
+        const curr = points[i];
+        const next = points[(i + 1) % n];
+        
+        // Weighted average with neighbors
+        const smoothX = curr.x * (1 - smoothingFactor) + (prev.x + next.x) * smoothingFactor / 2;
+        const smoothY = curr.y * (1 - smoothingFactor) + (prev.y + next.y) * smoothingFactor / 2;
+        
+        smoothed.push({ x: smoothX, y: smoothY });
+    }
+    
+    return smoothed;
 }
 
 // Calculate spatial dispersion metrics
@@ -654,39 +1084,71 @@ function calculateSpatialMetrics(points, centroidX, centroidY) {
     };
 }
 
-// Calculate shape complexity for adaptive rendering
-function calculateShapeComplexity(points) {
-    if (points.length < 3) {
-        return {
-            complexity: 0,
-            eccentricity: 0,
-            irregularity: 0,
-            preferredSides: 8
-        };
+// INTELLIGENT visual size calculation based on multiple factors
+function calculateIntelligentVisualSize(cluster, allClusters) {
+    const percentage = cluster.percentage || 0;
+    const count = cluster.count || 1;
+    const density = cluster.density || 1;
+    const spread = cluster.spread || 0.05;
+    const compactness = cluster.compactness || 0.5;
+
+    // Size bounds
+    const MIN_SIZE = 35;  // Minimum readable size
+    const MAX_SIZE = 280; // Maximum before it becomes unwieldy
+    const OPTIMAL_SIZE = 85; // Sweet spot for most clusters
+
+    // 1. BASE SIZE from click percentage (primary factor)
+    let baseSize;
+    if (percentage >= 50) {
+        baseSize = OPTIMAL_SIZE + (percentage - 50) * 2.5; // Large clusters get bigger
+    } else if (percentage >= 25) {
+        baseSize = OPTIMAL_SIZE * (0.7 + (percentage - 25) * 0.012); // 70-100% of optimal
+    } else if (percentage >= 10) {
+        baseSize = OPTIMAL_SIZE * (0.5 + (percentage - 10) * 0.0133); // 50-70% of optimal
+    } else {
+        baseSize = MIN_SIZE + (percentage * 2); // Small clusters scale linearly
     }
 
-    // Calculate convex hull and compare to actual distribution
-    const hull = calculateConvexHull(points);
-    const hullArea = calculatePolygonArea(hull);
-    const boundingArea = calculateBoundingArea(points);
+    // 2. DENSITY ADJUSTMENT (secondary factor)
+    // High density = more compact = slightly smaller
+    // Low density = spread out = slightly larger
+    const densityMultiplier = Math.pow(Math.max(0.3, Math.min(3.0, density)), 0.25);
+    
+    // 3. SPATIAL SPREAD ADJUSTMENT (tertiary factor)
+    // More spread = larger visual representation
+    const spreadBonus = Math.min(40, spread * 800); // Max +40px for spread
+    
+    // 4. COMPACTNESS ADJUSTMENT
+    // Less compact = needs more visual space
+    const compactnessMultiplier = Math.max(0.8, Math.min(1.3, 1.2 - compactness * 0.4));
+    
+    // 5. COUNT BONUS (ensures minimum representation for multi-click clusters)
+    const countBonus = count > 1 ? Math.log10(count + 1) * 12 : 0;
+    
+    // 6. RELATIVE SCALING (maintain proportions between clusters)
+    let relativeScale = 1.0;
+    if (allClusters.length > 1) {
+        const maxPercentage = Math.max(...allClusters.map(c => c.percentage || 0));
+        const minPercentage = Math.min(...allClusters.map(c => c.percentage || 0));
+        
+        if (maxPercentage > minPercentage) {
+            const range = maxPercentage - minPercentage;
+            const position = (percentage - minPercentage) / range;
+            
+            // Ensure largest cluster is at least 1.5x the smallest
+            relativeScale = 0.7 + (position * 0.8); // 0.7x to 1.5x range
+        }
+    }
 
-    const convexity = hullArea / (boundingArea || 0.001);
-    const irregularity = 1 - convexity;
+    // COMBINE ALL FACTORS
+    let finalSize = (baseSize + spreadBonus + countBonus) * densityMultiplier * compactnessMultiplier * relativeScale;
 
-    // Calculate eccentricity (elongation)
-    const eccentricity = calculateEccentricity(points);
+    // ENFORCE ABSOLUTE BOUNDS
+    finalSize = Math.max(MIN_SIZE, Math.min(MAX_SIZE, finalSize));
 
-    // Determine preferred number of sides for polygon rendering
-    const complexity = irregularity * 0.6 + eccentricity * 0.4;
-    const preferredSides = Math.round(8 + complexity * 8); // 8-16 sides
+    console.log(`   Size calc for ${percentage}%: base=${baseSize.toFixed(0)}, density×${densityMultiplier.toFixed(2)}, spread+${spreadBonus.toFixed(0)}, final=${finalSize.toFixed(0)}px`);
 
-    return {
-        complexity,
-        eccentricity,
-        irregularity,
-        convexity,
-        preferredSides: Math.max(6, Math.min(20, preferredSides))
-    };
+    return Math.round(finalSize);
 }
 
 // INTELLIGENT cluster splitting based on visual size and complexity
@@ -858,16 +1320,6 @@ function rebalanceClusters(clusters, targetAvgSize) {
     }
     
     return rebalanced;
-}
-
-// Estimate visual size for splitting decisions
-function calculateEstimatedVisualSize(cluster) {
-    const baseSize = 80; // Base minimum size
-    const volumeSize = cluster.percentage * 3; // Size from click volume
-    const spatialSize = cluster.radius * 300; // Size from spatial spread
-    const densityMultiplier = Math.sqrt(cluster.density || 1);
-
-    return baseSize + volumeSize + spatialSize * densityMultiplier;
 }
 
 // Utility functions
@@ -1194,7 +1646,7 @@ process.on('SIGTERM', () => {
 
 // Start server
 httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 ClickMap EBS v3.3.1 FIXED CLUSTERING - Single Clicks Work!');
+    console.log('🚀 ClickMap EBS v3.4.0 INTELLIGENT SHAPE ANALYSIS - Adaptive Shape Detection!');
     console.log(`📡 HTTP Server: https://smart-clickmap-backend.onrender.com`);
     console.log(`🔗 WebSocket URL: wss://smart-clickmap-backend.onrender.com/ws/[CHANNEL_ID]`);
     console.log(`🎯 Health check: https://smart-clickmap-backend.onrender.com/health`);
@@ -1202,6 +1654,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`🧪 Test endpoint: https://smart-clickmap-backend.onrender.com/ws-test/167556274`);
     console.log(`📊 Game state: ${gameState.running ? 'RUNNING' : 'STOPPED'}`);
     console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🎨 Shape Analysis: Circles ⭕ Ellipses 🥚 Hulls 🔷 Adaptive Polygons 🔶`);
 
     // Final status verification
     setTimeout(() => {
@@ -1212,7 +1665,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
         console.log(`   WebSocket clients: ${wss ? wss.clients.size : 0}`);
         console.log(`   Connected channels: ${connectedClients.size}`);
         console.log(`   Single port mode: ${PORT}`);
-        console.log('🎉 FIXED clustering server fully operational - single clicks work!');
+        console.log('🎉 INTELLIGENT SHAPE-ADAPTIVE clustering server fully operational!');
     }, 1000);
 });
 

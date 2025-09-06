@@ -1,5 +1,5 @@
 // frontend/overlay/overlay.js
-// Intelligent overlay renderer for advanced clustering system with dynamic shape detection
+// Simplified overlay renderer for circle-only clusters with proper merging
 
 (function () {
     'use strict';
@@ -45,8 +45,8 @@
         overlayRoot.appendChild(canvas);
     }
 
-    // ========== INTELLIGENT HEATMAP RENDERER WITH DYNAMIC SHAPES ==========
-    class IntelligentHeatmapRenderer {
+    // ========== SIMPLIFIED HEATMAP RENDERER - CIRCLES ONLY ==========
+    class SimplifiedHeatmapRenderer {
         constructor(canvas) {
             this.canvas = canvas;
             this.ctx = canvas.getContext('2d', { alpha: true });
@@ -54,8 +54,8 @@
 
             this.PERCENTAGE_THRESHOLD = 3;
             
-            // Enhanced animation system
-            this.springs = new Map(); // key -> {x,y,r,p,seed,shape,density}
+            // Simplified animation system
+            this.springs = new Map(); // key -> {x,y,r,p,seed}
             this.targets = new Map();
             this.animationId = null;
             this.lastTs = 0;
@@ -109,10 +109,6 @@
                     s.x.t = t.x; s.y.t = t.y; s.r.t = t.r; s.p.t = t.p;
                     this._stepSpring(s.x, dt); this._stepSpring(s.y, dt);
                     this._stepSpring(s.r, dt); this._stepSpring(s.p, dt);
-                    
-                    // Smoothly interpolate shape properties
-                    s.density = s.density + (t.density - s.density) * Math.min(1, dt * 4);
-                    s.eccentricity = s.eccentricity + (t.eccentricity - s.eccentricity) * Math.min(1, dt * 3);
                 }
 
                 this.render(ts / 1000);
@@ -139,16 +135,16 @@
             this.render(performance.now() / 1000);
         }
 
-        // ========== CLUSTER PROCESSING WITH INTELLIGENT SHAPES ==========
+        // ========== CLUSTER PROCESSING - SIMPLIFIED ==========
         updateClusters(newClusters) {
             const filtered = (newClusters || [])
                 .filter(c => (c.percentage || 0) >= this.PERCENTAGE_THRESHOLD);
 
-            console.log(`🎨 Rendering ${filtered.length} intelligent clusters with smart shapes`);
+            console.log(`🎨 Rendering ${filtered.length} circle clusters (simplified)`);
 
             const nextTargets = new Map();
             for (const c of filtered) {
-                // Use the backend's intelligent size calculation directly
+                // Use the backend's visual size calculation directly
                 const visualRadius = c.visualSize || this.fallbackSizeCalculation(c);
                 
                 const key = c.id ?? `${(c.x * 10000 | 0)}_${(c.y * 10000 | 0)}_${c.count | 0}`;
@@ -158,17 +154,7 @@
                     r: visualRadius, 
                     p: c.percentage || 0, 
                     count: c.count || 1,
-                    density: c.density || 1,
-                    eccentricity: c.eccentricity || 0,
-                    // NEW SHAPE PROPERTIES
-                    shapeType: c.shapeType || 'circle',
-                    polygonPoints: c.polygonPoints || null,
-                    shapeOrientation: c.shapeOrientation || 0,
-                    shapeConfidence: c.shapeConfidence || 1.0,
-                    preferredSides: c.preferredSides || 8,
-                    circularity: c.circularity || 1.0,
-                    complexity: c.complexity || 0,
-                    compactness: c.compactness || 0.5
+                    isTop: c.isTop || false
                 });
 
                 if (!this.springs.has(key)) {
@@ -178,18 +164,7 @@
                         y: this._spring(c.y, 9, 0.95),
                         r: this._spring(visualRadius, 12, 0.9),
                         p: this._spring(c.percentage || 0, 7, 1.0),
-                        seed,
-                        density: c.density || 1,
-                        eccentricity: c.eccentricity || 0,
-                        // Shape information
-                        shapeType: c.shapeType || 'circle',
-                        polygonPoints: c.polygonPoints || null,
-                        shapeOrientation: c.shapeOrientation || 0,
-                        shapeConfidence: c.shapeConfidence || 1.0,
-                        preferredSides: c.preferredSides || 8,
-                        circularity: c.circularity || 1.0,
-                        complexity: c.complexity || 0,
-                        compactness: c.compactness || 0.5
+                        seed
                     });
                 }
             }
@@ -208,17 +183,6 @@
                     s.y.x = s.y.t = t.y; s.y.v = 0;
                     s.r.x = s.r.t = t.r; s.r.v = 0;
                     s.p.x = s.p.t = t.p; s.p.v = 0;
-                    // Update shape properties
-                    s.density = t.density;
-                    s.eccentricity = t.eccentricity;
-                    s.shapeType = t.shapeType;
-                    s.polygonPoints = t.polygonPoints;
-                    s.shapeOrientation = t.shapeOrientation;
-                    s.shapeConfidence = t.shapeConfidence;
-                    s.preferredSides = t.preferredSides;
-                    s.circularity = t.circularity;
-                    s.complexity = t.complexity;
-                    s.compactness = t.compactness;
                 }
                 this.render(performance.now() / 1000);
             }
@@ -229,11 +193,10 @@
             const baseSize = 60;
             const percentage = cluster.percentage || 0;
             const activityBonus = Math.sqrt(percentage / 100) * 120;
-            const densityBonus = Math.min(40, (cluster.density || 1) * 8);
-            return Math.max(baseSize, Math.min(250, baseSize + activityBonus + densityBonus));
+            return Math.max(40, Math.min(200, baseSize + activityBonus));
         }
 
-        // ========== INTELLIGENT RENDERING ENGINE ==========
+        // ========== SIMPLIFIED RENDERING ENGINE ==========
         render(tSec = 0) {
             const W = this.canvas.width / (window.devicePixelRatio || 1);
             const H = this.canvas.height / (window.devicePixelRatio || 1);
@@ -249,17 +212,8 @@
                     radius: s.r.x, 
                     percentage: s.p.x, 
                     seed: s.seed,
-                    density: s.density,
-                    eccentricity: s.eccentricity,
-                    // SHAPE PROPERTIES
-                    shapeType: s.shapeType || 'circle',
-                    polygonPoints: s.polygonPoints,
-                    shapeOrientation: s.shapeOrientation || 0,
-                    shapeConfidence: s.shapeConfidence || 1.0,
-                    preferredSides: s.preferredSides || 8,
-                    circularity: s.circularity || 1.0,
-                    complexity: s.complexity || 0,
-                    compactness: s.compactness || 0.5
+                    count: target?.count || 1,
+                    isTop: target?.isTop || false
                 });
             }
             
@@ -268,329 +222,73 @@
 
             for (let i = 0; i < drawables.length; i++) {
                 const d = drawables[i];
-                const isTop = i === drawables.length - 1;
+                const isTop = d.isTop || (i === drawables.length - 1);
 
-                // Enhanced wobble based on cluster properties and shape confidence
-                const baseWobbleAmp = this.reduced ? 0 : 0.05;
-                const shapeStability = d.shapeConfidence || 1.0;
-                const wobbleAmp = baseWobbleAmp + (d.percentage / 100) * 0.08 + d.eccentricity * 0.04;
-                const stabilizedWobble = wobbleAmp * (2 - shapeStability); // More confident shapes wobble less
+                // Enhanced wobble based on cluster properties
+                const wobbleAmp = this.reduced ? 0 : Math.min(0.12, 0.05 + (d.percentage / 100) * 0.07);
+                const r = this.reduced ? d.radius : d.radius * this._wobble(tSec, d.seed, 1.0, wobbleAmp);
+
+                // Enhanced color calculation
+                const colors = this.calculateClusterColors(d, isTop);
+
+                // Render circle
+                this.renderCircularArea(d.cx, d.cy, r, colors);
                 
-                const r = this.reduced ? d.radius : d.radius * this._wobble(tSec, d.seed, 1.0, stabilizedWobble);
-
-                // Enhanced color calculation based on shape properties
-                const colors = this.calculateEnhancedClusterColors(d, isTop);
-
-                // Render based on intelligent shape type
-                this.renderClusterShape(d, r, colors, tSec, isTop);
-                
-                // Render label with shape-aware positioning
+                // Render label
                 this._renderPercentageLabelCanvas(d.cx, d.cy, Math.round(d.percentage), r, isTop);
             }
         }
 
-        calculateEnhancedClusterColors(drawable, isTop) {
+        calculateClusterColors(drawable, isTop) {
             const percentage = drawable.percentage;
-            const density = drawable.density;
-            const shapeConfidence = drawable.shapeConfidence || 1.0;
-            const shapeType = drawable.shapeType || 'circle';
-            
-            // Base color intensity on confidence - more confident shapes are more vibrant
-            const confidenceBoost = 0.8 + (shapeConfidence * 0.2);
             
             if (isTop) {
-                // Top cluster: cyan with shape-based intensity
-                const intensity = Math.min(1, (0.6 + density * 0.1) * confidenceBoost);
+                // Top cluster: cyan
+                const intensity = Math.min(1, 0.7 + percentage * 0.005);
                 return {
-                    fill: `rgba(0, 255, 255, ${(0.15 + intensity * 0.15)})`,
-                    border: `rgba(0, 255, 255, ${(0.7 + intensity * 0.2)})`,
-                    inner: `rgba(0, 255, 255, ${0.3 * confidenceBoost})`
+                    fill: `rgba(0, 255, 255, ${0.15 + intensity * 0.15})`,
+                    border: `rgba(0, 255, 255, ${0.7 + intensity * 0.2})`,
+                    inner: `rgba(0, 255, 255, 0.3)`
                 };
             } else if (percentage >= 25) {
-                // High percentage: intense purple with shape distinction
-                const intensity = Math.min(1, percentage / 50 * confidenceBoost);
-                const shapeAlpha = shapeType === 'circle' ? 1.0 : 0.95; // Slight distinction for polygons
+                // High percentage: intense purple
+                const intensity = Math.min(1, percentage / 50);
                 return {
-                    fill: `rgba(147, 51, 234, ${(0.2 + intensity * 0.15) * shapeAlpha})`,
-                    border: `rgba(147, 51, 234, ${(0.8 + intensity * 0.15) * shapeAlpha})`,
-                    inner: `rgba(147, 51, 234, ${0.4 * confidenceBoost})`
+                    fill: `rgba(147, 51, 234, ${0.2 + intensity * 0.15})`,
+                    border: `rgba(147, 51, 234, ${0.8 + intensity * 0.15})`,
+                    inner: `rgba(147, 51, 234, 0.4)`
                 };
             } else if (percentage >= 15) {
                 // Medium percentage: standard purple
                 return {
-                    fill: `rgba(147, 51, 234, ${0.25 * confidenceBoost})`,
-                    border: `rgba(147, 51, 234, ${0.9 * confidenceBoost})`,
-                    inner: `rgba(147, 51, 234, ${0.35 * confidenceBoost})`
+                    fill: 'rgba(147, 51, 234, 0.25)',
+                    border: 'rgba(147, 51, 234, 0.9)',
+                    inner: 'rgba(147, 51, 234, 0.35)'
                 };
             } else {
                 // Lower percentage: subtle purple
                 return {
-                    fill: `rgba(147, 51, 234, ${0.2 * confidenceBoost})`,
-                    border: `rgba(147, 51, 234, ${0.7 * confidenceBoost})`,
-                    inner: `rgba(147, 51, 234, ${0.25 * confidenceBoost})`
+                    fill: 'rgba(147, 51, 234, 0.2)',
+                    border: 'rgba(147, 51, 234, 0.7)',
+                    inner: 'rgba(147, 51, 234, 0.25)'
                 };
             }
         }
 
-        // ========== INTELLIGENT SHAPE RENDERING ==========
-        renderClusterShape(drawable, radius, colors, tSec, isTop) {
-            const { cx, cy, shapeType, polygonPoints, shapeOrientation } = drawable;
-
-            console.log(`🎨 Rendering ${shapeType} cluster at (${cx.toFixed(0)}, ${cy.toFixed(0)})`);
-
-            switch (shapeType) {
-                case 'hull_polygon':
-                    this.renderHullPolygon(cx, cy, radius, colors, polygonPoints, tSec, drawable.seed);
-                    break;
-                    
-                case 'elliptical_polygon':
-                    this.renderEllipticalPolygon(cx, cy, radius, colors, polygonPoints, shapeOrientation || 0, tSec, drawable.seed);
-                    break;
-                    
-                case 'adaptive_polygon':
-                    this.renderAdaptivePolygon(cx, cy, radius, colors, polygonPoints, tSec, drawable.seed);
-                    break;
-                    
-                case 'regular_polygon':
-                    const sides = drawable.preferredSides || 8;
-                    this.renderRegularPolygonArea(cx, cy, radius, colors, tSec, drawable.seed, sides, drawable.eccentricity || 0);
-                    break;
-                    
-                case 'simple_polygon':
-                    this.renderSimplePolygon(cx, cy, radius, colors, polygonPoints, tSec, drawable.seed);
-                    break;
-                    
-                default: // 'circle'
-                    this.renderCircularArea(cx, cy, radius, colors);
-                    break;
-            }
-        }
-
-        // RENDER HULL-BASED POLYGON (follows actual point distribution)
-        renderHullPolygon(cx, cy, radius, colors, hullPoints, tSec, seed) {
-            if (!hullPoints || hullPoints.length < 3) {
-                this.renderCircularArea(cx, cy, radius, colors);
-                return;
-            }
-
-            const W = this.canvas.width / (window.devicePixelRatio || 1);
-            const H = this.canvas.height / (window.devicePixelRatio || 1);
-
-            this.ctx.beginPath();
-            
-            // Scale hull points to screen coordinates relative to cluster center
-            const scaledPoints = hullPoints.map((point, i) => {
-                // Add slight wobble for organic feel
-                const wobble = this.reduced ? 1 : this._wobble(tSec + i * 0.1, seed * 0.91, 1.0, 0.04);
-                
-                return {
-                    x: point.x * W * wobble,
-                    y: point.y * H * wobble
-                };
-            });
-
-            // Draw smooth path through hull points
-            this.ctx.moveTo(scaledPoints[0].x, scaledPoints[0].y);
-            
-            for (let i = 1; i < scaledPoints.length; i++) {
-                const current = scaledPoints[i];
-                const next = scaledPoints[(i + 1) % scaledPoints.length];
-                
-                // Smooth curve
-                const midX = (current.x + next.x) / 2;
-                const midY = (current.y + next.y) / 2;
-                this.ctx.quadraticCurveTo(current.x, current.y, midX, midY);
-            }
-            
-            // Close the path
-            this.ctx.quadraticCurveTo(
-                scaledPoints[0].x, scaledPoints[0].y,
-                scaledPoints[0].x, scaledPoints[0].y
-            );
-            
-            this.ctx.closePath();
-
-            // Fill and stroke
-            this.ctx.fillStyle = colors.fill;
-            this.ctx.fill();
-
-            this.ctx.strokeStyle = colors.border;
-            this.ctx.lineWidth = 3;
-            this.ctx.stroke();
-
-            // Inner detail
-            this.ctx.strokeStyle = colors.inner;
-            this.ctx.lineWidth = 1.5;
-            this.ctx.stroke();
-        }
-
-        // RENDER ELLIPTICAL POLYGON (for elongated clusters)
-        renderEllipticalPolygon(cx, cy, radius, colors, ellipsePoints, orientation, tSec, seed) {
-            if (!ellipsePoints || ellipsePoints.length < 3) {
-                this.renderCircularArea(cx, cy, radius, colors);
-                return;
-            }
-
-            const W = this.canvas.width / (window.devicePixelRatio || 1);
-            const H = this.canvas.height / (window.devicePixelRatio || 1);
-
-            this.ctx.save();
-            this.ctx.translate(cx, cy);
-            if (orientation) this.ctx.rotate(orientation);
-
-            this.ctx.beginPath();
-            
-            ellipsePoints.forEach((point, i) => {
-                // Convert from normalized coordinates and add subtle animation
-                const wobble = this.reduced ? 1 : this._wobble(tSec + i * 0.08, seed * 0.67, 1.0, 0.03);
-                const localX = (point.x - cx) * W/cx * wobble;
-                const localY = (point.y - cy) * H/cy * wobble;
-                
-                if (i === 0) {
-                    this.ctx.moveTo(localX, localY);
-                } else {
-                    this.ctx.lineTo(localX, localY);
-                }
-            });
-            
-            this.ctx.closePath();
-
-            // Fill and stroke
-            this.ctx.fillStyle = colors.fill;
-            this.ctx.fill();
-
-            this.ctx.strokeStyle = colors.border;
-            this.ctx.lineWidth = 3;
-            this.ctx.stroke();
-
-            this.ctx.restore();
-        }
-
-        // RENDER ADAPTIVE POLYGON (adapts to density in different directions)
-        renderAdaptivePolygon(cx, cy, radius, colors, adaptivePoints, tSec, seed) {
-            if (!adaptivePoints || adaptivePoints.length < 3) {
-                this.renderCircularArea(cx, cy, radius, colors);
-                return;
-            }
-
-            const W = this.canvas.width / (window.devicePixelRatio || 1);
-            const H = this.canvas.height / (window.devicePixelRatio || 1);
-
-            this.ctx.beginPath();
-            
-            adaptivePoints.forEach((point, i) => {
-                // Enhanced wobble that varies per vertex for organic feel
-                const personalWobble = this._wobble(tSec + i * 0.15, seed * (0.5 + i * 0.1), 1.0, 0.06);
-                const globalWobble = this._wobble(tSec * 0.7, seed * 0.83, 1.0, 0.03);
-                
-                const wobble = globalWobble * personalWobble;
-                const x = point.x * W * wobble;
-                const y = point.y * H * wobble;
-                
-                if (i === 0) {
-                    this.ctx.moveTo(x, y);
-                } else {
-                    this.ctx.lineTo(x, y);
-                }
-            });
-            
-            this.ctx.closePath();
-
-            // Fill and stroke
-            this.ctx.fillStyle = colors.fill;
-            this.ctx.fill();
-
-            this.ctx.strokeStyle = colors.border;
-            this.ctx.lineWidth = 3;
-            this.ctx.stroke();
-
-            // Add extra inner ring for complex adaptive shapes
-            this.ctx.strokeStyle = colors.inner;
-            this.ctx.lineWidth = 1;
-            this.ctx.stroke();
-        }
-
-        // RENDER SIMPLE POLYGON (for small clusters)
-        renderSimplePolygon(cx, cy, radius, colors, polygonPoints, tSec, seed) {
-            if (!polygonPoints || polygonPoints.length < 3) {
-                // Fallback to regular polygon
-                this.renderRegularPolygonArea(cx, cy, radius, colors, tSec, seed, 6, 0);
-                return;
-            }
-
-            const W = this.canvas.width / (window.devicePixelRatio || 1);
-            const H = this.canvas.height / (window.devicePixelRatio || 1);
-
-            this.ctx.beginPath();
-            
-            polygonPoints.forEach((point, i) => {
-                const wobble = this.reduced ? 1 : this._wobble(tSec + i * 0.12, seed * 0.76, 1.0, 0.05);
-                const x = point.x * W * wobble;
-                const y = point.y * H * wobble;
-                
-                if (i === 0) {
-                    this.ctx.moveTo(x, y);
-                } else {
-                    this.ctx.lineTo(x, y);
-                }
-            });
-            
-            this.ctx.closePath();
-
-            // Fill and stroke
-            this.ctx.fillStyle = colors.fill;
-            this.ctx.fill();
-
-            this.ctx.strokeStyle = colors.border;
-            this.ctx.lineWidth = 2.5;
-            this.ctx.stroke();
-        }
-
-        // ENHANCED REGULAR POLYGON (now called by the shape system)
-        renderRegularPolygonArea(cx, cy, radius, colors, tSec, seed, sides, eccentricity) {
-            const s = Math.max(4, Math.min(20, sides));
-            
-            this.ctx.beginPath();
-            for (let i = 0; i <= s; i++) {
-                const a = (i / s) * Math.PI * 2;
-                
-                // Enhanced wobble with eccentricity influence
-                const wobbleIntensity = 0.04 + eccentricity * 0.08;
-                const local = this._wobble(tSec + i * 0.07, seed * 0.73, 1.0, wobbleIntensity);
-                
-                // Eccentricity creates oval-like distortion
-                const xScale = 1.0 + eccentricity * 0.3 * Math.cos(a * 2);
-                const yScale = 1.0 - eccentricity * 0.2 * Math.sin(a * 2);
-                
-                const rr = radius * (0.92 + 0.08 * local);
-                const x = cx + Math.cos(a) * rr * xScale;
-                const y = cy + Math.sin(a) * rr * yScale;
-                
-                if (i === 0) this.ctx.moveTo(x, y); 
-                else this.ctx.lineTo(x, y);
-            }
-            this.ctx.closePath();
-
-            // Fill and stroke
-            this.ctx.fillStyle = colors.fill;
-            this.ctx.fill();
-
-            this.ctx.strokeStyle = colors.border;
-            this.ctx.lineWidth = 3;
-            this.ctx.stroke();
-        }
-
+        // ========== CIRCLE RENDERING ==========
         renderCircularArea(cx, cy, radius, colors) {
+            // Main fill
             this.ctx.fillStyle = colors.fill;
             this.ctx.beginPath();
             this.ctx.arc(cx, cy, radius, 0, Math.PI * 2);
             this.ctx.fill();
 
+            // Primary border
             this.ctx.strokeStyle = colors.border;
             this.ctx.lineWidth = 3;
             this.ctx.stroke();
 
-            // Inner ring for depth
+            // Inner detail ring for depth
             this.ctx.strokeStyle = colors.inner;
             this.ctx.lineWidth = 1.5;
             this.ctx.beginPath();
@@ -667,10 +365,12 @@
                 ctx.save();
                 ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.85)' : 'rgba(147, 51, 234, 0.85)';
                 ctx.lineWidth = 2;
+                ctx.setLineDash([4, 2]); // Subtle dash for elegance
                 ctx.beginPath();
                 ctx.moveTo(sx, sy);
                 ctx.lineTo(ex, ey);
                 ctx.stroke();
+                ctx.setLineDash([]); // Reset line dash
                 ctx.restore();
             }
 
@@ -698,6 +398,13 @@
             ctx.lineWidth = outlineWidth;
             ctx.strokeText(str, layout.center.x, layout.center.y);
             
+            // Additional glow for top cluster
+            if (isTop) {
+                ctx.shadowColor = 'rgba(0, 255, 255, 0.5)';
+                ctx.shadowBlur = 15;
+                ctx.fillText(str, layout.center.x, layout.center.y);
+            }
+            
             ctx.restore();
         }
 
@@ -707,7 +414,7 @@
     }
 
     // ========== OVERLAY CONTROLLER ==========
-    class IntelligentOverlay {
+    class SimplifiedOverlay {
         constructor() {
             this.channelId = this.getChannelFromUrl();
             this.renderer = null;
@@ -726,7 +433,7 @@
             this.setupRenderer();
             this.connectWebSocket();
             this.startPolling();
-            console.log(`🎯 Intelligent overlay connected to: ${this.channelId}`);
+            console.log(`🎯 Simplified overlay connected to: ${this.channelId}`);
         }
 
         getChannelFromUrl() {
@@ -735,7 +442,7 @@
         }
 
         setupRenderer() {
-            this.renderer = new IntelligentHeatmapRenderer(canvas);
+            this.renderer = new SimplifiedHeatmapRenderer(canvas);
 
             const threshold = new URLSearchParams(window.location.search).get('threshold');
             if (threshold) this.renderer.setThreshold(parseInt(threshold, 10));
@@ -815,10 +522,10 @@
             const clusters = Array.isArray(data) ? data : (data?.clusters || data?.blobs || []);
             
             if (clusters.length > 0) {
-                console.log(`🎨 Updating visualization: ${clusters.length} clusters with intelligent shapes`);
+                console.log(`🎨 Updating visualization: ${clusters.length} circle clusters`);
                 clusters.forEach((c, i) => {
                     if (i < 3) { // Log first few for debugging
-                        console.log(`  Cluster ${i}: ${c.percentage}% (${c.count} clicks, shape: ${c.shapeType || 'circle'}, size: ${c.visualSize || 'calculated'})`);
+                        console.log(`  Circle ${i}: ${c.percentage}% (${c.count} clicks, size: ${c.visualSize || 'calculated'}px)`);
                     }
                 });
             }
@@ -834,10 +541,10 @@
     // ========== INITIALIZATION ==========
     function initialize() {
         try {
-            new IntelligentOverlay();
-            console.log('🎯 Intelligent shape-adaptive overlay loaded');
+            new SimplifiedOverlay();
+            console.log('🎯 Simplified circle-only overlay loaded');
         } catch (error) { 
-            console.error('Failed to initialize intelligent overlay:', error); 
+            console.error('Failed to initialize simplified overlay:', error); 
         }
     }
 

@@ -685,53 +685,69 @@ function calculateShapeComplexity(points) {
     };
 }
 
-// Smart cluster splitting for oversized clusters
+// INTELLIGENT cluster splitting based on visual size and complexity
 function smartClusterSplitting(cluster) {
-    // Define maximum visual size (this will be used in frontend)
-    const MAX_VISUAL_SIZE = 200; // pixels
-    const estimatedSize = calculateEstimatedVisualSize(cluster);
-
-    if (estimatedSize <= MAX_VISUAL_SIZE || cluster.points.length < 6) {
-        return [cluster]; // No splitting needed
+    const visualSize = cluster.visualSize || calculateIntelligentVisualSize(cluster, [cluster]);
+    const MAX_VISUAL_SIZE = 220; // Pixels - when to consider splitting
+    const MIN_POINTS_FOR_SPLIT = 4; // Need enough points to meaningfully split
+    
+    // Don't split if cluster is small enough or has too few points
+    if (visualSize <= MAX_VISUAL_SIZE || cluster.points.length < MIN_POINTS_FOR_SPLIT) {
+        return [cluster];
     }
 
-    console.log(`   Splitting large cluster: ${cluster.percentage}% (${cluster.points.length} points)`);
+    // Don't split very compact clusters (they're supposed to be together)
+    if (cluster.compactness > 0.8 && cluster.points.length < 8) {
+        return [cluster];
+    }
 
-    // Use k-means clustering to split into optimal sub-clusters
-    const numSubClusters = Math.ceil(estimatedSize / MAX_VISUAL_SIZE);
-    const subClusters = performKMeansSplitting(cluster.points, numSubClusters);
+    console.log(`   🔪 SPLITTING large cluster: ${cluster.percentage}% (${cluster.points.length} points, ${visualSize}px)`);
+
+    // Calculate optimal number of sub-clusters
+    const sizeFactor = visualSize / MAX_VISUAL_SIZE;
+    const complexityFactor = (cluster.eccentricity || 0) + (cluster.irregularity || 0);
+    
+    // More sub-clusters for larger, more complex shapes
+    const numSubClusters = Math.min(4, Math.max(2, Math.ceil(sizeFactor * (1 + complexityFactor))));
+    
+    console.log(`   Split factors: size=${sizeFactor.toFixed(2)}, complexity=${complexityFactor.toFixed(2)}, splits=${numSubClusters}`);
+
+    // Use improved k-means clustering for splitting
+    const subClusters = performIntelligentKMeansSplitting(cluster.points, numSubClusters);
 
     // Create new cluster objects for each sub-cluster
     const splitResults = subClusters.map((subPoints, index) => {
         const subMetrics = calculateClusterMetrics(subPoints, cluster.points.length);
+        
+        // Sub-clusters inherit some properties but are marked as splits
         return {
             id: `${cluster.id}_${index}`,
             ...subMetrics,
             points: subPoints,
             parentId: cluster.id,
             isSplit: true,
-            isTop: false
+            isTop: false,
+            // Inherit complexity from parent but reduce it
+            complexity: (cluster.complexity || 0) * 0.7,
+            eccentricity: (cluster.eccentricity || 0) * 0.6
         };
     });
 
-    console.log(`   Split into ${splitResults.length} sub-clusters`);
+    console.log(`   ✂️ Split into ${splitResults.length} sub-clusters: ${splitResults.map(s => s.percentage + '%').join(', ')}`);
     return splitResults;
 }
 
-// K-means clustering for splitting large clusters
-function performKMeansSplitting(points, k) {
+// IMPROVED k-means clustering with better initialization
+function performIntelligentKMeansSplitting(points, k) {
     if (k <= 1 || points.length <= k) return [points];
 
-    // Initialize centroids randomly
-    let centroids = [];
-    for (let i = 0; i < k; i++) {
-        const randomPoint = points[Math.floor(Math.random() * points.length)];
-        centroids.push({x: randomPoint.x, y: randomPoint.y});
-    }
-
+    // INTELLIGENT centroid initialization using k-means++
+    const centroids = initializeCentroidsKMeansPlusPlus(points, k);
+    
     let clusters = [];
     let iterations = 0;
-    const maxIterations = 20;
+    const maxIterations = 25;
+    let previousCentroids = null;
 
     while (iterations < maxIterations) {
         // Assign points to nearest centroid
@@ -753,13 +769,16 @@ function performKMeansSplitting(points, k) {
         }
 
         // Update centroids
+        previousCentroids = centroids.map(c => ({...c}));
         let converged = true;
+        
         for (let i = 0; i < centroids.length; i++) {
             if (clusters[i].length > 0) {
                 const newX = clusters[i].reduce((sum, p) => sum + p.x, 0) / clusters[i].length;
                 const newY = clusters[i].reduce((sum, p) => sum + p.y, 0) / clusters[i].length;
 
-                if (Math.abs(centroids[i].x - newX) > 0.001 || Math.abs(centroids[i].y - newY) > 0.001) {
+                const movement = euclideanDistance(centroids[i], {x: newX, y: newY});
+                if (movement > 0.001) {
                     converged = false;
                 }
 
@@ -767,12 +786,74 @@ function performKMeansSplitting(points, k) {
             }
         }
 
-        if (converged) break;
+        if (converged) {
+            console.log(`   K-means converged after ${iterations + 1} iterations`);
+            break;
+        }
         iterations++;
     }
 
-    // Filter out empty clusters
-    return clusters.filter(cluster => cluster.length > 0);
+    // Filter out empty clusters and ensure reasonable distribution
+    const validClusters = clusters.filter(cluster => cluster.length > 0);
+    
+    // If we end up with uneven clusters, try to rebalance
+    if (validClusters.length > 1) {
+        const avgSize = points.length / validClusters.length;
+        const rebalanced = rebalanceClusters(validClusters, avgSize);
+        return rebalanced;
+    }
+
+    return validClusters;
+}
+
+// K-means++ initialization for better cluster separation
+function initializeCentroidsKMeansPlusPlus(points, k) {
+    const centroids = [];
+    
+    // Choose first centroid randomly
+    centroids.push({...points[Math.floor(Math.random() * points.length)]});
+    
+    // Choose remaining centroids with probability proportional to squared distance
+    for (let c = 1; c < k; c++) {
+        const distances = points.map(point => {
+            const minDistToCentroid = Math.min(...centroids.map(centroid => 
+                Math.pow(euclideanDistance(point, centroid), 2)
+            ));
+            return minDistToCentroid;
+        });
+        
+        const totalDistance = distances.reduce((sum, d) => sum + d, 0);
+        let randomValue = Math.random() * totalDistance;
+        
+        for (let i = 0; i < points.length; i++) {
+            randomValue -= distances[i];
+            if (randomValue <= 0) {
+                centroids.push({...points[i]});
+                break;
+            }
+        }
+    }
+    
+    return centroids;
+}
+
+// Rebalance clusters to avoid one huge cluster and several tiny ones
+function rebalanceClusters(clusters, targetAvgSize) {
+    // Simple rebalancing: if a cluster is > 2x average, try to redistribute
+    const rebalanced = [];
+    
+    for (const cluster of clusters) {
+        if (cluster.length > targetAvgSize * 2 && clusters.length > 1) {
+            // Split oversized cluster in half
+            const mid = Math.floor(cluster.length / 2);
+            rebalanced.push(cluster.slice(0, mid));
+            rebalanced.push(cluster.slice(mid));
+        } else {
+            rebalanced.push(cluster);
+        }
+    }
+    
+    return rebalanced;
 }
 
 // Estimate visual size for splitting decisions

@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -12,9 +12,7 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <!-- Main heatmap canvas - clean HUD-style overlay -->
-    <canvas id="heat" width="1920" height="1080" aria-label="Interactive click heatmap overlay"></canvas>
-
+    <!-- No canvas - this extension only collects clicks, doesn't display -->
     <!-- Hidden elements for functionality -->
     <div class="loading-overlay" id="loading-overlay" style="display: none;">
         <div class="loading-spinner"></div>
@@ -37,8 +35,8 @@
         {
             "name": "Smart ClickMap",
             "version": "2.0.0",
-            "description": "Interactive HUD-style click heatmap overlay",
-            "features": ["real-time", "hud-style", "interactive", "clustering"],
+            "description": "Interactive click collector for heatmap overlay",
+            "features": ["click-collection", "real-time", "interactive"],
             "thresholds": {
                 "default": 3,
                 "minimum": 1,
@@ -57,59 +55,14 @@
             "operatingSystem": "Web Browser",
             "permissions": "Interactive Overlay",
             "featureList": [
-                "Real-time click visualization",
-                "HUD-style overlay",
-                "Adaptive clustering algorithm",
+                "Real-time click collection",
                 "Touch and mouse support",
                 "Accessibility features"
             ]
         }
     </script>
 
-    <!-- Wait for Twitch Helper, then load modules -->
-    <script>
-        function waitForTwitchAndLoad() {
-            if (typeof Twitch !== 'undefined' && Twitch.ext) {
-                // Twitch Extension Helper is ready, now load our modules
-                const scripts = [
-                    'debug.js',
-                    'heatmap.js',
-                    'script.js'
-                ];
-
-                // Load modules sequentially
-                let loadIndex = 0;
-                function loadNext() {
-                    if (loadIndex >= scripts.length) return;
-
-                    const script = document.createElement('script');
-                    script.type = 'module';
-                    script.src = scripts[loadIndex];
-                    script.onload = function () {
-                        loadIndex++;
-                        loadNext();
-                    };
-                    script.onerror = function () {
-                        console.error('Failed to load script:', scripts[loadIndex]);
-                        loadIndex++;
-                        loadNext();
-                    };
-                    document.head.appendChild(script);
-                }
-
-                loadNext();
-            } else {
-                // Wait and try again
-                setTimeout(waitForTwitchAndLoad, 100);
-            }
-        }
-
-        // Start loading process
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', waitForTwitchAndLoad);
-        } else {
-            waitForTwitchAndLoad();
-        }
-    </script>
+    <!-- External script loader (replaces inline script) -->
+    <script src="loader.js"></script>
 </body>
 </html>

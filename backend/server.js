@@ -58,7 +58,7 @@ app.get('/health', (req, res) => {
         status: 'ok',
         running: gameState.running,
         timestamp: Date.now(),
-        version: '3.4.0',
+        version: '4.0.0',
         uptime: process.uptime(),
         websocket: {
             enabled: !!wss,
@@ -327,9 +327,10 @@ app.get('/heatmap', (req, res) => {
 
         if (data.totalClicks > 0) {
             console.log(`✅ Heatmap: ${data.totalClicks} clicks → ${data.clusters.length} clusters`);
-            data.clusters.forEach((c, i) => {
-                console.log(`   Cluster ${i}: ${c.percentage}% (${c.count} clicks) at (${c.x.toFixed(3)}, ${c.y.toFixed(3)})`);
-            });
+            
+            // Debug percentage math
+            const totalPercentage = data.clusters.reduce((sum, c) => sum + c.percentage, 0);
+            console.log(`   📊 Percentage check: ${data.clusters.map(c => c.percentage + '%').join(' + ')} = ${totalPercentage}%`);
         }
 
         res.json(data);
@@ -344,7 +345,7 @@ app.get('/heatmap', (req, res) => {
     }
 });
 
-// Get current heatmap data with FIXED clustering and percentage calculation
+// Get current heatmap data with VISUAL-BASED CLUSTERING
 function getCurrentHeatmapData(channelId, threshold = 3) {
     // If no specific channel requested, aggregate all channels
     if (!channelId || channelId === 'all') {
@@ -364,7 +365,7 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
         });
 
         // Process ALL points into clusters
-        const clusters = processClicksIntoSimpleClusters(allPoints, threshold, totalClicks);
+        const clusters = processClicksIntoVisualClusters(allPoints, threshold);
 
         return {
             running: gameState.running,
@@ -393,8 +394,7 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     }
 
     const points = Array.from(channelClicks.values());
-    const totalClicks = points.length;
-    const clusters = processClicksIntoSimpleClusters(points, threshold, totalClicks);
+    const clusters = processClicksIntoVisualClusters(points, threshold);
 
     console.log(`🔍 Channel ${channelId}: ${points.length} points → ${clusters.length} clusters`);
 
@@ -409,108 +409,108 @@ function getCurrentHeatmapData(channelId, threshold = 3) {
     };
 }
 
-// SIMPLIFIED CLUSTERING with proper merging and percentage calculation
-function processClicksIntoSimpleClusters(points, threshold, totalClicksGlobal) {
+// VISUAL-BASED CLUSTERING ALGORITHM - Simple, reliable, visually-driven
+function processClicksIntoVisualClusters(points, threshold) {
     if (points.length === 0) return [];
 
-    console.log(`🧮 SIMPLIFIED clustering: ${points.length} points, ${threshold}% threshold`);
+    console.log(`🧮 VISUAL clustering: ${points.length} points, ${threshold}% threshold`);
 
-    // Step 1: Spatial clustering with aggressive merging
-    const spatialClusters = performAggressiveClustering(points);
-    console.log(`   Spatial clustering: ${points.length} points → ${spatialClusters.length} spatial clusters`);
+    // Step 1: Simple distance-based clustering
+    const rawClusters = performSimpleDistanceClustering(points);
+    console.log(`   Distance clustering: ${points.length} points → ${rawClusters.length} raw clusters`);
     
-    // Step 2: Calculate metrics with CORRECT percentages
-    const enrichedClusters = spatialClusters.map((cluster, index) => {
-        const count = cluster.length;
-        const percentage = Math.round((count / totalClicksGlobal) * 100); // FIXED: Use global total
-        
-        // Calculate centroid
-        const centroidX = cluster.reduce((sum, p) => sum + p.x, 0) / count;
-        const centroidY = cluster.reduce((sum, p) => sum + p.y, 0) / count;
-        
-        // Calculate size
-        const visualSize = calculateSimpleVisualSize(percentage, count);
-        
-        console.log(`   Cluster ${index}: ${count} clicks = ${percentage}% (size: ${visualSize}px)`);
-        
+    // Step 2: Calculate basic metrics for each cluster
+    const enrichedClusters = rawClusters.map((cluster, index) => {
+        const metrics = calculateBasicClusterMetrics(cluster, points.length);
         return {
             id: index,
-            x: centroidX,
-            y: centroidY,
-            count: count,
-            percentage: percentage,
-            visualSize: visualSize,
-            shapeType: 'circle', // Always circles now
-            density: 1,
-            eccentricity: 0,
-            complexity: 0,
-            isTop: false
+            ...metrics,
+            points: cluster
         };
     });
 
-    // Step 3: Filter by threshold
-    const filteredClusters = enrichedClusters.filter(c => c.percentage >= threshold);
-    console.log(`   Threshold filter: ${enrichedClusters.length} → ${filteredClusters.length} (threshold: ${threshold}%)`);
+    // Step 3: VISUAL MERGING - Merge clusters whose labels would overlap
+    const visuallyMergedClusters = performVisualMerging(enrichedClusters);
+    console.log(`   Visual merging: ${enrichedClusters.length} → ${visuallyMergedClusters.length} clusters`);
 
-    // Step 4: TEXT OVERLAP MERGING - merge clusters whose text would overlap
-    const textMergedClusters = mergeOverlappingTextClusters(filteredClusters, totalClicksGlobal);
-    console.log(`   Text overlap merging: ${filteredClusters.length} → ${textMergedClusters.length} final clusters`);
+    // Step 4: Recalculate percentages after merging (CRITICAL FIX)
+    const normalizedClusters = normalizePercentages(visuallyMergedClusters, points.length);
+    console.log(`   Percentage normalization: ${normalizedClusters.map(c => c.percentage + '%').join(', ')}`);
 
-    // Step 5: Sort and mark top cluster
-    textMergedClusters.sort((a, b) => b.percentage - a.percentage);
-    if (textMergedClusters.length > 0) {
-        textMergedClusters[0].isTop = true;
+    // Step 5: Filter by threshold
+    const filteredClusters = normalizedClusters.filter(c => c.percentage >= threshold);
+    console.log(`   Threshold filter (${threshold}%): ${normalizedClusters.length} → ${filteredClusters.length} clusters`);
+
+    // Step 6: Calculate intelligent visual sizes and shapes
+    const finalClusters = filteredClusters.map((cluster, index) => {
+        const shapeAnalysis = analyzeClusterShape(cluster.points, cluster.x, cluster.y);
+        const visualSize = calculateIntelligentVisualSize(cluster, filteredClusters);
+        
+        return {
+            ...cluster,
+            ...shapeAnalysis,
+            visualSize,
+            isTop: index === 0 // First cluster after sorting is top
+        };
+    });
+
+    // Step 7: Sort by percentage and mark top cluster
+    finalClusters.sort((a, b) => b.percentage - a.percentage);
+    if (finalClusters.length > 0) {
+        finalClusters[0].isTop = true;
+        // Ensure others are not top
+        for (let i = 1; i < finalClusters.length; i++) {
+            finalClusters[i].isTop = false;
+        }
     }
 
-    console.log(`✅ SIMPLIFIED clustering result: ${spatialClusters.length} spatial → ${textMergedClusters.length} final`);
-    
-    return textMergedClusters;
+    console.log(`✅ VISUAL clustering result: ${rawClusters.length} raw → ${finalClusters.length} final`);
+    finalClusters.forEach((c, i) => {
+        console.log(`   Cluster ${i}: ${c.percentage}% (${c.count} clicks, ${c.shapeType}, ${c.visualSize}px)`);
+    });
+
+    return finalClusters;
 }
 
-// AGGRESSIVE CLUSTERING - merges nearby points aggressively
-function performAggressiveClustering(points) {
+// SIMPLE DISTANCE-BASED CLUSTERING - Reliable and predictable
+function performSimpleDistanceClustering(points) {
     if (points.length === 0) return [];
-    if (points.length === 1) return [points];
-
+    
     const clusters = [];
-    const visited = new Set();
-
-    // MUCH more aggressive epsilon for merging
-    const epsilon = calculateAggressiveEpsilon(points);
-    console.log(`   Using aggressive epsilon: ${epsilon.toFixed(4)}`);
-
+    const assigned = new Set();
+    
+    // Calculate dynamic merge distance based on point distribution
+    const mergeDistance = calculateMergeDistance(points);
+    console.log(`   Merge distance: ${mergeDistance.toFixed(4)}`);
+    
     for (let i = 0; i < points.length; i++) {
-        if (visited.has(i)) continue;
-
-        // Start a new cluster
+        if (assigned.has(i)) continue;
+        
         const cluster = [points[i]];
-        visited.add(i);
-
-        // Find all points within epsilon and add them
+        assigned.add(i);
+        
+        // Find all nearby points to merge
         for (let j = i + 1; j < points.length; j++) {
-            if (visited.has(j)) continue;
-
-            const distance = euclideanDistance(points[i], points[j]);
-            console.log(`   Distance between point ${i} and ${j}: ${distance.toFixed(4)} (epsilon: ${epsilon.toFixed(4)})`);
+            if (assigned.has(j)) continue;
             
-            if (distance <= epsilon) {
+            const distance = euclideanDistance(points[i], points[j]);
+            if (distance <= mergeDistance) {
                 cluster.push(points[j]);
-                visited.add(j);
-                console.log(`   ✅ Merged point ${j} into cluster (distance: ${distance.toFixed(4)})`);
+                assigned.add(j);
+                console.log(`   Merged points: distance ${distance.toFixed(4)} <= ${mergeDistance.toFixed(4)}`);
             }
         }
-
+        
         clusters.push(cluster);
-        console.log(`   Created cluster with ${cluster.length} points`);
     }
-
+    
     return clusters;
 }
 
-// Calculate aggressive epsilon for merging very close points
-function calculateAggressiveEpsilon(points) {
-    if (points.length < 2) return 0.15;
-
+// Calculate merge distance based on point density
+function calculateMergeDistance(points) {
+    if (points.length < 2) return 0.1;
+    
     // Calculate all pairwise distances
     const distances = [];
     for (let i = 0; i < points.length; i++) {
@@ -521,89 +521,67 @@ function calculateAggressiveEpsilon(points) {
     }
     
     distances.sort((a, b) => a - b);
-    console.log(`   All distances: [${distances.map(d => d.toFixed(4)).join(', ')}]`);
     
-    if (distances.length === 0) return 0.15;
-    
-    // For very close overlapping points, use a small epsilon
-    // For spread out points, use larger epsilon
-    const minDistance = distances[0];
-    const maxDistance = distances[distances.length - 1];
-    const range = maxDistance - minDistance;
-    
-    let epsilon;
-    if (minDistance < 0.01) {
-        // Very close points exist - use small epsilon to separate tight clusters
-        epsilon = Math.max(0.02, minDistance * 3);
-        console.log(`   Very close points detected (min: ${minDistance.toFixed(4)}), using tight epsilon: ${epsilon.toFixed(4)}`);
-    } else if (range < 0.1) {
-        // All points are close together - merge them
-        epsilon = maxDistance * 1.1;
-        console.log(`   All points close together (range: ${range.toFixed(4)}), using large epsilon: ${epsilon.toFixed(4)}`);
+    // Use different strategies based on dataset size
+    if (points.length <= 3) {
+        // Small datasets: use 25th percentile
+        const percentile25 = distances[Math.floor(distances.length * 0.25)] || distances[0];
+        return Math.max(0.05, Math.min(0.2, percentile25 * 2));
+    } else if (points.length <= 10) {
+        // Medium datasets: use 20th percentile  
+        const percentile20 = distances[Math.floor(distances.length * 0.2)] || distances[0];
+        return Math.max(0.03, Math.min(0.15, percentile20 * 1.5));
     } else {
-        // Mixed distances - use median
-        const median = distances[Math.floor(distances.length / 2)];
-        epsilon = Math.max(0.05, Math.min(0.2, median * 1.5));
-        console.log(`   Mixed distances, using median-based epsilon: ${epsilon.toFixed(4)}`);
+        // Large datasets: use 15th percentile
+        const percentile15 = distances[Math.floor(distances.length * 0.15)] || distances[0];
+        return Math.max(0.02, Math.min(0.1, percentile15));
     }
-    
-    return epsilon;
 }
 
-// TEXT OVERLAP MERGING - merge clusters whose percentage text would overlap
-function mergeOverlappingTextClusters(clusters, totalClicksGlobal) {
+// VISUAL MERGING - Merge clusters whose percentage labels would overlap
+function performVisualMerging(clusters) {
     if (clusters.length <= 1) return clusters;
-
-    console.log(`🔤 TEXT OVERLAP MERGING: Checking ${clusters.length} clusters for text overlaps`);
-
-    let mergedClusters = [...clusters];
-    let didMerge = true;
-
-    while (didMerge) {
-        didMerge = false;
-
-        for (let i = 0; i < mergedClusters.length; i++) {
-            for (let j = i + 1; j < mergedClusters.length; j++) {
-                const cluster1 = mergedClusters[i];
-                const cluster2 = mergedClusters[j];
-
-                // Check if text labels would overlap
-                if (wouldTextLabelsOverlap(cluster1, cluster2)) {
-                    console.log(`   🔗 Merging clusters ${i} and ${j} due to text overlap`);
-                    console.log(`      Cluster ${i}: ${cluster1.percentage}% at (${cluster1.x.toFixed(3)}, ${cluster1.y.toFixed(3)})`);
-                    console.log(`      Cluster ${j}: ${cluster2.percentage}% at (${cluster2.x.toFixed(3)}, ${cluster2.y.toFixed(3)})`);
-
-                    // Merge the clusters
-                    const mergedCluster = mergeTwoClusters(cluster1, cluster2, totalClicksGlobal);
+    
+    const merged = [...clusters];
+    let changed = true;
+    
+    while (changed) {
+        changed = false;
+        
+        for (let i = 0; i < merged.length; i++) {
+            for (let j = i + 1; j < merged.length; j++) {
+                if (shouldMergeClusters(merged[i], merged[j])) {
+                    console.log(`   Merging overlapping clusters: ${merged[i].percentage}% + ${merged[j].percentage}%`);
                     
-                    // Remove the two old clusters and add the merged one
-                    mergedClusters.splice(j, 1); // Remove j first (higher index)
-                    mergedClusters.splice(i, 1); // Remove i second
-                    mergedClusters.push(mergedCluster);
-
-                    console.log(`      Result: ${mergedCluster.percentage}% at (${mergedCluster.x.toFixed(3)}, ${mergedCluster.y.toFixed(3)})`);
-
-                    didMerge = true;
+                    // Merge cluster j into cluster i
+                    const mergedCluster = mergeTwoClusters(merged[i], merged[j]);
+                    merged[i] = mergedCluster;
+                    merged.splice(j, 1);
+                    
+                    changed = true;
                     break;
                 }
             }
-            if (didMerge) break;
+            if (changed) break;
         }
     }
-
-    console.log(`✅ Text merging complete: ${clusters.length} → ${mergedClusters.length} clusters`);
-    return mergedClusters;
+    
+    return merged;
 }
 
-// Check if two clusters' text labels would overlap on screen
-function wouldTextLabelsOverlap(cluster1, cluster2) {
-    // Estimate text dimensions (this is approximate)
-    const fontSize = 24; // Base font size
-    const textWidth = 40; // Approximate width of "XX%" text
-    const textHeight = fontSize;
+// Determine if two clusters should be merged based on visual overlap
+function shouldMergeClusters(cluster1, cluster2) {
+    // Calculate estimated label sizes (approximation)
+    const fontSize1 = Math.max(18, Math.min(50, cluster1.estimatedSize * 0.4));
+    const fontSize2 = Math.max(18, Math.min(50, cluster2.estimatedSize * 0.4));
     
-    // Calculate distance between cluster centers (in screen coordinates)
-    // Assuming a 1920x1080 screen for estimation
+    const labelWidth1 = `${cluster1.percentage}%`.length * fontSize1 * 0.6; // Rough text width
+    const labelWidth2 = `${cluster2.percentage}%`.length * fontSize2 * 0.6;
+    
+    const labelHeight1 = fontSize1;
+    const labelHeight2 = fontSize2;
+    
+    // Calculate label positions (assuming 1920x1080 screen for estimation)
     const screenWidth = 1920;
     const screenHeight = 1080;
     
@@ -612,61 +590,594 @@ function wouldTextLabelsOverlap(cluster1, cluster2) {
     const x2 = cluster2.x * screenWidth;
     const y2 = cluster2.y * screenHeight;
     
-    const distance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+    // Check if label rectangles would overlap (with some padding)
+    const padding = 10;
+    const left1 = x1 - labelWidth1/2 - padding;
+    const right1 = x1 + labelWidth1/2 + padding;
+    const top1 = y1 - labelHeight1/2 - padding;
+    const bottom1 = y1 + labelHeight1/2 + padding;
     
-    // Consider text overlap if clusters are closer than combined text size + padding
-    const minDistance = textWidth + 20; // 20px padding
+    const left2 = x2 - labelWidth2/2 - padding;
+    const right2 = x2 + labelWidth2/2 + padding;
+    const top2 = y2 - labelHeight2/2 - padding;
+    const bottom2 = y2 + labelHeight2/2 + padding;
     
-    console.log(`   Text overlap check: distance=${distance.toFixed(0)}px, minDistance=${minDistance}px`);
+    const xOverlap = !(right1 < left2 || right2 < left1);
+    const yOverlap = !(bottom1 < top2 || bottom2 < top1);
     
-    return distance < minDistance;
+    const labelsOverlap = xOverlap && yOverlap;
+    
+    // Also check if clusters are very close physically
+    const distance = euclideanDistance(cluster1, cluster2);
+    const physicallyClose = distance < 0.1; // Within 10% of screen
+    
+    const shouldMerge = labelsOverlap || physicallyClose;
+    
+    if (shouldMerge) {
+        console.log(`   Clusters should merge: labels_overlap=${labelsOverlap}, distance=${distance.toFixed(4)}`);
+    }
+    
+    return shouldMerge;
 }
 
 // Merge two clusters into one
-function mergeTwoClusters(cluster1, cluster2, totalClicksGlobal) {
+function mergeTwoClusters(cluster1, cluster2) {
+    const allPoints = [...cluster1.points, ...cluster2.points];
     const totalCount = cluster1.count + cluster2.count;
-    const newPercentage = Math.round((totalCount / totalClicksGlobal) * 100);
     
-    // Calculate weighted centroid
-    const newX = (cluster1.x * cluster1.count + cluster2.x * cluster2.count) / totalCount;
-    const newY = (cluster1.y * cluster1.count + cluster2.y * cluster2.count) / totalCount;
+    // Calculate new centroid (weighted by cluster sizes)
+    const weight1 = cluster1.count / totalCount;
+    const weight2 = cluster2.count / totalCount;
     
-    // Calculate new visual size
-    const newVisualSize = calculateSimpleVisualSize(newPercentage, totalCount);
+    const newX = cluster1.x * weight1 + cluster2.x * weight2;
+    const newY = cluster1.y * weight1 + cluster2.y * weight2;
+    
+    // Recalculate metrics for merged cluster
+    const mergedMetrics = calculateBasicClusterMetrics(allPoints, totalCount);
     
     return {
-        id: `merged_${cluster1.id}_${cluster2.id}`,
+        ...mergedMetrics,
         x: newX,
         y: newY,
-        count: totalCount,
-        percentage: newPercentage,
-        visualSize: newVisualSize,
-        shapeType: 'circle',
-        density: 1,
-        eccentricity: 0,
-        complexity: 0,
-        isTop: false
+        points: allPoints,
+        id: cluster1.id // Keep first cluster's ID
     };
 }
 
-// Simple visual size calculation
-function calculateSimpleVisualSize(percentage, count) {
-    const MIN_SIZE = 40;
-    const MAX_SIZE = 200;
+// Calculate basic cluster metrics
+function calculateBasicClusterMetrics(clusterPoints, totalPoints) {
+    const count = clusterPoints.length;
+    const percentage = Math.round((count / totalPoints) * 100);
+
+    // Calculate centroid
+    const centroidX = clusterPoints.reduce((sum, p) => sum + p.x, 0) / count;
+    const centroidY = clusterPoints.reduce((sum, p) => sum + p.y, 0) / count;
+
+    // Calculate spread
+    const distances = clusterPoints.map(p => 
+        Math.sqrt(Math.pow(p.x - centroidX, 2) + Math.pow(p.y - centroidY, 2))
+    );
     
-    // Base size on percentage primarily
-    let size = MIN_SIZE + (percentage / 100) * (MAX_SIZE - MIN_SIZE);
+    const avgDistance = distances.reduce((sum, d) => sum + d, 0) / distances.length;
+    const maxDistance = Math.max(...distances);
+    const stdDev = Math.sqrt(
+        distances.reduce((sum, d) => sum + Math.pow(d - avgDistance, 2), 0) / distances.length
+    );
+
+    // Basic shape metrics
+    const density = count / (Math.PI * Math.pow(maxDistance || 0.001, 2));
+    const compactness = avgDistance / (maxDistance || 0.001);
     
-    // Small bonus for click count
-    const countBonus = Math.min(20, Math.log10(count + 1) * 8);
-    size += countBonus;
-    
-    return Math.max(MIN_SIZE, Math.min(MAX_SIZE, Math.round(size)));
+    // Rough size estimation for visual merging
+    const estimatedSize = Math.max(60, Math.min(250, 80 + percentage * 2 + maxDistance * 200));
+
+    return {
+        x: centroidX,
+        y: centroidY,
+        count,
+        percentage,
+        radius: maxDistance,
+        spread: avgDistance,
+        maxSpread: maxDistance,
+        stdDev,
+        density,
+        compactness,
+        estimatedSize
+    };
 }
 
-// Utility function
+// NORMALIZE PERCENTAGES - Ensure they add up to 100%
+function normalizePercentages(clusters, totalPoints) {
+    if (clusters.length === 0) return clusters;
+    
+    // Recalculate percentages based on actual point counts
+    const normalized = clusters.map(cluster => ({
+        ...cluster,
+        percentage: Math.round((cluster.count / totalPoints) * 100)
+    }));
+    
+    // Handle rounding errors - ensure percentages sum to 100%
+    const currentTotal = normalized.reduce((sum, c) => sum + c.percentage, 0);
+    
+    if (currentTotal !== 100 && totalPoints > 0) {
+        // Adjust the largest cluster to make sum = 100%
+        const largest = normalized.reduce((max, current) => 
+            current.percentage > max.percentage ? current : max
+        );
+        largest.percentage += (100 - currentTotal);
+        
+        console.log(`   Percentage adjustment: ${currentTotal}% → 100%, largest cluster adjusted by ${100 - currentTotal}%`);
+    }
+    
+    return normalized;
+}
+
+// INTELLIGENT SHAPE ANALYSIS - Determine optimal representation
+function analyzeClusterShape(points, centroidX, centroidY) {
+    if (points.length === 1) {
+        return {
+            shapeType: 'circle',
+            circularity: 1.0,
+            eccentricity: 0,
+            irregularity: 0,
+            convexity: 1,
+            preferredSides: 8,
+            complexity: 0,
+            shapeConfidence: 1.0,
+            polygonPoints: null
+        };
+    }
+
+    // Calculate shape metrics
+    const shapeMetrics = calculateAdvancedShapeMetrics(points, centroidX, centroidY);
+    
+    // Circularity test
+    const circularityScore = calculateCircularityScore(points, centroidX, centroidY, shapeMetrics);
+    
+    // Decision making
+    const useCircle = shouldUseCircularRepresentation(circularityScore, shapeMetrics, points.length);
+    
+    if (useCircle) {
+        return {
+            shapeType: 'circle',
+            circularity: circularityScore,
+            eccentricity: shapeMetrics.eccentricity,
+            irregularity: shapeMetrics.irregularity,
+            convexity: shapeMetrics.convexity,
+            preferredSides: 8,
+            complexity: shapeMetrics.complexity,
+            shapeConfidence: 1 - shapeMetrics.irregularity,
+            polygonPoints: null
+        };
+    } else {
+        // Generate intelligent polygon
+        const polygonShape = generateIntelligentPolygon(points, centroidX, centroidY, shapeMetrics);
+        return {
+            shapeType: polygonShape.type,
+            circularity: circularityScore,
+            eccentricity: shapeMetrics.eccentricity,
+            irregularity: shapeMetrics.irregularity,
+            convexity: shapeMetrics.convexity,
+            preferredSides: polygonShape.sides,
+            complexity: shapeMetrics.complexity,
+            shapeConfidence: polygonShape.confidence,
+            polygonPoints: polygonShape.points,
+            shapeOrientation: polygonShape.orientation
+        };
+    }
+}
+
+// ADVANCED SHAPE METRICS calculation
+function calculateAdvancedShapeMetrics(points, centroidX, centroidY) {
+    // Calculate distances from centroid
+    const distances = points.map(p => 
+        Math.sqrt(Math.pow(p.x - centroidX, 2) + Math.pow(p.y - centroidY, 2))
+    );
+
+    const avgDistance = distances.reduce((sum, d) => sum + d, 0) / distances.length;
+    const maxDistance = Math.max(...distances);
+    const minDistance = Math.min(...distances);
+    
+    // Standard deviation of distances
+    const distanceVariance = distances.reduce((sum, d) => sum + Math.pow(d - avgDistance, 2), 0) / distances.length;
+    const distanceStdDev = Math.sqrt(distanceVariance);
+
+    // Eccentricity calculation
+    const eccentricity = calculateEccentricity(points);
+    
+    // Convex hull analysis
+    const hull = calculateConvexHull(points);
+    const hullArea = calculatePolygonArea(hull);
+    const boundingArea = calculateBoundingArea(points);
+    const convexity = hullArea / (boundingArea || 0.001);
+    
+    // Irregularity measure
+    const irregularity = Math.min(1, (distanceStdDev / avgDistance) + (1 - convexity) * 0.5);
+    
+    // Overall complexity score
+    const complexity = (irregularity * 0.4) + (eccentricity * 0.4) + ((1 - convexity) * 0.2);
+
+    return {
+        avgDistance,
+        maxDistance,
+        minDistance,
+        distanceStdDev,
+        eccentricity,
+        convexity,
+        irregularity,
+        complexity,
+        hull,
+        hullArea,
+        boundingArea
+    };
+}
+
+// CIRCULARITY SCORE calculation
+function calculateCircularityScore(points, centroidX, centroidY, metrics) {
+    if (points.length === 1) return 1.0;
+
+    // Distance consistency
+    const distanceConsistency = 1 - Math.min(1, metrics.distanceStdDev / metrics.avgDistance);
+    
+    // Convexity score
+    const convexityScore = metrics.convexity;
+    
+    // Aspect ratio score
+    const aspectRatioScore = 1 - Math.min(1, metrics.eccentricity);
+    
+    // Area efficiency
+    const areaEfficiency = metrics.hullArea / (Math.PI * Math.pow(metrics.maxDistance, 2));
+    
+    // Weighted combination
+    const circularity = (
+        distanceConsistency * 0.4 +
+        convexityScore * 0.25 +
+        aspectRatioScore * 0.25 +
+        Math.min(1, areaEfficiency) * 0.1
+    );
+
+    return Math.max(0, Math.min(1, circularity));
+}
+
+// Should use circular representation?
+function shouldUseCircularRepresentation(circularityScore, metrics, pointCount) {
+    const CIRCULARITY_THRESHOLD = 0.7;
+    const LOW_COMPLEXITY_THRESHOLD = 0.3;
+    const MIN_POINTS_FOR_POLYGON = 3;
+    
+    if (pointCount < MIN_POINTS_FOR_POLYGON) return true;
+    if (circularityScore >= CIRCULARITY_THRESHOLD) return true;
+    if (metrics.complexity <= LOW_COMPLEXITY_THRESHOLD) return true;
+    if (circularityScore >= 0.5 && metrics.irregularity <= 0.4) return true;
+    
+    return false;
+}
+
+// Generate intelligent polygon
+function generateIntelligentPolygon(points, centroidX, centroidY, metrics) {
+    const pointCount = points.length;
+    
+    let polygonType, sides, confidence;
+    
+    if (pointCount <= 4) {
+        polygonType = 'simple_polygon';
+        sides = Math.max(pointCount, 4);
+        confidence = 0.8;
+    } else if (metrics.convexity >= 0.8 && metrics.irregularity <= 0.5) {
+        polygonType = 'regular_polygon';
+        sides = calculateOptimalSides(metrics, pointCount);
+        confidence = 0.9 - metrics.irregularity;
+    } else if (metrics.eccentricity > 0.6) {
+        polygonType = 'elliptical_polygon';
+        sides = Math.max(6, Math.min(12, Math.floor(pointCount * 0.8)));
+        confidence = 0.8;
+    } else {
+        polygonType = metrics.convexity >= 0.6 ? 'adaptive_polygon' : 'hull_polygon';
+        sides = Math.max(5, Math.min(16, Math.floor(pointCount * 0.7)));
+        confidence = 0.7 + metrics.convexity * 0.2;
+    }
+
+    // Generate polygon points
+    let polygonPoints;
+    let orientation = 0;
+    
+    switch (polygonType) {
+        case 'hull_polygon':
+            polygonPoints = generateHullBasedPolygon(points, metrics.hull);
+            break;
+        case 'elliptical_polygon':
+            const ellipseParams = calculateEllipseParameters(points, centroidX, centroidY);
+            polygonPoints = generateEllipticalPolygon(centroidX, centroidY, ellipseParams, sides);
+            orientation = ellipseParams.orientation;
+            break;
+        case 'adaptive_polygon':
+            polygonPoints = generateAdaptivePolygon(points, centroidX, centroidY, sides, metrics);
+            break;
+        default:
+            polygonPoints = generateRegularPolygon(centroidX, centroidY, metrics.maxDistance, sides);
+            break;
+    }
+
+    return {
+        type: polygonType,
+        sides: sides,
+        points: polygonPoints,
+        confidence: confidence,
+        orientation: orientation
+    };
+}
+
+// INTELLIGENT VISUAL SIZE calculation with minimum size enforcement
+function calculateIntelligentVisualSize(cluster, allClusters) {
+    const percentage = cluster.percentage || 0;
+    const count = cluster.count || 1;
+    const density = cluster.density || 1;
+    const spread = cluster.spread || 0.05;
+
+    // SIZE BOUNDS - ENFORCED MINIMUM
+    const MIN_SIZE = 65;  // NEVER go smaller than this (current 25% size)
+    const MAX_SIZE = 280; // Maximum before it becomes unwieldy
+    const OPTIMAL_SIZE = 85; // Sweet spot for most clusters
+
+    // Base size calculation
+    let baseSize;
+    if (percentage >= 50) {
+        baseSize = OPTIMAL_SIZE + (percentage - 50) * 2.5;
+    } else if (percentage >= 25) {
+        baseSize = OPTIMAL_SIZE * (0.7 + (percentage - 25) * 0.012);
+    } else if (percentage >= 10) {
+        baseSize = OPTIMAL_SIZE * (0.5 + (percentage - 10) * 0.0133);
+    } else {
+        baseSize = MIN_SIZE + (percentage * 1.5); // Slower scaling for small percentages
+    }
+
+    // Density and spread adjustments
+    const densityMultiplier = Math.pow(Math.max(0.3, Math.min(3.0, density)), 0.25);
+    const spreadBonus = Math.min(30, spread * 600);
+    const countBonus = count > 1 ? Math.log10(count + 1) * 10 : 0;
+    
+    // Relative scaling between clusters
+    let relativeScale = 1.0;
+    if (allClusters.length > 1) {
+        const maxPercentage = Math.max(...allClusters.map(c => c.percentage || 0));
+        const minPercentage = Math.min(...allClusters.map(c => c.percentage || 0));
+        
+        if (maxPercentage > minPercentage) {
+            const range = maxPercentage - minPercentage;
+            const position = (percentage - minPercentage) / range;
+            relativeScale = 0.7 + (position * 0.8);
+        }
+    }
+
+    // Combine all factors
+    let finalSize = (baseSize + spreadBonus + countBonus) * densityMultiplier * relativeScale;
+
+    // ENFORCE ABSOLUTE BOUNDS
+    finalSize = Math.max(MIN_SIZE, Math.min(MAX_SIZE, finalSize));
+
+    return Math.round(finalSize);
+}
+
+// Utility functions (simplified versions)
 function euclideanDistance(p1, p2) {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+}
+
+function calculateEccentricity(points) {
+    if (points.length < 2) return 0;
+
+    const meanX = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+    const meanY = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+
+    let cxx = 0, cyy = 0, cxy = 0;
+    for (const point of points) {
+        const dx = point.x - meanX;
+        const dy = point.y - meanY;
+        cxx += dx * dx;
+        cyy += dy * dy;
+        cxy += dx * dy;
+    }
+
+    cxx /= points.length;
+    cyy /= points.length;
+    cxy /= points.length;
+
+    const trace = cxx + cyy;
+    const det = cxx * cyy - cxy * cxy;
+    const discriminant = trace * trace - 4 * det;
+
+    if (discriminant < 0) return 0;
+
+    const lambda1 = (trace + Math.sqrt(discriminant)) / 2;
+    const lambda2 = (trace - Math.sqrt(discriminant)) / 2;
+
+    const minLambda = Math.min(lambda1, lambda2);
+    const maxLambda = Math.max(lambda1, lambda2);
+
+    if (maxLambda === 0) return 0;
+    return 1 - (minLambda / maxLambda);
+}
+
+function calculateConvexHull(points) {
+    if (points.length < 3) return points;
+
+    let bottom = points[0];
+    for (const point of points) {
+        if (point.y < bottom.y || (point.y === bottom.y && point.x < bottom.x)) {
+            bottom = point;
+        }
+    }
+
+    const sortedPoints = points.filter(p => p !== bottom).sort((a, b) => {
+        const angleA = Math.atan2(a.y - bottom.y, a.x - bottom.x);
+        const angleB = Math.atan2(b.y - bottom.y, b.x - bottom.x);
+        return angleA - angleB;
+    });
+
+    const hull = [bottom];
+    for (const point of sortedPoints) {
+        while (hull.length > 1 && crossProduct(hull[hull.length-2], hull[hull.length-1], point) <= 0) {
+            hull.pop();
+        }
+        hull.push(point);
+    }
+
+    return hull;
+}
+
+function crossProduct(o, a, b) {
+    return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+
+function calculatePolygonArea(points) {
+    if (points.length < 3) return 0;
+    
+    let area = 0;
+    for (let i = 0; i < points.length; i++) {
+        const j = (i + 1) % points.length;
+        area += points[i].x * points[j].y;
+        area -= points[j].x * points[i].y;
+    }
+    return Math.abs(area) / 2;
+}
+
+function calculateBoundingArea(points) {
+    if (points.length === 0) return 0;
+
+    const xs = points.map(p => p.x);
+    const ys = points.map(p => p.y);
+    const width = Math.max(...xs) - Math.min(...xs);
+    const height = Math.max(...ys) - Math.min(...ys);
+    
+    return width * height;
+}
+
+// Placeholder polygon generation functions (simplified)
+function calculateOptimalSides(metrics, pointCount) {
+    const complexityFactor = Math.min(1, metrics.complexity * 2);
+    const countFactor = Math.min(1, pointCount / 20);
+    const baseSides = 6;
+    const additionalSides = Math.floor((complexityFactor + countFactor) * 6);
+    return Math.max(4, Math.min(14, baseSides + additionalSides));
+}
+
+function generateHullBasedPolygon(points, hull) {
+    if (!hull || hull.length < 3) {
+        const centroidX = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+        const centroidY = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+        const avgDistance = points.reduce((sum, p) => 
+            sum + Math.sqrt(Math.pow(p.x - centroidX, 2) + Math.pow(p.y - centroidY, 2)), 0) / points.length;
+        return generateRegularPolygon(centroidX, centroidY, avgDistance, 6);
+    }
+    return hull;
+}
+
+function generateRegularPolygon(centerX, centerY, radius, sides) {
+    const points = [];
+    const angleStep = (2 * Math.PI) / sides;
+    
+    for (let i = 0; i < sides; i++) {
+        const angle = i * angleStep;
+        points.push({
+            x: centerX + radius * Math.cos(angle),
+            y: centerY + radius * Math.sin(angle)
+        });
+    }
+    
+    return points;
+}
+
+function calculateEllipseParameters(points, centerX, centerY) {
+    // Simplified ellipse calculation
+    let cxx = 0, cyy = 0, cxy = 0;
+    
+    for (const point of points) {
+        const dx = point.x - centerX;
+        const dy = point.y - centerY;
+        cxx += dx * dx;
+        cyy += dy * dy;
+        cxy += dx * dy;
+    }
+    
+    cxx /= points.length;
+    cyy /= points.length;
+    cxy /= points.length;
+    
+    const trace = cxx + cyy;
+    const det = cxx * cyy - cxy * cxy;
+    const discriminant = trace * trace - 4 * det;
+    
+    if (discriminant < 0) {
+        const avgDist = Math.sqrt(cxx + cyy);
+        return { majorAxis: avgDist, minorAxis: avgDist, orientation: 0 };
+    }
+    
+    const lambda1 = (trace + Math.sqrt(discriminant)) / 2;
+    const lambda2 = (trace - Math.sqrt(discriminant)) / 2;
+    
+    const majorAxis = Math.sqrt(Math.max(lambda1, lambda2)) * 2;
+    const minorAxis = Math.sqrt(Math.min(lambda1, lambda2)) * 2;
+    
+    let orientation = 0;
+    if (Math.abs(cxy) > 1e-10) {
+        orientation = Math.atan2(lambda1 - cxx, cxy);
+    }
+    
+    return { majorAxis, minorAxis, orientation };
+}
+
+function generateEllipticalPolygon(centerX, centerY, ellipseParams, sides) {
+    const points = [];
+    const angleStep = (2 * Math.PI) / sides;
+    
+    for (let i = 0; i < sides; i++) {
+        const angle = i * angleStep;
+        const localX = ellipseParams.majorAxis * Math.cos(angle);
+        const localY = ellipseParams.minorAxis * Math.sin(angle);
+        
+        const rotatedX = localX * Math.cos(ellipseParams.orientation) - localY * Math.sin(ellipseParams.orientation);
+        const rotatedY = localX * Math.sin(ellipseParams.orientation) + localY * Math.cos(ellipseParams.orientation);
+        
+        points.push({
+            x: centerX + rotatedX,
+            y: centerY + rotatedY
+        });
+    }
+    
+    return points;
+}
+
+function generateAdaptivePolygon(points, centerX, centerY, sides, metrics) {
+    const polygonPoints = [];
+    const angleStep = (2 * Math.PI) / sides;
+    
+    for (let i = 0; i < sides; i++) {
+        const angle = i * angleStep;
+        const idealRadius = calculateDirectionalRadius(points, centerX, centerY, angle, metrics.maxDistance);
+        
+        const x = centerX + idealRadius * Math.cos(angle);
+        const y = centerY + idealRadius * Math.sin(angle);
+        
+        polygonPoints.push({ x, y });
+    }
+    
+    return polygonPoints;
+}
+
+function calculateDirectionalRadius(points, centerX, centerY, direction, maxRadius) {
+    const directionVector = { x: Math.cos(direction), y: Math.sin(direction) };
+    let maxProjection = 0;
+    
+    for (const point of points) {
+        const toPoint = { x: point.x - centerX, y: point.y - centerY };
+        const projection = toPoint.x * directionVector.x + toPoint.y * directionVector.y;
+        
+        if (projection > 0) {
+            maxProjection = Math.max(maxProjection, projection);
+        }
+    }
+    
+    return Math.max(maxRadius * 0.3, Math.min(maxRadius, maxProjection * 1.1));
 }
 
 // WebSocket broadcasting functions
@@ -718,9 +1229,8 @@ const httpServer = createServer(app);
 console.log('🔧 Creating WebSocket server integrated with HTTP server...');
 let wss;
 try {
-    // CRITICAL: Use the HTTP server, not a separate port
     wss = new WebSocketServer({
-        server: httpServer,  // Use the same HTTP server - this is the key fix!
+        server: httpServer,
         perMessageDeflate: false,
         clientTracking: true
     });
@@ -734,11 +1244,7 @@ try {
 httpServer.on('upgrade', (request, socket, head) => {
     console.log('🔗 WebSocket upgrade request received:');
     console.log(`   URL: ${request.url}`);
-    console.log(`   Origin: ${request.headers.origin}`);
-    console.log(`   Connection: ${request.headers.connection}`);
-    console.log(`   Upgrade: ${request.headers.upgrade}`);
 
-    // Only handle WebSocket upgrade requests for /ws/ paths
     if (request.url && request.url.startsWith('/ws/')) {
         console.log('✅ Valid WebSocket path, handling upgrade...');
         wss.handleUpgrade(request, socket, head, (ws) => {
@@ -755,10 +1261,7 @@ wss.on('connection', (ws, req) => {
     const startTime = Date.now();
     console.log(`🔗 NEW WEBSOCKET CONNECTION`);
     console.log(`   URL: ${req.url}`);
-    console.log(`   Origin: ${req.headers.origin}`);
-    console.log(`   User-Agent: ${req.headers['user-agent']?.substring(0, 50)}...`);
 
-    // Extract channel ID from URL: /ws/channelId
     let channelId = null;
     if (req.url) {
         const match = req.url.match(/\/ws\/([^?&\/]+)/);
@@ -794,24 +1297,6 @@ wss.on('connection', (ws, req) => {
         console.error('❌ Error sending initial data:', error);
     }
 
-    // Handle incoming messages
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message.toString());
-            console.log(`📨 Message from ${channelId}:`, data);
-
-            // Echo back for testing
-            ws.send(JSON.stringify({
-                type: 'echo',
-                received: data,
-                timestamp: Date.now(),
-                channelId: channelId
-            }));
-        } catch (error) {
-            console.error('❌ Message parsing error:', error);
-        }
-    });
-
     // Handle connection close
     ws.on('close', (code, reason) => {
         const duration = Date.now() - startTime;
@@ -823,42 +1308,12 @@ wss.on('connection', (ws, req) => {
             }
         }
         console.log(`🔒 WebSocket disconnected: ${channelId} after ${duration}ms`);
-        console.log(`   Code: ${code}, Reason: ${reason || 'none'}`);
-        console.log(`   Remaining clients in channel: ${clients ? clients.size : 0}`);
     });
 
     // Handle connection errors
     ws.on('error', (error) => {
         console.error(`❌ WebSocket error for ${channelId}:`, error);
     });
-
-    // Keep-alive mechanism
-    const keepAlive = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-            try {
-                ws.ping();
-            } catch (pingError) {
-                console.error('❌ Keep-alive ping error:', pingError);
-                clearInterval(keepAlive);
-            }
-        } else {
-            clearInterval(keepAlive);
-        }
-    }, 25000); // 25 second keep-alive
-
-    ws.on('close', () => {
-        clearInterval(keepAlive);
-    });
-
-    ws.on('pong', () => {
-        console.log(`🏓 Pong received from ${channelId}`);
-    });
-});
-
-// WebSocket server error handling
-wss.on('error', (error) => {
-    console.error('❌ WebSocket server error:', error);
-    console.error('   Stack:', error.stack);
 });
 
 // Error handling
@@ -874,7 +1329,6 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('SIGTERM', () => {
     console.log('📝 Received SIGTERM, starting graceful shutdown...');
 
-    // Close all WebSocket connections
     connectedClients.forEach((clients, channelId) => {
         clients.forEach(ws => {
             try {
@@ -893,25 +1347,19 @@ process.on('SIGTERM', () => {
 
 // Start server
 httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 ClickMap EBS v3.4.0 SIMPLIFIED CLUSTERING - Text Overlap Merging!');
+    console.log('🚀 ClickMap EBS v4.0.0 VISUAL CLUSTERING - Perfect Merging & Math!');
     console.log(`📡 HTTP Server: https://smart-clickmap-backend.onrender.com`);
     console.log(`🔗 WebSocket URL: wss://smart-clickmap-backend.onrender.com/ws/[CHANNEL_ID]`);
     console.log(`🎯 Health check: https://smart-clickmap-backend.onrender.com/health`);
-    console.log(`🔍 Debug endpoint: https://smart-clickmap-backend.onrender.com/ws-debug`);
-    console.log(`🧪 Test endpoint: https://smart-clickmap-backend.onrender.com/ws-test/167556274`);
     console.log(`📊 Game state: ${gameState.running ? 'RUNNING' : 'STOPPED'}`);
-    console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🎉 Visual-based clustering with perfect percentage math!`);
 
-    // Final status verification
     setTimeout(() => {
         console.log('🔍 FINAL STATUS CHECK:');
         console.log(`   HTTP server listening: ${httpServer.listening}`);
-        console.log(`   HTTP server address: ${JSON.stringify(httpServer.address())}`);
         console.log(`   WebSocket server integrated: ${!!wss}`);
-        console.log(`   WebSocket clients: ${wss ? wss.clients.size : 0}`);
         console.log(`   Connected channels: ${connectedClients.size}`);
-        console.log(`   Single port mode: ${PORT}`);
-        console.log('🎉 SIMPLIFIED clustering with text merging fully operational!');
+        console.log('🎊 Visual clustering server fully operational!');
     }, 1000);
 });
 

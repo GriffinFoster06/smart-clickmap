@@ -1,4 +1,4 @@
-// frontend/heatmap.js - FIXED version with proper sizing and 25% threshold
+// frontend/heatmap.js - Advanced HUD-style renderer with smart sizing and adaptive shapes
 export class HeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
@@ -7,12 +7,12 @@ export class HeatmapRenderer {
         // Ensure this renderer never blocks clicks in any embedding context
         this.canvas.style.pointerEvents = 'none';
 
-        this.PERCENTAGE_THRESHOLD = 25;  // FIXED: Changed from 3% to 25%
+        this.PERCENTAGE_THRESHOLD = 3;
         
-        // FIXED sizing bounds to match backend
-        this.MIN_VISUAL_SIZE = 45;   // 25% minimum
-        this.TARGET_100_SIZE = 85;   // 100% target size (user's request)
-        this.MAX_VISUAL_SIZE = 120;  // Maximum size cap
+        // Smart sizing bounds - enforced for readability
+        this.MIN_VISUAL_SIZE = 45;  // Absolute minimum for legibility
+        this.MAX_VISUAL_SIZE = 250; // Maximum before splitting
+        this.OPTIMAL_TEXT_SIZE = 85; // Target size for comfortable reading
 
         this.springs = new Map(); // key -> {x,y,r,p,seed,complexity,sides}
         this.targets = new Map();
@@ -89,10 +89,12 @@ export class HeatmapRenderer {
             .filter(c => (c.percentage || 0) >= this.PERCENTAGE_THRESHOLD);
 
         const nextTargets = new Map();
+        
+        // Calculate smart sizes for all clusters first (for proportional sizing)
+        const sizingContext = this._calculateSizingContext(filtered);
 
         for (const c of filtered) {
-            // FIXED: Use backend's calculated size directly, or calculate consistently
-            const visualSize = c.visualSize || this._calculateConsistentSize(c);
+            const smartSize = this._calculateSmartSize(c, sizingContext);
             const complexity = c.complexity || c.irregularity || 0;
             const sides = c.preferredSides || this._decideSidesFromComplexity(complexity, c.percentage);
 
@@ -100,7 +102,7 @@ export class HeatmapRenderer {
             nextTargets.set(key, { 
                 x: c.x, 
                 y: c.y, 
-                r: visualSize, 
+                r: smartSize, 
                 p: c.percentage || 0, 
                 count: c.count || 1,
                 complexity: complexity,
@@ -116,7 +118,7 @@ export class HeatmapRenderer {
                 this.springs.set(key, {
                     x: this._spring(c.x, 9, 0.95),
                     y: this._spring(c.y, 9, 0.95),
-                    r: this._spring(visualSize, 12, 0.9),
+                    r: this._spring(smartSize, 12, 0.9),
                     p: this._spring(c.percentage || 0, 7, 1.0),
                     seed,
                     complexity: complexity,
@@ -144,32 +146,71 @@ export class HeatmapRenderer {
         }
     }
 
-    // FIXED: Consistent size calculation matching backend
-    _calculateConsistentSize(cluster) {
+    // Smart sizing algorithm - considers volume, spatial spread, and proportionality
+    _calculateSizingContext(clusters) {
+        if (clusters.length === 0) return { maxPercentage: 0, maxSpread: 0, avgDensity: 1 };
+
+        const percentages = clusters.map(c => c.percentage || 0);
+        const spreads = clusters.map(c => c.spread || 0.05);
+        const densities = clusters.map(c => c.density || 1);
+
+        return {
+            maxPercentage: Math.max(...percentages),
+            minPercentage: Math.min(...percentages),
+            maxSpread: Math.max(...spreads),
+            avgDensity: densities.reduce((sum, d) => sum + d, 0) / densities.length,
+            totalClusters: clusters.length
+        };
+    }
+
+    _calculateSmartSize(cluster, context) {
         const percentage = cluster.percentage || 0;
-        
-        // Match backend sizing exactly
-        if (percentage >= 100) {
-            return this.TARGET_100_SIZE;
-        } else if (percentage >= 25) {
-            // Linear interpolation between 25% and 100%
-            const progress = (percentage - 25) / 75; // 0 to 1
-            return this.MIN_VISUAL_SIZE + (this.TARGET_100_SIZE - this.MIN_VISUAL_SIZE) * progress;
-        } else {
-            // Below threshold, but still visible
-            return this.MIN_VISUAL_SIZE * 0.8;
+        const spread = cluster.spread || 0.05;
+        const density = cluster.density || 1;
+        const count = cluster.count || 1;
+
+        // 1. Base size from click volume (primary factor)
+        const volumeRatio = percentage / Math.max(context.maxPercentage, 1);
+        const volumeSize = this.MIN_VISUAL_SIZE + 
+            (this.OPTIMAL_TEXT_SIZE - this.MIN_VISUAL_SIZE) * Math.pow(volumeRatio, 0.7);
+
+        // 2. Spatial adjustment (secondary factor)
+        const spatialRatio = spread / Math.max(context.maxSpread, 0.01);
+        const spatialAdjustment = spatialRatio * 40; // Max +40px for spatial spread
+
+        // 3. Density influence (tertiary factor)
+        const densityRatio = density / Math.max(context.avgDensity, 1);
+        const densityMultiplier = Math.pow(Math.max(0.5, Math.min(2.0, densityRatio)), 0.3);
+
+        // 4. Count consideration (ensures minimum representation)
+        const countBonus = Math.log10(count + 1) * 8; // Logarithmic bonus for click count
+
+        // Combine factors
+        let finalSize = (volumeSize + spatialAdjustment + countBonus) * densityMultiplier;
+
+        // 5. Proportional scaling enforcement
+        if (context.totalClusters > 1) {
+            const proportion = percentage / context.maxPercentage;
+            const minProportionalSize = this.MIN_VISUAL_SIZE + 
+                (this.MAX_VISUAL_SIZE - this.MIN_VISUAL_SIZE) * Math.pow(proportion, 0.8);
+            finalSize = Math.max(finalSize, minProportionalSize);
         }
+
+        // 6. Enforce absolute bounds
+        finalSize = Math.max(this.MIN_VISUAL_SIZE, Math.min(this.MAX_VISUAL_SIZE, finalSize));
+
+        return finalSize;
     }
 
     _decideSidesFromComplexity(complexity, percentage) {
         // More complex shapes get more sides, higher percentages get more detail
         const complexityFactor = Math.max(0, Math.min(1, complexity));
-        const percentageFactor = Math.min(1, percentage / 50); // Adjusted for 25% threshold
+        const percentageFactor = Math.min(1, percentage / 25); // 25% = full complexity
         
         const combinedFactor = complexityFactor * 0.7 + percentageFactor * 0.3;
-        const sides = Math.round(6 + combinedFactor * 10); // 6-16 sides
+        const sides = Math.round(6 + combinedFactor * 12); // 6-18 sides
         
-        return Math.max(6, Math.min(16, sides));
+        return Math.max(6, Math.min(20, sides));
     }
 
     render(tSec = 0) {
@@ -203,13 +244,13 @@ export class HeatmapRenderer {
             const wobbleAmp = Math.min(0.12, 0.06 + (d.percentage / 100) * 0.08);
             const r = this.reduced ? d.radius : d.radius * this._wobble(tSec, d.seed, 1.0, wobbleAmp);
 
-            // Enhanced color system
+            // Enhanced color system with split cluster indication
             let fillColor, borderColor;
             if (isTop) { 
                 fillColor = 'rgba(0, 255, 255, 0.2)'; 
                 borderColor = 'rgba(0, 255, 255, 0.85)'; 
             }
-            else if (d.percentage >= 50) { 
+            else if (d.percentage >= 15) { 
                 fillColor = d.isSplit ? 'rgba(147, 51, 234, 0.15)' : 'rgba(147, 51, 234, 0.25)'; 
                 borderColor = d.isSplit ? 'rgba(147, 51, 234, 0.7)' : 'rgba(147, 51, 234, 0.9)'; 
             }
@@ -233,9 +274,12 @@ export class HeatmapRenderer {
     _shouldUsePolygon(drawable) {
         if (this.reduced) return false;
         
-        // Use polygon for higher complexity or larger clusters
+        // Use polygon for:
+        // 1. High complexity clusters
+        // 2. Large enough clusters (percentage > 15%)
+        // 3. Sufficient visual size for detail
         const complexityThreshold = 0.3;
-        const percentageThreshold = 50; // Adjusted for 25% minimum
+        const percentageThreshold = 15;
         const sizeThreshold = 60;
         
         return (drawable.complexity > complexityThreshold) ||
@@ -292,29 +336,95 @@ export class HeatmapRenderer {
         this.ctx.stroke();
     }
 
-    // Enhanced label system with better positioning for new sizes
+    // ---------- Enhanced label system ----------
+    _pointRectDistance(px, py, rx, ry, rw, rh) {
+        const cx = Math.max(rx, Math.min(px, rx + rw));
+        const cy = Math.max(ry, Math.min(py, ry + rh));
+        const dx = px - cx;
+        const dy = py - cy;
+        return Math.hypot(dx, dy);
+    }
+
+    _computeLabelLayoutCanvas(cx, cy, text, fontSize, radius) {
+        const ctx = this.ctx;
+        const W = this.canvas.width / (window.devicePixelRatio || 1);
+        const H = this.canvas.height / (window.devicePixelRatio || 1);
+
+        const textWidth = ctx.measureText(text).width;
+        const boxW = Math.ceil(textWidth);
+        const boxH = Math.ceil(fontSize);
+
+        let lx = cx, ly = cy;
+        const gutter = 8; // Slightly larger gutter for better spacing
+        const minX = gutter + boxW / 2;
+        const maxX = W - gutter - boxW / 2;
+        const minY = gutter + boxH / 2;
+        const maxY = H - gutter - boxH / 2;
+
+        const clampedLx = Math.max(minX, Math.min(maxX, lx));
+        const clampedLy = Math.max(minY, Math.min(maxY, ly));
+
+        const box = {
+            x: Math.round(clampedLx - boxW / 2),
+            y: Math.round(clampedLy - boxH / 2),
+            w: boxW,
+            h: boxH
+        };
+
+        const dist = this._pointRectDistance(cx, cy, box.x, box.y, box.w, box.h);
+        const separated = dist > Math.max(0, radius - 4); // Slightly more separation
+
+        return { box, center: { x: clampedLx, y: clampedLy }, separated };
+    }
+
     _renderPercentageLabelCanvas(cx, cy, percentage, radius, isTop, isSplit) {
         const ctx = this.ctx;
         const str = `${percentage}%`;
 
-        // FIXED: Adjusted font sizing for new size ranges
-        const baseFontSize = Math.max(16, Math.min(32, radius * 0.35));
+        // Dynamic font sizing based on circle size and importance
+        const baseFontSize = Math.max(16, Math.min(44, radius * 0.35));
         const fontSize = isTop ? baseFontSize * 1.1 : baseFontSize;
         
         ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        // Enhanced text rendering
+        const layout = this._computeLabelLayoutCanvas(cx, cy, str, fontSize, radius);
+
+        // Enhanced leader line for separated labels
+        if (layout.separated) {
+            const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
+            const sx = cx + Math.cos(ang) * Math.max(0, radius - 6);
+            const sy = cy + Math.sin(ang) * Math.max(0, radius - 6);
+
+            const halfW = layout.box.w / 2, halfH = layout.box.h / 2;
+            const ex = layout.center.x - Math.sign(Math.cos(ang)) * (halfW - 4);
+            const ey = layout.center.y - Math.sign(Math.sin(ang)) * (halfH - 4);
+
+            ctx.save();
+            // Enhanced leader line styling
+            const lineColor = isTop ? 'rgba(0, 255, 255, 0.85)' : 'rgba(147, 51, 234, 0.85)';
+            ctx.strokeStyle = lineColor;
+            ctx.lineWidth = 2.5;
+            ctx.setLineDash([4, 2]); // Subtle dash for elegance
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+            ctx.setLineDash([]); // Reset line dash
+            ctx.restore();
+        }
+
+        // Enhanced text rendering with better shadows
         ctx.save();
         ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur = 10;
         ctx.shadowOffsetX = 2;
         ctx.shadowOffsetY = 2;
 
         // Main text
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(str, cx, cy);
+        ctx.fillText(str, layout.center.x, layout.center.y);
 
         // Reset shadow
         ctx.shadowBlur = 0;
@@ -324,23 +434,21 @@ export class HeatmapRenderer {
         // Enhanced text outline
         const outlineColor = isTop ? 'rgba(0, 255, 255, 0.9)' : 'rgba(147, 51, 234, 0.9)';
         ctx.strokeStyle = outlineColor;
-        ctx.lineWidth = isSplit ? 1.5 : 1;
-        ctx.strokeText(str, cx, cy);
+        ctx.lineWidth = isSplit ? 1.5 : 1; // Thicker outline for split clusters
+        ctx.strokeText(str, layout.center.x, layout.center.y);
         
         // Additional glow for top cluster
         if (isTop) {
             ctx.shadowColor = 'rgba(0, 255, 255, 0.5)';
-            ctx.shadowBlur = 12;
-            ctx.fillText(str, cx, cy);
+            ctx.shadowBlur = 15;
+            ctx.fillText(str, layout.center.x, layout.center.y);
         }
         
         ctx.restore();
     }
 
     // ---------- public ----------
-    setThreshold(threshold) { 
-        this.PERCENTAGE_THRESHOLD = Math.max(25, threshold); // FIXED: Minimum 25%
-    }
+    setThreshold(threshold) { this.PERCENTAGE_THRESHOLD = threshold; }
     destroy() { this.stop(); }
 }
 
@@ -358,8 +466,7 @@ export function drawBlobs(ctx, blobs) {
         eccentricity: blob.eccentricity || 0,
         preferredSides: blob.preferredSides || blob.sides,
         isSplit: blob.isSplit || false,
-        id: blob.id,
-        visualSize: blob.visualSize // Use backend calculated size
+        id: blob.id
     }));
     renderer.updateClusters(clusters);
 }

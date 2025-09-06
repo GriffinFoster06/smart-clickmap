@@ -16,6 +16,10 @@
             height: 100%;
             background: transparent;
             overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            position: fixed;
+            top: 0;
+            left: 0;
         }
 
         #overlay-canvas {
@@ -25,6 +29,24 @@
             width: 100%;
             height: 100%;
             background: transparent;
+            pointer-events: none;
+            z-index: 1000;
+            /* Hardware acceleration for smooth rendering */
+            will-change: opacity;
+            transform: translateZ(0);
+            -webkit-transform: translateZ(0);
+            backface-visibility: hidden;
+            -webkit-backface-visibility: hidden;
+            /* Optimize canvas rendering */
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: optimize-contrast;
+            image-rendering: crisp-edges;
+        }
+
+        /* Global safety: ensure overlay never captures input */
+        html, body, #overlay-canvas, * {
+            pointer-events: none !important;
         }
 
         /* Hidden loading (only visible in console) */
@@ -36,11 +58,49 @@
         .error-message {
             display: none;
         }
+
+        /* HUD-style glow animations for active state */
+        body.clickmap-active #overlay-canvas {
+            opacity: 1;
+            transition: opacity 0.5s ease-in-out;
+        }
+
+        body:not(.clickmap-active) #overlay-canvas {
+            opacity: 0.8;
+        }
+
+        /* Responsive optimizations */
+        @media (max-width: 768px) {
+            #overlay-canvas {
+                image-rendering: auto; /* Better for mobile */
+            }
+        }
+
+        /* High contrast mode support */
+        @media (prefers-contrast: high) {
+            #overlay-canvas {
+                filter: contrast(1.5);
+            }
+        }
+
+        /* Reduced motion support */
+        @media (prefers-reduced-motion: reduce) {
+            #overlay-canvas {
+                transition: none !important;
+            }
+        }
+
+        /* Performance optimizations */
+        @supports (-webkit-appearance: none) {
+            #overlay-canvas {
+                -webkit-transform: translate3d(0, 0, 0);
+            }
+        }
     </style>
 </head>
 <body>
     <!-- Only the canvas - nothing else visible -->
-    <canvas id="overlay-canvas"></canvas>
+    <canvas id="overlay-canvas" aria-label="Interactive click heatmap overlay"></canvas>
 
     <!-- Hidden elements for error handling -->
     <div class="loading" id="loading"></div>

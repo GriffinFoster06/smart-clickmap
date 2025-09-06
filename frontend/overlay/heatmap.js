@@ -1,4 +1,6 @@
-﻿// frontend/overlay/heatmap.js - Standalone heatmap renderer for OBS overlay
+// frontend/overlay/heatmap.js - Standalone HUD-style heatmap renderer
+// Matches main extension visual theme with purple/cyan colors
+
 export function drawBlobs(ctx, blobs) {
     const W = ctx.canvas.width;
     const H = ctx.canvas.height;
@@ -6,7 +8,7 @@ export function drawBlobs(ctx, blobs) {
 
     if (!blobs || blobs.length === 0) return;
 
-    // Filter blobs to only show those above 3% threshold
+    // Filter to match main extension threshold
     const visibleBlobs = blobs.filter(blob => (blob.pct || blob.percentage || 0) >= 3);
 
     // Sort by percentage, lowest first (so highest renders on top)
@@ -19,54 +21,114 @@ export function drawBlobs(ctx, blobs) {
         const percentage = blob.pct || blob.percentage || 0;
         const isTop = blob.isTop || index === sortedBlobs.length - 1;
 
-        // Dynamic radius based on percentage
-        const baseRadius = Math.max(25, Math.min(80, 30 + Math.sqrt(percentage) * 4));
+        // Match main extension radius calculation
+        const baseRadius = Math.max(80, Math.min(160, 80 + (percentage * 2.5)));
+        const densityFactor = blob.density ? Math.sqrt(blob.density) : 1;
+        const spreadRadius = blob.radius || 0.05;
+        const radius = Math.max(80, Math.min(160, baseRadius * densityFactor + (spreadRadius * 200)));
 
         ctx.save();
 
-        // Main semi-transparent circle - purple or cyan
-        const fillColor = isTop
-            ? `rgba(0, 255, 255, 0.35)` // Cyan for top cluster
-            : `rgba(147, 51, 234, 0.3)`; // Purple for others
+        // Main fill - match main extension colors exactly
+        let fillColor, borderColor;
+        if (isTop) {
+            fillColor = 'rgba(0, 255, 255, 0.2)';
+            borderColor = 'rgba(0, 255, 255, 0.85)';
+        } else if (percentage >= 15) {
+            fillColor = 'rgba(147, 51, 234, 0.25)';
+            borderColor = 'rgba(147, 51, 234, 0.9)';
+        } else {
+            fillColor = 'rgba(147, 51, 234, 0.2)';
+            borderColor = 'rgba(147, 51, 234, 0.7)';
+        }
 
+        // Main area
         ctx.fillStyle = fillColor;
         ctx.beginPath();
-        ctx.arc(cx, cy, baseRadius, 0, 2 * Math.PI);
+        ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
         ctx.fill();
 
-        // Border for definition
-        const borderColor = isTop
-            ? `rgba(0, 255, 255, 0.6)`
-            : `rgba(147, 51, 234, 0.5)`;
-
+        // Primary border
         ctx.strokeStyle = borderColor;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 3;
         ctx.stroke();
 
-        // Inner glow for HUD effect
-        const innerGradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, baseRadius * 0.6);
-        innerGradient.addColorStop(0, isTop ? 'rgba(0, 255, 255, 0.15)' : 'rgba(147, 51, 234, 0.15)');
-        innerGradient.addColorStop(1, 'transparent');
-
-        ctx.fillStyle = innerGradient;
+        // Inner ring effect (matching main extension)
+        ctx.strokeStyle = borderColor.replace(/[\d\.]+\)$/g, '0.3)');
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.arc(cx, cy, baseRadius * 0.6, 0, 2 * Math.PI);
-        ctx.fill();
+        ctx.arc(cx, cy, radius - 6, 0, 2 * Math.PI);
+        ctx.stroke();
 
-        // Bold percentage text
-        const fontSize = Math.max(14, Math.min(22, baseRadius * 0.5));
+        // Percentage text with matching styling
+        const fontSize = Math.max(22, Math.min(40, radius * 0.35));
         ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        // Text shadow for readability
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-        ctx.fillText(`${percentage}%`, cx + 1, cy + 1);
+        // Strong shadow for readability (matching main extension)
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 2;
 
-        // Main text - white or light color
-        ctx.fillStyle = isTop ? '#ffffff' : '#e0e7ff';
+        // Main text - white
+        ctx.fillStyle = '#ffffff';
         ctx.fillText(`${percentage}%`, cx, cy);
+
+        // Reset shadow
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+
+        // Text outline for definition
+        ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.9)' : 'rgba(147, 51, 234, 0.9)';
+        ctx.lineWidth = 1;
+        ctx.strokeText(`${percentage}%`, cx, cy);
 
         ctx.restore();
     });
+}
+
+// Legacy compatibility wrapper
+export class HeatmapRenderer {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d', { alpha: true });
+        this.canvas.style.pointerEvents = 'none';
+        
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+    }
+
+    resize() {
+        const rect = this.canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+
+        this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+        this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+        this.canvas.style.width = rect.width + 'px';
+        this.canvas.style.height = rect.height + 'px';
+
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    updateClusters(clusters) {
+        const blobs = (clusters || []).map(cluster => ({
+            x: cluster.x,
+            y: cluster.y,
+            percentage: cluster.percentage,
+            pct: cluster.percentage,
+            density: cluster.density,
+            radius: cluster.radius,
+            count: cluster.count,
+            isTop: cluster.isTop
+        }));
+        
+        drawBlobs(this.ctx, blobs);
+    }
+
+    destroy() {
+        // Cleanup if needed
+    }
 }

@@ -1,6 +1,6 @@
-﻿// frontend/overlay/overlay.js
-// Aspect-correct 16:9 projection, smooth animation, click-through,
-// distribution-driven polygon decisions, readable % with leader line only if needed.
+// frontend/overlay/overlay.js
+// HUD-style clickmap overlay with purple/cyan theme matching main extension
+// Aspect-correct 16:9 projection, smooth animation, click-through
 
 (function () {
     'use strict';
@@ -123,54 +123,43 @@
     }
 
     // --- Distribution intelligence ---
-    // Infer how non-circular a cluster is using provided hints/metrics.
-    // Returns a score in [0..1], where 0 = very circular, 1 = clearly non-circular/anisotropic.
     function inferNonCircularityScore(c) {
         let score = 0;
 
         // 1) Strong explicit hints from backend (preferred)
         if (typeof c.eccentricity === 'number') {
-            // 0..1 (0 circular, 1 elongated)
             score = Math.max(score, Math.max(0, Math.min(1, c.eccentricity)));
         }
         if (typeof c.axisRatio === 'number') {
-            // minor/major radius ratio in [0..1]; low => more elongated
             const ar = Math.max(0, Math.min(1, c.axisRatio));
             score = Math.max(score, 1 - ar);
         }
         if (typeof c.shapeScore === 'number') {
-            // precomputed non-circularity [0..1]
             score = Math.max(score, Math.max(0, Math.min(1, c.shapeScore)));
         }
         if (c.hints && c.hints.nonCircular === true) {
-            score = Math.max(score, 0.6); // strong nudge from backend
+            score = Math.max(score, 0.6);
         }
 
-        // 2) Heuristics from common metrics (works with your current backend):
-        //    spread = avg distance to centroid, maxSpread = max distance to centroid
-        //    compactness = spread / maxSpread (≈0.5..0.8 tends to be more circular)
-        //    If compactness deviates a lot from ~0.6, it's likely anisotropic/irregular.
+        // 2) Heuristics from common metrics
         const spread = (typeof c.spread === 'number') ? Math.max(0, c.spread) : null;
         const maxSpread = (typeof c.maxSpread === 'number') ? Math.max(0, c.maxSpread) : null;
         const compactness = (typeof c.compactness === 'number') ? Math.max(0, Math.min(1, c.compactness)) : null;
 
         if (compactness !== null) {
-            // Target ~0.60 as "roundish". Penalize deviations.
             const dev = Math.abs(compactness - 0.60);
-            // Map ~0.00..0.40 deviation into ~0..1
             score = Math.max(score, Math.min(1, dev / 0.40));
         }
 
         if (spread !== null && maxSpread !== null && maxSpread > 1e-6) {
-            const ratio = spread / maxSpread; // for a nice disk, ~0.6
+            const ratio = spread / maxSpread;
             const dev = Math.abs(ratio - 0.60);
             score = Math.max(score, Math.min(1, dev / 0.40));
         }
 
-        // 3) Density extremes can also indicate irregular shapes (overly peaked or very strandy)
+        // 3) Density extremes
         if (typeof c.density === 'number') {
             const d = c.density;
-            // Nudge for very high or very low densities (heuristic)
             if (d > 15) score = Math.max(score, 0.25 + Math.min(0.35, (d - 15) / 50));
             if (d < 1.0) score = Math.max(score, 0.2);
         }
@@ -178,19 +167,16 @@
         return Math.max(0, Math.min(1, score));
     }
 
-    // Decide approximate polygon complexity (# sides) from non-circularity.
-    // Also honors optional `sidesHint` from backend.
     function decidePolygonSides(nonCirc, c) {
         if (typeof c?.sidesHint === 'number') {
             return Math.max(3, Math.min(24, Math.round(c.sidesHint)));
         }
-        // Map non-circularity to sides: slightly non-circular ≈ hex/oct; very irregular ≈ 10–14
-        const minSides = 6;
-        const maxSides = 14;
+        const minSides = 8;
+        const maxSides = 16;
         return Math.round(minSides + (maxSides - minSides) * nonCirc);
     }
 
-    class PreciseAreaRenderer {
+    class HUDStyleRenderer {
         constructor(canvas, opts = {}) {
             this.canvas = canvas;
             this.ctx = canvas.getContext('2d', { alpha: true });
@@ -198,6 +184,7 @@
             // Ensure our canvas never eats clicks
             this.canvas.style.pointerEvents = 'none';
 
+            // Match main extension parameters
             this.PERCENTAGE_THRESHOLD = 3;
             this.MIN_RADIUS = 80;
             this.MAX_RADIUS = 160;
@@ -234,7 +221,6 @@
                     s.nonCircTarget = t.nonCirc;
                     s.sides = t.sides;
                     s.x.step(dt); s.y.step(dt); s.r.step(dt); s.p.step(dt);
-                    // Smooth non-circularity with a tiny 1st-order step (cheap)
                     s.nonCirc = s.nonCirc + (t.nonCirc - s.nonCirc) * Math.min(1, dt * 6);
                 }
 
@@ -273,17 +259,16 @@
 
             const nextTargets = new Map();
             for (const c of filtered) {
-                // Size respects distribution and density but stays readable
+                // Match main extension sizing
                 const baseArea = this.MIN_RADIUS + (c.percentage * 2.5);
                 const densityFactor = c.density ? Math.sqrt(c.density) : 1;
-                const spreadRadius = c.radius || 0.05; // normalized spread (from backend)
+                const spreadRadius = c.radius || 0.05;
                 const effectiveRadius = Math.max(
                     this.MIN_RADIUS,
                     Math.min(this.MAX_RADIUS, baseArea * densityFactor + (spreadRadius * 200))
                 );
 
-                // Distribution intelligence → non-circularity score + sides
-                const nonCirc = inferNonCircularityScore(c); // 0..1
+                const nonCirc = inferNonCircularityScore(c);
                 const sides = decidePolygonSides(nonCirc, c);
 
                 const key = c.id ?? `${(c.x * 10000 | 0)}_${(c.y * 10000 | 0)}_${c.count | 0}`;
@@ -311,7 +296,7 @@
                     });
                 }
             }
-            // prune missing
+
             for (const key of [...this.springs.keys()]) {
                 if (!nextTargets.has(key)) this.springs.delete(key);
             }
@@ -339,7 +324,7 @@
             for (const [key, s] of this.springs.entries()) {
                 drawables.push({
                     key,
-                    cx: vx + s.x.x * vw,   // normalized to 16:9 viewport, not the whole window
+                    cx: vx + s.x.x * vw,
                     cy: vy + s.y.x * vh,
                     radius: s.r.x,
                     percentage: s.p.x,
@@ -348,7 +333,7 @@
                     sides: s.sides
                 });
             }
-            // low % first, highest on top
+            
             drawables.sort((a, b) => a.percentage - b.percentage);
 
             for (let i = 0; i < drawables.length; i++) {
@@ -358,21 +343,21 @@
                 const wobbleAmp = Math.min(0.12, 0.06 + (d.percentage / 100) * 0.08);
                 const r = REDUCED_MOTION ? d.radius : d.radius * wobble(tSec, d.seed, 1.0, wobbleAmp);
 
+                // Match main extension colors exactly
                 let fillColor, borderColor;
                 if (isTop) {
-                    fillColor = 'rgba(0, 255, 255, 0.20)';
+                    fillColor = 'rgba(0, 255, 255, 0.2)';
                     borderColor = 'rgba(0, 255, 255, 0.85)';
                 } else if (d.percentage >= 15) {
                     fillColor = 'rgba(147, 51, 234, 0.25)';
-                    borderColor = 'rgba(147, 51, 234, 0.90)';
+                    borderColor = 'rgba(147, 51, 234, 0.9)';
                 } else {
-                    fillColor = 'rgba(147, 51, 234, 0.20)';
-                    borderColor = 'rgba(147, 51, 234, 0.70)';
+                    fillColor = 'rgba(147, 51, 234, 0.2)';
+                    borderColor = 'rgba(147, 51, 234, 0.7)';
                 }
 
-                // Distribution-based decision: polygon if non-circular enough
-                const needsPolygon = !REDUCED_MOTION && (d.nonCirc > 0.25); // threshold can be tuned
-                if (needsPolygon) {
+                const usePoly = (d.percentage >= 20) && !REDUCED_MOTION;
+                if (usePoly) {
                     this.renderPolygonArea(d.cx, d.cy, r, fillColor, borderColor, tSec, d.seed, d.percentage, d.nonCirc, d.sides);
                 } else {
                     this.renderCircularArea(d.cx, d.cy, r, fillColor, borderColor);
@@ -392,6 +377,7 @@
             this.ctx.lineWidth = 3;
             this.ctx.stroke();
 
+            // Inner ring effect matching main extension
             this.ctx.strokeStyle = borderColor.replace(/[\d\.]+\)$/g, '0.3)');
             this.ctx.lineWidth = 1.5;
             this.ctx.beginPath();
@@ -400,13 +386,11 @@
         }
 
         renderPolygonArea(cx, cy, radius, fillColor, borderColor, tSec, seed, pct, nonCirc, sides) {
-            const s = Math.max(3, Math.min(24, Math.round(sides || 8)));
-            // Modulation amplitude scales with non-circularity
-            const ampBase = 0.04 + 0.10 * Math.min(1, nonCirc);
+            const s = Math.max(8, Math.min(16, Math.round(sides || 8)));
             this.ctx.beginPath();
             for (let i = 0; i <= s; i++) {
                 const a = (i / s) * Math.PI * 2;
-                const local = wobble(tSec + i * 0.07, seed * 0.73, 1.0, ampBase);
+                const local = wobble(tSec + i * 0.07, seed * 0.73, 1.0, 0.06);
                 const rr = radius * (0.94 + 0.08 * local);
                 const x = cx + Math.cos(a) * rr;
                 const y = cy + Math.sin(a) * rr;
@@ -457,7 +441,6 @@
                 h: boxH
             };
 
-            // If the text rect intersects the circle, we don't separate (no leader line)
             const dist = this._pointRectDistance(cx, cy, box.x, box.y, box.w, box.h);
             const separated = dist > Math.max(0, radius - 2);
 
@@ -475,7 +458,6 @@
 
             const layout = this._computeLabelLayout(cx, cy, str, fontSize, radius);
 
-            // Only draw a leader line if we had to move the label outside the blob
             if (layout.separated) {
                 const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
                 const sx = cx + Math.cos(ang) * Math.max(0, radius - 4);
@@ -495,7 +477,7 @@
                 ctx.restore();
             }
 
-            // Text only (no pill). Strong shadow to ensure readability over any video.
+            // Text with strong shadow for readability (matching main extension)
             ctx.save();
             ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
             ctx.shadowBlur = 8;
@@ -516,6 +498,7 @@
         }
 
         setThreshold(threshold) { this.PERCENTAGE_THRESHOLD = threshold; }
+        destroy() { this.stop(); }
     }
 
     class InstantOverlay {
@@ -537,7 +520,7 @@
             this.setupRenderer();
             this.connectWebSocket();
             this.startPolling();
-            console.log(`🎯 Precise area overlay connected to: ${this.channelId}`);
+            console.log(`🎯 HUD-style overlay connected to: ${this.channelId}`);
         }
 
         getChannelFromUrl() {
@@ -547,14 +530,13 @@
 
         setupRenderer() {
             const targetAspect = parseAspectFromURL();
-            this.renderer = new PreciseAreaRenderer(canvas, { targetAspect });
+            this.renderer = new HUDStyleRenderer(canvas, { targetAspect });
 
             const threshold = new URLSearchParams(window.location.search).get('threshold');
             if (threshold) this.renderer.setThreshold(parseInt(threshold, 10));
         }
 
         connectWebSocket() {
-            // Try ?channel= form first, then /ws/<id>
             try {
                 const wsBase = EBS.replace('https://', 'wss://').replace('http://', 'ws://');
 
@@ -578,7 +560,6 @@
                     };
                     ws.onclose = () => {
                         if (this.websocket === ws) this.websocket = null;
-                        // Reconnect after a bit
                         setTimeout(() => tryConnect(urlList, (idx + 1) % urlList.length), 3000);
                     };
                 };
@@ -593,7 +574,6 @@
         }
 
         startPolling() {
-            // Keep a light polling fallback in case WS is blocked by a proxy
             if (this.pollInterval) return;
             this.pollInterval = setInterval(() => this.poll(), 1000);
             this.poll();
@@ -620,14 +600,20 @@
             if (!this.renderer) return;
             const clusters = Array.isArray(data) ? data : (data?.clusters || data?.blobs || []);
             this.renderer.updateClusters(clusters);
+            
+            // Update body classes for CSS styling
+            document.body.classList.toggle('clickmap-active', data?.running !== false);
+            document.body.classList.toggle('clickmap-has-data', clusters.length > 0);
         }
     }
 
     function initialize() {
         try {
             new InstantOverlay();
-            console.log('🎯 Precise area-based overlay loaded');
-        } catch (error) { console.error('Failed to initialize overlay:', error); }
+            console.log('🎯 HUD-style ClickMap overlay loaded');
+        } catch (error) { 
+            console.error('Failed to initialize overlay:', error); 
+        }
     }
 
     if (document.readyState === 'loading') {

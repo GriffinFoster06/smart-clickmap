@@ -1,6 +1,5 @@
 // frontend/overlay/overlay.js
-// HUD-style clickmap overlay with purple/cyan theme matching main extension
-// Aspect-correct 16:9 projection, smooth animation, click-through
+// Advanced HUD-style overlay with all the sophisticated visual effects from the original
 
 (function () {
     'use strict';
@@ -23,19 +22,16 @@
         const style = document.createElement('style');
         style.textContent = `
       html, body { background: transparent !important; }
-      /* The entire overlay subtree is inert to mouse/touch */
       #overlay-root, #overlay-root * { pointer-events: none !important; }
-      /* Fullscreen, on top, but inert to input */
       #overlay-root {
         position: fixed; inset: 0;
-        z-index: 2147483647; /* above Twitch UI but doesn't block it */
+        z-index: 2147483647;
       }
-      /* Canvas fills viewport */
       #overlay-canvas {
         position: absolute; left: 0; top: 0; right: 0; bottom: 0;
         width: 100vw; height: 100vh; display: block;
         background: transparent !important;
-        touch-action: none; /* avoid touch panning capture on mobile */
+        touch-action: none;
       }
     `;
         document.head.appendChild(style);
@@ -49,162 +45,52 @@
         overlayRoot.appendChild(canvas);
     }
 
-    // ---------- helpers ----------
-    function parseAspectFromURL() {
-        const params = new URLSearchParams(window.location.search);
-
-        const bw = parseInt(params.get('base_w') || params.get('bw') || '', 10);
-        const bh = parseInt(params.get('base_h') || params.get('bh') || '', 10);
-        if (Number.isFinite(bw) && bw > 0 && Number.isFinite(bh) && bh > 0) {
-            return bw / bh; // OBS base canvas hint
-        }
-
-        const aspectStr = params.get('aspect');
-        if (aspectStr) {
-            const parts = aspectStr.split(/[:/]/).map(Number);
-            if (parts.length === 2 && parts.every(n => Number.isFinite(n) && n > 0)) {
-                return parts[0] / parts[1];
-            }
-            const asFloat = parseFloat(aspectStr);
-            if (Number.isFinite(asFloat) && asFloat > 0) return asFloat;
-        }
-
-        return 16 / 9; // default: works for ANY 16:9 size
-    }
-
-    // Center a target aspect inside the window using "contain" fit.
-    function fitViewport(containerW, containerH, targetAspect) {
-        let vw = containerW;
-        let vh = Math.round(vw / targetAspect);
-        if (vh > containerH) {
-            vh = containerH;
-            vw = Math.round(vh * targetAspect);
-        }
-        const vx = Math.floor((containerW - vw) / 2);
-        const vy = Math.floor((containerH - vh) / 2);
-        return { x: vx, y: vy, width: vw, height: vh };
-    }
-
-    function hashSeed(x, y, pct, count) {
-        let h = 2166136261 >>> 0;
-        function mix(n) { h ^= (n | 0); h = Math.imul(h, 16777619); }
-        mix((x * 1e6) | 0);
-        mix((y * 1e6) | 0);
-        mix(((pct || 0) * 100) | 0);
-        mix(count | 0);
-        return (h >>> 0) / 4294967295;
-    }
-
-    function wobble(t, seed, base = 1.0, amp = 0.10) {
-        const a1 = Math.sin(t * 0.7 + seed * 6.28318);
-        const a2 = Math.sin(t * 1.1 + seed * 12.56636);
-        const a3 = Math.sin(t * 0.43 + seed * 3.14159);
-        const n = (a1 * 0.5 + a2 * 0.35 + a3 * 0.15);
-        return base * (1.0 + amp * n);
-    }
-
-    // Critically-damped spring for smooth, non-choppy motion
-    class Spring {
-        constructor(value = 0, { omega = 10, zeta = 1 } = {}) {
-            this.x = value;
-            this.v = 0;
-            this.omega = omega;
-            this.zeta = zeta;
-            this.target = value;
-        }
-        setTarget(t) { this.target = t; }
-        jump(v) { this.x = v; this.v = 0; this.target = v; }
-        step(dt) {
-            const f = -this.omega * this.omega * (this.x - this.target) - 2 * this.zeta * this.omega * this.v;
-            this.v += f * dt;
-            this.x += this.v * dt;
-            return this.x;
-        }
-    }
-
-    // --- Distribution intelligence ---
-    function inferNonCircularityScore(c) {
-        let score = 0;
-
-        // 1) Strong explicit hints from backend (preferred)
-        if (typeof c.eccentricity === 'number') {
-            score = Math.max(score, Math.max(0, Math.min(1, c.eccentricity)));
-        }
-        if (typeof c.axisRatio === 'number') {
-            const ar = Math.max(0, Math.min(1, c.axisRatio));
-            score = Math.max(score, 1 - ar);
-        }
-        if (typeof c.shapeScore === 'number') {
-            score = Math.max(score, Math.max(0, Math.min(1, c.shapeScore)));
-        }
-        if (c.hints && c.hints.nonCircular === true) {
-            score = Math.max(score, 0.6);
-        }
-
-        // 2) Heuristics from common metrics
-        const spread = (typeof c.spread === 'number') ? Math.max(0, c.spread) : null;
-        const maxSpread = (typeof c.maxSpread === 'number') ? Math.max(0, c.maxSpread) : null;
-        const compactness = (typeof c.compactness === 'number') ? Math.max(0, Math.min(1, c.compactness)) : null;
-
-        if (compactness !== null) {
-            const dev = Math.abs(compactness - 0.60);
-            score = Math.max(score, Math.min(1, dev / 0.40));
-        }
-
-        if (spread !== null && maxSpread !== null && maxSpread > 1e-6) {
-            const ratio = spread / maxSpread;
-            const dev = Math.abs(ratio - 0.60);
-            score = Math.max(score, Math.min(1, dev / 0.40));
-        }
-
-        // 3) Density extremes
-        if (typeof c.density === 'number') {
-            const d = c.density;
-            if (d > 15) score = Math.max(score, 0.25 + Math.min(0.35, (d - 15) / 50));
-            if (d < 1.0) score = Math.max(score, 0.2);
-        }
-
-        return Math.max(0, Math.min(1, score));
-    }
-
-    function decidePolygonSides(nonCirc, c) {
-        if (typeof c?.sidesHint === 'number') {
-            return Math.max(3, Math.min(24, Math.round(c.sidesHint)));
-        }
-        const minSides = 8;
-        const maxSides = 16;
-        return Math.round(minSides + (maxSides - minSides) * nonCirc);
-    }
-
-    class HUDStyleRenderer {
-        constructor(canvas, opts = {}) {
+    // ---------- Advanced HeatmapRenderer (from original) ----------
+    class HeatmapRenderer {
+        constructor(canvas) {
             this.canvas = canvas;
             this.ctx = canvas.getContext('2d', { alpha: true });
 
-            // Ensure our canvas never eats clicks
+            // Ensure this renderer never blocks clicks in any embedding context
             this.canvas.style.pointerEvents = 'none';
 
-            // Match main extension parameters
             this.PERCENTAGE_THRESHOLD = 3;
             this.MIN_RADIUS = 80;
             this.MAX_RADIUS = 160;
 
-            this.targetAspect = opts.targetAspect || 16 / 9;
-            this.viewport = { x: 0, y: 0, width: 0, height: 0 };
-
-            this.springs = new Map(); // key -> {x,y,r,p,seed,nonCirc,sides}
+            this.springs = new Map(); // key -> {x,y,r,p,seed}
             this.targets = new Map();
-
             this.animationId = null;
             this.lastTs = 0;
+            this.reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
             this.resize();
-            window.addEventListener('resize', () => this.resize());
             this.start();
         }
 
+        // ---------- animation helpers ----------
+        _spring(value = 0, omega = 10, zeta = 1) { return { x: value, v: 0, o: omega, z: zeta, t: value }; }
+        _stepSpring(s, dt) {
+            const f = -s.o * s.o * (s.x - s.t) - 2 * s.z * s.o * s.v;
+            s.v += f * dt; s.x += s.v * dt; return s.x;
+        }
+        _hashSeed(x, y, pct, count) {
+            let h = 2166136261 >>> 0;
+            const mix = (n) => { h ^= (n | 0); h = Math.imul(h, 16777619); };
+            mix((x * 1e6) | 0); mix((y * 1e6) | 0);
+            mix(((pct || 0) * 100) | 0); mix(count | 0);
+            return (h >>> 0) / 4294967295;
+        }
+        _wobble(t, seed, base = 1.0, amp = 0.10) {
+            const a1 = Math.sin(t * 0.7 + seed * 6.28318);
+            const a2 = Math.sin(t * 1.1 + seed * 12.56636);
+            const a3 = Math.sin(t * 0.43 + seed * 3.14159);
+            const n = (a1 * 0.5 + a2 * 0.35 + a3 * 0.15);
+            return base * (1.0 + amp * n);
+        }
+
         start() {
-            if (REDUCED_MOTION) return;
+            if (this.reduced) return;
             if (this.animationId) return;
             const loop = (ts) => {
                 if (!this.lastTs) this.lastTs = ts;
@@ -214,14 +100,9 @@
                 for (const [key, s] of this.springs.entries()) {
                     const t = this.targets.get(key);
                     if (!t) continue;
-                    s.x.setTarget(t.x);
-                    s.y.setTarget(t.y);
-                    s.r.setTarget(t.r);
-                    s.p.setTarget(t.p);
-                    s.nonCircTarget = t.nonCirc;
-                    s.sides = t.sides;
-                    s.x.step(dt); s.y.step(dt); s.r.step(dt); s.p.step(dt);
-                    s.nonCirc = s.nonCirc + (t.nonCirc - s.nonCirc) * Math.min(1, dt * 6);
+                    s.x.t = t.x; s.y.t = t.y; s.r.t = t.r; s.p.t = t.p;
+                    this._stepSpring(s.x, dt); this._stepSpring(s.y, dt);
+                    this._stepSpring(s.r, dt); this._stepSpring(s.p, dt);
                 }
 
                 this.render(ts / 1000);
@@ -230,26 +111,19 @@
             this.animationId = requestAnimationFrame(loop);
         }
 
-        stop() {
-            if (this.animationId) cancelAnimationFrame(this.animationId);
-            this.animationId = null;
-        }
+        stop() { if (this.animationId) cancelAnimationFrame(this.animationId); this.animationId = null; }
 
+        // ---------- layout / draw ----------
         resize() {
+            const rect = this.canvas.getBoundingClientRect();
             const dpr = window.devicePixelRatio || 1;
-            const cssW = window.innerWidth;
-            const cssH = window.innerHeight;
 
-            // Fullscreen canvas
-            this.canvas.width = Math.max(1, Math.floor(cssW * dpr));
-            this.canvas.height = Math.max(1, Math.floor(cssH * dpr));
-            this.canvas.style.width = cssW + 'px';
-            this.canvas.style.height = cssH + 'px';
+            this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+            this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+            this.canvas.style.width = rect.width + 'px';
+            this.canvas.style.height = rect.height + 'px';
 
             this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-            // Project clusters into a 16:9 box centered in the window.
-            this.viewport = fitViewport(cssW, cssH, this.targetAspect);
             this.render(performance.now() / 1000);
         }
 
@@ -259,81 +133,54 @@
 
             const nextTargets = new Map();
             for (const c of filtered) {
-                // Match main extension sizing
                 const baseArea = this.MIN_RADIUS + (c.percentage * 2.5);
                 const densityFactor = c.density ? Math.sqrt(c.density) : 1;
                 const spreadRadius = c.radius || 0.05;
-                const effectiveRadius = Math.max(
+                const rEff = Math.max(
                     this.MIN_RADIUS,
                     Math.min(this.MAX_RADIUS, baseArea * densityFactor + (spreadRadius * 200))
                 );
 
-                const nonCirc = inferNonCircularityScore(c);
-                const sides = decidePolygonSides(nonCirc, c);
-
                 const key = c.id ?? `${(c.x * 10000 | 0)}_${(c.y * 10000 | 0)}_${c.count | 0}`;
-                nextTargets.set(key, {
-                    x: c.x,
-                    y: c.y,
-                    r: effectiveRadius,
-                    p: c.percentage || 0,
-                    nonCirc,
-                    sides,
-                    count: c.count || 1
-                });
+                nextTargets.set(key, { x: c.x, y: c.y, r: rEff, p: c.percentage || 0, count: c.count || 1 });
 
                 if (!this.springs.has(key)) {
-                    const seed = hashSeed(c.x, c.y, c.percentage || 0, c.count || 1);
+                    const seed = this._hashSeed(c.x, c.y, c.percentage || 0, c.count || 1);
                     this.springs.set(key, {
-                        x: new Spring(c.x, { omega: 9, zeta: 0.95 }),
-                        y: new Spring(c.y, { omega: 9, zeta: 0.95 }),
-                        r: new Spring(effectiveRadius, { omega: 12, zeta: 0.9 }),
-                        p: new Spring(c.percentage || 0, { omega: 7, zeta: 1.0 }),
-                        seed,
-                        nonCirc: nonCirc,
-                        nonCircTarget: nonCirc,
-                        sides
+                        x: this._spring(c.x, 9, 0.95),
+                        y: this._spring(c.y, 9, 0.95),
+                        r: this._spring(rEff, 12, 0.9),
+                        p: this._spring(c.percentage || 0, 7, 1.0),
+                        seed
                     });
                 }
             }
-
             for (const key of [...this.springs.keys()]) {
                 if (!nextTargets.has(key)) this.springs.delete(key);
             }
             this.targets = nextTargets;
 
-            if (REDUCED_MOTION) {
+            if (this.reduced) {
                 for (const [key, s] of this.springs.entries()) {
                     const t = this.targets.get(key);
-                    if (!t) continue;
-                    s.x.jump(t.x); s.y.jump(t.y); s.r.jump(t.r); s.p.jump(t.p);
-                    s.nonCirc = t.nonCirc; s.sides = t.sides;
+                    s.x.x = s.x.t = t.x; s.x.v = 0;
+                    s.y.x = s.y.t = t.y; s.y.v = 0;
+                    s.r.x = s.r.t = t.r; s.r.v = 0;
+                    s.p.x = s.p.t = t.p; s.p.v = 0;
                 }
                 this.render(performance.now() / 1000);
             }
         }
 
         render(tSec = 0) {
-            const cssW = this.canvas.width / (window.devicePixelRatio || 1);
-            const cssH = this.canvas.height / (window.devicePixelRatio || 1);
-            this.ctx.clearRect(0, 0, cssW, cssH);
-
-            const { x: vx, y: vy, width: vw, height: vh } = this.viewport;
+            const W = this.canvas.width / (window.devicePixelRatio || 1);
+            const H = this.canvas.height / (window.devicePixelRatio || 1);
+            this.ctx.clearRect(0, 0, W, H);
 
             const drawables = [];
             for (const [key, s] of this.springs.entries()) {
-                drawables.push({
-                    key,
-                    cx: vx + s.x.x * vw,
-                    cy: vy + s.y.x * vh,
-                    radius: s.r.x,
-                    percentage: s.p.x,
-                    seed: s.seed,
-                    nonCirc: s.nonCirc,
-                    sides: s.sides
-                });
+                drawables.push({ key, cx: s.x.x * W, cy: s.y.x * H, radius: s.r.x, percentage: s.p.x, seed: s.seed });
             }
-            
             drawables.sort((a, b) => a.percentage - b.percentage);
 
             for (let i = 0; i < drawables.length; i++) {
@@ -341,56 +188,44 @@
                 const isTop = i === drawables.length - 1;
 
                 const wobbleAmp = Math.min(0.12, 0.06 + (d.percentage / 100) * 0.08);
-                const r = REDUCED_MOTION ? d.radius : d.radius * wobble(tSec, d.seed, 1.0, wobbleAmp);
+                const r = this.reduced ? d.radius : d.radius * this._wobble(tSec, d.seed, 1.0, wobbleAmp);
 
-                // Match main extension colors exactly
                 let fillColor, borderColor;
-                if (isTop) {
-                    fillColor = 'rgba(0, 255, 255, 0.2)';
-                    borderColor = 'rgba(0, 255, 255, 0.85)';
-                } else if (d.percentage >= 15) {
-                    fillColor = 'rgba(147, 51, 234, 0.25)';
-                    borderColor = 'rgba(147, 51, 234, 0.9)';
-                } else {
-                    fillColor = 'rgba(147, 51, 234, 0.2)';
-                    borderColor = 'rgba(147, 51, 234, 0.7)';
-                }
+                if (isTop) { fillColor = 'rgba(0, 255, 255, 0.2)'; borderColor = 'rgba(0, 255, 255, 0.85)'; }
+                else if (d.percentage >= 15) { fillColor = 'rgba(147, 51, 234, 0.25)'; borderColor = 'rgba(147, 51, 234, 0.9)'; }
+                else { fillColor = 'rgba(147, 51, 234, 0.2)'; borderColor = 'rgba(147, 51, 234, 0.7)'; }
 
-                const usePoly = (d.percentage >= 20) && !REDUCED_MOTION;
-                if (usePoly) {
-                    this.renderPolygonArea(d.cx, d.cy, r, fillColor, borderColor, tSec, d.seed, d.percentage, d.nonCirc, d.sides);
-                } else {
-                    this.renderCircularArea(d.cx, d.cy, r, fillColor, borderColor);
-                }
+                const usePoly = (d.percentage >= 20) && !this.reduced;
+                if (usePoly) this.renderPolygonArea(d.cx, d.cy, r, fillColor, borderColor, tSec, d.seed, d.percentage);
+                else this.renderCircularArea(d.cx, d.cy, r, fillColor, borderColor);
 
-                this._renderPercentageLabel(d.cx, d.cy, Math.round(d.percentage), r, isTop);
+                this._renderPercentageLabelCanvas(d.cx, d.cy, Math.round(d.percentage), r, isTop);
             }
         }
 
         renderCircularArea(cx, cy, radius, fillColor, borderColor) {
             this.ctx.fillStyle = fillColor;
             this.ctx.beginPath();
-            this.ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+            this.ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
             this.ctx.fill();
 
             this.ctx.strokeStyle = borderColor;
             this.ctx.lineWidth = 3;
             this.ctx.stroke();
 
-            // Inner ring effect matching main extension
             this.ctx.strokeStyle = borderColor.replace(/[\d\.]+\)$/g, '0.3)');
             this.ctx.lineWidth = 1.5;
             this.ctx.beginPath();
-            this.ctx.arc(cx, cy, radius - 6, 0, Math.PI * 2);
+            this.ctx.arc(cx, cy, radius - 6, 0, 2 * Math.PI);
             this.ctx.stroke();
         }
 
-        renderPolygonArea(cx, cy, radius, fillColor, borderColor, tSec, seed, pct, nonCirc, sides) {
-            const s = Math.max(8, Math.min(16, Math.round(sides || 8)));
+        renderPolygonArea(cx, cy, radius, fillColor, borderColor, tSec, seed, pct) {
+            const sides = Math.max(8, Math.min(16, 6 + Math.floor(pct / 7)));
             this.ctx.beginPath();
-            for (let i = 0; i <= s; i++) {
-                const a = (i / s) * Math.PI * 2;
-                const local = wobble(tSec + i * 0.07, seed * 0.73, 1.0, 0.06);
+            for (let i = 0; i <= sides; i++) {
+                const a = (i / sides) * Math.PI * 2;
+                const local = this._wobble(tSec + i * 0.07, seed * 0.73, 1.0, 0.06);
                 const rr = radius * (0.94 + 0.08 * local);
                 const x = cx + Math.cos(a) * rr;
                 const y = cy + Math.sin(a) * rr;
@@ -406,7 +241,7 @@
             this.ctx.stroke();
         }
 
-        // ---------- labels (text only; leader line only when needed) ----------
+        // ---------- label helpers (NO PILL) ----------
         _pointRectDistance(px, py, rx, ry, rw, rh) {
             const cx = Math.max(rx, Math.min(px, rx + rw));
             const cy = Math.max(ry, Math.min(py, ry + rh));
@@ -415,21 +250,21 @@
             return Math.hypot(dx, dy);
         }
 
-        _computeLabelLayout(cx, cy, text, fontSize, radius) {
+        _computeLabelLayoutCanvas(cx, cy, text, fontSize, radius) {
             const ctx = this.ctx;
-            const { x: vx, y: vy, width: vw, height: vh } = this.viewport;
+            const W = this.canvas.width / (window.devicePixelRatio || 1);
+            const H = this.canvas.height / (window.devicePixelRatio || 1);
 
             const textWidth = ctx.measureText(text).width;
             const boxW = Math.ceil(textWidth);
             const boxH = Math.ceil(fontSize);
 
             let lx = cx, ly = cy;
-
             const gutter = 6;
-            const minX = vx + gutter + boxW / 2;
-            const maxX = vx + vw - gutter - boxW / 2;
-            const minY = vy + gutter + boxH / 2;
-            const maxY = vy + vh - gutter - boxH / 2;
+            const minX = gutter + boxW / 2;
+            const maxX = W - gutter - boxW / 2;
+            const minY = gutter + boxH / 2;
+            const maxY = H - gutter - boxH / 2;
 
             const clampedLx = Math.max(minX, Math.min(maxX, lx));
             const clampedLy = Math.max(minY, Math.min(maxY, ly));
@@ -447,7 +282,7 @@
             return { box, center: { x: clampedLx, y: clampedLy }, separated };
         }
 
-        _renderPercentageLabel(cx, cy, percentage, radius, isTop) {
+        _renderPercentageLabelCanvas(cx, cy, percentage, radius, isTop) {
             const ctx = this.ctx;
             const str = `${percentage}%`;
 
@@ -456,7 +291,7 @@
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
 
-            const layout = this._computeLabelLayout(cx, cy, str, fontSize, radius);
+            const layout = this._computeLabelLayoutCanvas(cx, cy, str, fontSize, radius);
 
             if (layout.separated) {
                 const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
@@ -477,7 +312,7 @@
                 ctx.restore();
             }
 
-            // Text with strong shadow for readability (matching main extension)
+            // Text only (no background box)
             ctx.save();
             ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
             ctx.shadowBlur = 8;
@@ -497,6 +332,43 @@
             ctx.restore();
         }
 
+        // ---------- accurate data-driven sizing ----------
+        _calculateAccurateSize(cluster, allClusters) {
+            // Core data points
+            const clickCount = cluster.count || 1;
+            const percentage = cluster.percentage || 0;
+            const spatialRadius = cluster.radius || 0.05; // backend-calculated spread
+            const density = cluster.density || 1;
+            
+            // Dataset context
+            const maxClicks = Math.max(...allClusters.map(c => c.count || 1));
+            const maxPercentage = Math.max(...allClusters.map(c => c.percentage || 0));
+            
+            // Primary factor: Activity level (percentage is most important)
+            const activityScore = (percentage / maxPercentage) * 0.7 + (clickCount / maxClicks) * 0.3;
+            
+            // Secondary factor: Spatial representation
+            // Larger spread = slightly larger circle to show area of influence
+            const spatialFactor = 1 + (spatialRadius * 3); // modest influence
+            
+            // Density factor: High density should be prominent but not oversized
+            const densityFactor = Math.pow(density / 10, 0.3); // gentle density influence
+            
+            // Clean calculation: base size + activity scaling + spatial needs
+            const baseSize = 75; // readable minimum
+            const activitySize = activityScore * 90; // main scaling factor
+            const spatialAdjustment = spatialRadius * 200; // geographic representation
+            
+            const finalSize = baseSize + activitySize + spatialAdjustment * spatialFactor * densityFactor;
+            
+            // Practical bounds - let data drive size but keep usable
+            const minSize = 55; // absolutely minimum readable
+            const maxSize = Math.min(250, window.innerWidth * 0.2, window.innerHeight * 0.2);
+            
+            return Math.max(minSize, Math.min(maxSize, finalSize));
+        }
+
+        // ---------- public ----------
         setThreshold(threshold) { this.PERCENTAGE_THRESHOLD = threshold; }
         destroy() { this.stop(); }
     }
@@ -520,7 +392,7 @@
             this.setupRenderer();
             this.connectWebSocket();
             this.startPolling();
-            console.log(`🎯 HUD-style overlay connected to: ${this.channelId}`);
+            console.log(`🎯 Advanced overlay connected to: ${this.channelId}`);
         }
 
         getChannelFromUrl() {
@@ -529,8 +401,7 @@
         }
 
         setupRenderer() {
-            const targetAspect = parseAspectFromURL();
-            this.renderer = new HUDStyleRenderer(canvas, { targetAspect });
+            this.renderer = new HeatmapRenderer(canvas);
 
             const threshold = new URLSearchParams(window.location.search).get('threshold');
             if (threshold) this.renderer.setThreshold(parseInt(threshold, 10));
@@ -610,7 +481,7 @@
     function initialize() {
         try {
             new InstantOverlay();
-            console.log('🎯 HUD-style ClickMap overlay loaded');
+            console.log('🎯 Advanced HUD overlay loaded');
         } catch (error) { 
             console.error('Failed to initialize overlay:', error); 
         }

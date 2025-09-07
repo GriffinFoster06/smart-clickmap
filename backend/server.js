@@ -811,23 +811,34 @@ app.post('/reset', async (req, res) => {
 });
 
 // CLICK endpoint - minimal logging
+// CLICK endpoint - Complete replacement with enhanced logging
 app.post('/click', async (req, res) => {
     const startTime = performance.now();
+    const requestId = Math.random().toString(36).substr(2, 9);
+    
+    // IMMEDIATE CLICK RECEIVED LOG
+    console.log(`🎯 CLICK RECEIVED [${requestId}] from ${req.ip || 'unknown'} at ${new Date().toISOString()}`);
+    console.log(`📦 CLICK BODY [${requestId}]:`, JSON.stringify(req.body));
+    console.log(`🔑 CLICK HEADERS [${requestId}]: Auth=${!!req.headers.authorization}, ContentType=${req.headers['content-type']}`);
 
     try {
         const running = await gameState.isRunning();
         if (!running) {
+            console.log(`❌ CLICK REJECTED [${requestId}] - Game not running`);
             return res.status(400).json({
                 success: false,
-                error: 'Game not running'
+                error: 'Game not running',
+                requestId: requestId
             });
         }
 
         const token = (req.headers.authorization || '').replace('Bearer ', '');
         if (!token) {
+            console.log(`❌ CLICK REJECTED [${requestId}] - No token provided`);
             return res.status(401).json({
                 success: false,
-                error: 'No token provided'
+                error: 'No token provided',
+                requestId: requestId
             });
         }
 
@@ -835,58 +846,101 @@ app.post('/click', async (req, res) => {
         let payload;
         try {
             payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
+            console.log(`🔓 JWT VERIFIED [${requestId}] - Role: ${payload.role}, Channel: ${payload.channel_id}, User: ${payload.user_id || payload.opaque_user_id}`);
         } catch (jwtError) {
+            console.log(`❌ CLICK REJECTED [${requestId}] - JWT verification failed: ${jwtError.message}`);
             return res.status(401).json({
                 success: false,
-                error: 'Invalid token'
+                error: 'Invalid token',
+                requestId: requestId
             });
         }
         
         if (payload.exp && payload.exp < Date.now() / 1000) {
+            console.log(`❌ CLICK REJECTED [${requestId}] - Token expired`);
             return res.status(401).json({
                 success: false,
-                error: 'Token expired'
+                error: 'Token expired',
+                requestId: requestId
             });
         }
         
         if (payload.role === 'external') {
+            console.log(`❌ CLICK REJECTED [${requestId}] - Invalid role: ${payload.role}`);
             return res.status(403).json({
                 success: false,
-                error: 'Invalid role'
+                error: 'Invalid role',
+                requestId: requestId
             });
         }
 
+        // Enhanced input validation
         const { x, y } = req.body;
         const uid = payload.user_id || payload.opaque_user_id;
         const channelId = payload.channel_id;
 
+        // DETAILED CLICK INFO LOG
+        console.log(`📍 CLICK DETAILS [${requestId}] Channel: ${channelId}, User: ${uid}, Coords: (${x}, ${y})`);
+
+        // Strict coordinate validation
         if (typeof x !== 'number' || typeof y !== 'number' ||
+            isNaN(x) || isNaN(y) ||
             x < 0 || x > 1 || y < 0 || y > 1) {
+            console.log(`❌ CLICK REJECTED [${requestId}] - Invalid coordinates: (${x}, ${y}), types: (${typeof x}, ${typeof y})`);
             return res.status(400).json({
                 success: false,
-                error: 'Invalid coordinates'
+                error: 'Invalid coordinates - must be numbers between 0 and 1',
+                requestId: requestId,
+                received: { x, y, types: { x: typeof x, y: typeof y } }
             });
         }
 
-        // Store click in Redis
-        await gameState.addClick(channelId, uid, x, y);
+        if (!uid || !channelId) {
+            console.log(`❌ CLICK REJECTED [${requestId}] - Missing IDs: uid=${uid}, channelId=${channelId}`);
+            return res.status(400).json({
+                success: false,
+                error: 'Missing user or channel ID',
+                requestId: requestId
+            });
+        }
+
+        // Store click with enhanced logging
+        console.log(`💾 STORING CLICK [${requestId}] - Channel: ${channelId}, User: ${uid}, Coords: (${x.toFixed(3)}, ${y.toFixed(3)})`);
         
-        log(`✅ Click stored: Channel ${channelId}, User ${uid}`, 'debug');
+        try {
+            await gameState.addClick(channelId, uid, x, y);
+            console.log(`✅ CLICK STORED [${requestId}] - Successfully saved to Redis`);
+        } catch (storeError) {
+            console.log(`❌ CLICK STORAGE FAILED [${requestId}] - ${storeError.message}`);
+            throw storeError;
+        }
 
         // Get updated data and broadcast
+        console.log(`📊 GENERATING HEATMAP [${requestId}] - Getting updated data for channel ${channelId}`);
         const updatedData = await getCurrentHeatmapData(channelId);
+        console.log(`📊 HEATMAP DATA [${requestId}] - ${updatedData.clusters?.length || 0} clusters, ${updatedData.totalClicks || 0} total clicks`);
         
         // Broadcast to all instances via PubSub
-        await redisPub.publish('clickmap:broadcast', JSON.stringify({
-            channelId: channelId,
-            payload: updatedData,
-            fromInstance: INSTANCE_ID
-        }));
+        try {
+            await redisPub.publish('clickmap:broadcast', JSON.stringify({
+                channelId: channelId,
+                payload: updatedData,
+                fromInstance: INSTANCE_ID
+            }));
+            console.log(`📡 BROADCAST SENT [${requestId}] - Published to Redis PubSub`);
+        } catch (broadcastError) {
+            console.log(`⚠️ BROADCAST FAILED [${requestId}] - ${broadcastError.message}`);
+        }
         
         // Local broadcast
-        broadcastToChannel(channelId, updatedData);
+        try {
+            broadcastToChannel(channelId, updatedData);
+            console.log(`📡 LOCAL BROADCAST [${requestId}] - Sent to local WebSocket clients`);
+        } catch (localBroadcastError) {
+            console.log(`⚠️ LOCAL BROADCAST FAILED [${requestId}] - ${localBroadcastError.message}`);
+        }
 
-        // Performance tracking - development only
+        // Performance tracking
         if (!IS_PRODUCTION) {
             const totalTime = performance.now() - startTime;
             performanceStats.clickProcessingTimes.push(totalTime);
@@ -898,19 +952,32 @@ app.post('/click', async (req, res) => {
         }
 
         const channelClicks = await gameState.getChannelClicks(channelId);
+        const processingTime = performance.now() - startTime;
+        
+        console.log(`✅ CLICK PROCESSED [${requestId}] in ${processingTime.toFixed(1)}ms - Total clicks: ${channelClicks.size}, Clusters: ${updatedData.clusters?.length || 0}`);
+        
         res.json({
             success: true,
             status: 'click recorded',
             totalClicks: channelClicks.size,
             channelId: channelId,
-            instanceId: INSTANCE_ID
+            instanceId: INSTANCE_ID,
+            requestId: requestId,
+            processingTime: Math.round(processingTime),
+            clusters: updatedData.clusters?.length || 0
         });
 
     } catch (error) {
-        logError('❌ Click error:', error);
+        const processingTime = performance.now() - startTime;
+        console.log(`❌ CLICK ERROR [${requestId}] after ${processingTime.toFixed(1)}ms: ${error.message}`);
+        console.log(`❌ CLICK ERROR STACK [${requestId}]:`, error.stack);
+        
+        logError('Click processing failed:', error);
         res.status(500).json({
             success: false,
-            error: 'Server error'
+            error: 'Server error',
+            requestId: requestId,
+            processingTime: Math.round(processingTime)
         });
     }
 });

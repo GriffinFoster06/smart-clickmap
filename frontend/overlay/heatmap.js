@@ -1,5 +1,5 @@
-// frontend/heatmap.js - Advanced HUD-style renderer with smart sizing and adaptive shapes
-export class HeatmapRenderer {
+// frontend/overlay/heatmap.js - Advanced HUD-style renderer with all visual effects
+class HeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d', { alpha: true });
@@ -24,7 +24,7 @@ export class HeatmapRenderer {
         this.start();
     }
 
-    // ---------- animation helpers ----------
+    // ---------- ENHANCED ANIMATION HELPERS ----------
     _spring(value = 0, omega = 10, zeta = 1) { return { x: value, v: 0, o: omega, z: zeta, t: value }; }
     _stepSpring(s, dt) {
         const f = -s.o * s.o * (s.x - s.t) - 2 * s.z * s.o * s.v;
@@ -70,7 +70,7 @@ export class HeatmapRenderer {
 
     stop() { if (this.animationId) cancelAnimationFrame(this.animationId); this.animationId = null; }
 
-    // ---------- layout / draw ----------
+    // ---------- ENHANCED LAYOUT / DRAW ----------
     resize() {
         const rect = this.canvas.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
@@ -146,7 +146,7 @@ export class HeatmapRenderer {
         }
     }
 
-    // Smart sizing algorithm - considers volume, spatial spread, and proportionality
+    // ---------- INTELLIGENT SIZING ALGORITHM ----------
     _calculateSizingContext(clusters) {
         if (clusters.length === 0) return { maxPercentage: 0, maxSpread: 0, avgDensity: 1 };
 
@@ -213,6 +213,7 @@ export class HeatmapRenderer {
         return Math.max(6, Math.min(20, sides));
     }
 
+    // ---------- ADVANCED RENDERING ENGINE ----------
     render(tSec = 0) {
         const W = this.canvas.width / (window.devicePixelRatio || 1);
         const H = this.canvas.height / (window.devicePixelRatio || 1);
@@ -267,6 +268,7 @@ export class HeatmapRenderer {
                 this.renderCircularArea(d.cx, d.cy, r, fillColor, borderColor);
             }
 
+            // ADVANCED LABEL RENDERING with off-screen detection
             this._renderPercentageLabelCanvas(d.cx, d.cy, Math.round(d.percentage), r, isTop, d.isSplit);
         }
     }
@@ -336,7 +338,7 @@ export class HeatmapRenderer {
         this.ctx.stroke();
     }
 
-    // ---------- Enhanced label system ----------
+    // ---------- ADVANCED LABEL SYSTEM WITH OFF-SCREEN DETECTION ----------
     _pointRectDistance(px, py, rx, ry, rw, rh) {
         const cx = Math.max(rx, Math.min(px, rx + rw));
         const cy = Math.max(ry, Math.min(py, ry + rh));
@@ -391,7 +393,7 @@ export class HeatmapRenderer {
 
         const layout = this._computeLabelLayoutCanvas(cx, cy, str, fontSize, radius);
 
-        // Enhanced leader line for separated labels
+        // ENHANCED LEADER LINE FOR OFF-SCREEN LABELS
         if (layout.separated) {
             const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
             const sx = cx + Math.cos(ang) * Math.max(0, radius - 6);
@@ -447,13 +449,13 @@ export class HeatmapRenderer {
         ctx.restore();
     }
 
-    // ---------- public ----------
+    // ---------- PUBLIC API ----------
     setThreshold(threshold) { this.PERCENTAGE_THRESHOLD = threshold; }
     destroy() { this.stop(); }
 }
 
-// Legacy compatibility
-export function drawBlobs(ctx, blobs) {
+// Legacy compatibility function
+function drawBlobs(ctx, blobs) {
     const renderer = new HeatmapRenderer(ctx.canvas);
     const clusters = (blobs || []).map(blob => ({
         x: blob.x, y: blob.y,
@@ -470,3 +472,7 @@ export function drawBlobs(ctx, blobs) {
     }));
     renderer.updateClusters(clusters);
 }
+
+// Make classes globally available
+window.HeatmapRenderer = HeatmapRenderer;
+window.drawBlobs = drawBlobs;

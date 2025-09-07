@@ -1,5 +1,5 @@
-// frontend/overlay/overlay.js
-// Real-time intelligent overlay renderer with immediate updates
+// frontend/overlay/overlay.js - HTTP Polling Only (No WebSockets)
+// Reliable overlay renderer with HTTP polling for Twitch extensions
 
 (function () {
     'use strict';
@@ -45,8 +45,8 @@
         overlayRoot.appendChild(canvas);
     }
 
-    // ========== REAL-TIME HEATMAP RENDERER ==========
-    class RealTimeHeatmapRenderer {
+    // ========== RELIABLE HEATMAP RENDERER ==========
+    class ReliableHeatmapRenderer {
         constructor(canvas) {
             this.canvas = canvas;
             this.ctx = canvas.getContext('2d', { alpha: true });
@@ -54,14 +54,14 @@
 
             this.PERCENTAGE_THRESHOLD = 3;
             
-            // Enhanced animation system for real-time updates
+            // Enhanced animation system
             this.springs = new Map(); // key -> {x,y,r,p,seed,shape,density}
             this.targets = new Map();
             this.animationId = null;
             this.lastTs = 0;
             this.reduced = REDUCED_MOTION;
 
-            // Real-time optimization
+            // Performance tracking
             this.lastUpdateTime = 0;
             this.frameCount = 0;
             this.fps = 60;
@@ -69,10 +69,10 @@
             this.resize();
             this.start();
             
-            console.log('🎨 Real-time renderer initialized');
+            console.log('🎨 Reliable renderer initialized (HTTP only)');
         }
 
-        // ========== ENHANCED ANIMATION SYSTEM ==========
+        // ========== ANIMATION SYSTEM ==========
         _spring(value = 0, omega = 12, zeta = 0.9) { 
             return { x: value, v: 0, o: omega, z: zeta, t: value }; 
         }
@@ -117,19 +117,19 @@
                     this.lastUpdateTime = ts;
                 }
 
-                // Enhanced spring physics for smooth real-time updates
+                // Spring physics for smooth updates
                 for (const [key, s] of this.springs.entries()) {
                     const t = this.targets.get(key);
                     if (!t) continue;
                     
                     s.x.t = t.x; s.y.t = t.y; s.r.t = t.r; s.p.t = t.p;
                     
-                    // Faster spring response for real-time feel
+                    // Smooth spring response
                     this._stepSpring(s.x, dt); this._stepSpring(s.y, dt);
                     this._stepSpring(s.r, dt); this._stepSpring(s.p, dt);
                     
                     // Smoothly interpolate shape properties
-                    const smoothing = Math.min(1, dt * 6); // Faster interpolation
+                    const smoothing = Math.min(1, dt * 4);
                     s.density = s.density + (t.density - s.density) * smoothing;
                     s.eccentricity = s.eccentricity + (t.eccentricity - s.eccentricity) * smoothing;
                 }
@@ -158,12 +158,12 @@
             this.render(performance.now() / 1000);
         }
 
-        // ========== REAL-TIME CLUSTER PROCESSING ==========
+        // ========== CLUSTER PROCESSING ==========
         updateClusters(newClusters) {
             const filtered = (newClusters || [])
                 .filter(c => (c.percentage || 0) >= this.PERCENTAGE_THRESHOLD);
 
-            console.log(`🎨 Real-time update: ${filtered.length} clusters`);
+            console.log(`🎨 HTTP update: ${filtered.length} clusters`);
 
             const nextTargets = new Map();
             for (const c of filtered) {
@@ -193,11 +193,11 @@
                 if (!this.springs.has(key)) {
                     const seed = this._hashSeed(c.x, c.y, c.percentage || 0, c.count || 1);
                     this.springs.set(key, {
-                        // Faster spring response for real-time updates
-                        x: this._spring(c.x, 15, 0.85),
-                        y: this._spring(c.y, 15, 0.85),
-                        r: this._spring(visualRadius, 18, 0.8),
-                        p: this._spring(c.percentage || 0, 10, 1.0),
+                        // Smooth spring response for HTTP polling
+                        x: this._spring(c.x, 8, 0.9),
+                        y: this._spring(c.y, 8, 0.9),
+                        r: this._spring(visualRadius, 10, 0.85),
+                        p: this._spring(c.percentage || 0, 6, 1.0),
                         seed,
                         density: c.density || 1,
                         eccentricity: c.eccentricity || 0,
@@ -245,7 +245,7 @@
         }
 
         fallbackSizeCalculation(cluster) {
-            // Enhanced fallback calculation for real-time responsiveness
+            // Enhanced fallback calculation
             const baseSize = 65;
             const percentage = cluster.percentage || 0;
             const activityBonus = Math.sqrt(percentage / 100) * 140;
@@ -254,7 +254,7 @@
             return Math.max(baseSize, Math.min(280, baseSize + activityBonus + densityBonus + countBonus));
         }
 
-        // ========== ENHANCED RENDERING ENGINE ==========
+        // ========== RENDERING ENGINE ==========
         render(tSec = 0) {
             const W = this.canvas.width / (window.devicePixelRatio || 1);
             const H = this.canvas.height / (window.devicePixelRatio || 1);
@@ -291,7 +291,7 @@
                 const d = drawables[i];
                 const isTop = i === drawables.length - 1;
 
-                // Enhanced real-time wobble
+                // Enhanced wobble effects
                 const baseWobbleAmp = this.reduced ? 0 : 0.04;
                 const shapeStability = d.shapeConfidence || 1.0;
                 const activityWobble = (d.percentage / 100) * 0.06;
@@ -300,8 +300,8 @@
                 const totalWobble = (baseWobbleAmp + activityWobble + eccentricityWobble) * (2 - shapeStability);
                 const r = this.reduced ? d.radius : d.radius * this._wobble(tSec, d.seed, 1.0, totalWobble);
 
-                // Enhanced colors for real-time feel
-                const colors = this.calculateRealTimeColors(d, isTop);
+                // Enhanced colors
+                const colors = this.calculateColors(d, isTop);
 
                 // Render with shape intelligence
                 this.renderClusterShape(d, r, colors, tSec, isTop);
@@ -311,17 +311,17 @@
             }
         }
 
-        calculateRealTimeColors(drawable, isTop) {
+        calculateColors(drawable, isTop) {
             const percentage = drawable.percentage;
             const density = drawable.density;
             const shapeConfidence = drawable.shapeConfidence || 1.0;
             
-            // Real-time intensity calculation
+            // Intensity calculation
             const intensityBoost = 0.85 + (shapeConfidence * 0.15);
             const activityBoost = Math.min(1, percentage / 50);
             
             if (isTop) {
-                // Top cluster: enhanced cyan with real-time glow
+                // Top cluster: enhanced cyan
                 const intensity = Math.min(1, (0.7 + density * 0.15 + activityBoost * 0.15) * intensityBoost);
                 return {
                     fill: `rgba(0, 255, 255, ${(0.18 + intensity * 0.12)})`,
@@ -357,11 +357,11 @@
             }
         }
 
-        // ========== SHAPE RENDERING (SIMPLIFIED FOR PERFORMANCE) ==========
+        // ========== SHAPE RENDERING ==========
         renderClusterShape(drawable, radius, colors, tSec, isTop) {
             const { cx, cy, shapeType } = drawable;
 
-            // For real-time performance, favor circles and simple polygons
+            // Favor circles and simple polygons for performance
             if (shapeType === 'circle' || drawable.circularity > 0.8) {
                 this.renderEnhancedCircle(cx, cy, radius, colors, tSec, drawable.seed, isTop);
             } else {
@@ -370,7 +370,7 @@
         }
 
         renderEnhancedCircle(cx, cy, radius, colors, tSec, seed, isTop) {
-            // Main circle with enhanced glow for real-time feel
+            // Main circle with enhanced glow
             this.ctx.fillStyle = colors.fill;
             this.ctx.beginPath();
             this.ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -381,7 +381,7 @@
             this.ctx.lineWidth = isTop ? 4 : 3;
             this.ctx.stroke();
 
-            // Real-time glow effect
+            // Glow effect
             if (colors.glow) {
                 this.ctx.shadowColor = colors.glow;
                 this.ctx.shadowBlur = isTop ? 15 : 10;
@@ -434,12 +434,12 @@
             }
         }
 
-        // ========== ENHANCED LABEL SYSTEM ==========
+        // ========== LABEL SYSTEM ==========
         _renderPercentageLabelCanvas(cx, cy, percentage, radius, isTop) {
             const ctx = this.ctx;
             const str = `${percentage}%`;
 
-            // Enhanced font sizing for real-time visibility
+            // Enhanced font sizing for visibility
             const baseFontSize = Math.max(20, Math.min(52, radius * 0.38));
             const importanceBonus = isTop ? 6 : (percentage >= 25 ? 3 : 0);
             const fontSize = baseFontSize + importanceBonus;
@@ -448,10 +448,10 @@
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
 
-            // Enhanced text rendering with stronger presence
+            // Enhanced text rendering
             ctx.save();
             
-            // Enhanced shadow for real-time readability
+            // Enhanced shadow for readability
             ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
             ctx.shadowBlur = Math.max(10, fontSize * 0.25);
             ctx.shadowOffsetX = 2;
@@ -488,20 +488,19 @@
         destroy() { this.stop(); }
     }
 
-    // ========== REAL-TIME OVERLAY CONTROLLER ==========
-    class RealTimeOverlay {
+    // ========== HTTP POLLING OVERLAY CONTROLLER ==========
+    class HTTPPollingOverlay {
         constructor() {
             this.channelId = this.getChannelFromUrl();
             this.renderer = null;
-            this.websocket = null;
             this.pollInterval = null;
             this.consecutiveErrors = 0;
+            this.maxRetries = 5;
             this.lastUpdateTime = 0;
             this.updateCount = 0;
 
-            // Real-time optimization settings
-            this.fastPollInterval = 250; // 4 FPS fallback polling
-            this.isRealTimeMode = false;
+            // HTTP polling settings (reasonable for Twitch extensions)
+            this.pollIntervalMs = 1500; // 1.5 seconds - good balance
 
             this.init();
         }
@@ -512,9 +511,8 @@
                 return;
             }
             this.setupRenderer();
-            this.connectWebSocket();
-            this.startRealTimePolling();
-            console.log(`🎯 Real-time overlay connected to: ${this.channelId}`);
+            this.startHTTPPolling();
+            console.log(`🎯 HTTP overlay connected to: ${this.channelId}`);
         }
 
         getChannelFromUrl() {
@@ -523,81 +521,34 @@
         }
 
         setupRenderer() {
-            this.renderer = new RealTimeHeatmapRenderer(canvas);
+            this.renderer = new ReliableHeatmapRenderer(canvas);
 
             const threshold = new URLSearchParams(window.location.search).get('threshold');
             if (threshold) this.renderer.setThreshold(parseInt(threshold, 10));
         }
 
-        connectWebSocket() {
-            try {
-                const wsBase = EBS.replace('https://', 'wss://').replace('http://', 'ws://');
-
-                const tryConnect = (urlList, idx = 0) => {
-                    if (idx >= urlList.length) {
-                        console.log('All WebSocket attempts failed, using fast polling');
-                        return;
-                    }
-                    const url = urlList[idx];
-
-                    let ws;
-                    try { ws = new WebSocket(url); }
-                    catch (e) { return tryConnect(urlList, idx + 1); }
-
-                    ws.onopen = () => { 
-                        this.websocket = ws; 
-                        this.isRealTimeMode = true;
-                        console.log(`🔗 Real-time WebSocket connected: ${url}`);
-                    };
-                    ws.onmessage = (event) => {
-                        try {
-                            const data = JSON.parse(event.data);
-                            this.updateVisualization(data, 'websocket');
-                        } catch (e) { 
-                            console.warn('WebSocket parse error:', e); 
-                        }
-                    };
-                    ws.onerror = () => {
-                        try { ws.close(); } catch { }
-                        this.isRealTimeMode = false;
-                    };
-                    ws.onclose = () => {
-                        if (this.websocket === ws) {
-                            this.websocket = null;
-                            this.isRealTimeMode = false;
-                        }
-                        // Faster reconnection for real-time feel
-                        setTimeout(() => tryConnect(urlList, (idx + 1) % urlList.length), 1000);
-                    };
-                };
-
-                tryConnect([
-                    `${wsBase}/ws/${this.channelId}`
-                ]);
-            } catch (e) {
-                console.log('WebSocket not available, using fast polling only');
-            }
-        }
-
-        startRealTimePolling() {
+        startHTTPPolling() {
             if (this.pollInterval) return;
             
-            // Much faster polling as fallback (4 FPS)
-            this.pollInterval = setInterval(() => this.poll(), this.fastPollInterval);
-            this.poll();
+            // Reliable HTTP polling - works in all environments
+            this.pollInterval = setInterval(() => this.poll(), this.pollIntervalMs);
+            this.poll(); // Initial poll
             
-            console.log(`🚀 Real-time polling started (${this.fastPollInterval}ms interval)`);
+            console.log(`🚀 HTTP polling started (${this.pollIntervalMs}ms interval)`);
         }
 
         async poll() {
-            // Skip polling if WebSocket is working
-            if (this.websocket && this.websocket.readyState === WebSocket.OPEN) return;
-
             try {
                 const response = await fetch(`${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`, { 
-                    cache: 'no-store' 
+                    cache: 'no-store',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
                 });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
 
                 const data = await response.json();
                 this.updateVisualization(data, 'poll');
@@ -606,12 +557,16 @@
             } catch (error) {
                 this.consecutiveErrors++;
                 if (this.consecutiveErrors <= 3) {
-                    console.warn(`Connection issue ${this.consecutiveErrors}/3:`, error.message);
+                    console.warn(`Connection issue ${this.consecutiveErrors}/${this.maxRetries}:`, error.message);
+                }
+                
+                if (this.consecutiveErrors >= this.maxRetries) {
+                    console.error(`Connection lost after ${this.maxRetries} attempts`);
                 }
             }
         }
 
-        updateVisualization(data, source = 'unknown') {
+        updateVisualization(data, source = 'http') {
             if (!this.renderer) return;
             
             const now = Date.now();
@@ -619,8 +574,8 @@
             
             const clusters = Array.isArray(data) ? data : (data?.clusters || data?.blobs || []);
             
-            if (clusters.length > 0 || (now - this.lastUpdateTime > 5000)) {
-                console.log(`🎨 Real-time update #${this.updateCount} via ${source}: ${clusters.length} clusters (FPS: ${this.renderer.getFPS()})`);
+            if (clusters.length > 0 || (now - this.lastUpdateTime > 10000)) {
+                console.log(`🎨 HTTP update #${this.updateCount}: ${clusters.length} clusters (FPS: ${this.renderer.getFPS()})`);
                 this.lastUpdateTime = now;
             }
             
@@ -629,29 +584,39 @@
             // Update body classes for CSS styling
             document.body.classList.toggle('clickmap-active', data?.running !== false);
             document.body.classList.toggle('clickmap-has-data', clusters.length > 0);
-            document.body.classList.toggle('clickmap-realtime', this.isRealTimeMode);
         }
 
         getStatus() {
             return {
                 channelId: this.channelId,
-                isRealTime: this.isRealTimeMode,
-                websocketConnected: this.websocket && this.websocket.readyState === WebSocket.OPEN,
+                transport: 'HTTP',
                 updateCount: this.updateCount,
                 fps: this.renderer ? this.renderer.getFPS() : 0,
-                consecutiveErrors: this.consecutiveErrors
+                consecutiveErrors: this.consecutiveErrors,
+                pollInterval: this.pollIntervalMs
             };
+        }
+
+        destroy() {
+            if (this.pollInterval) {
+                clearInterval(this.pollInterval);
+                this.pollInterval = null;
+            }
+            if (this.renderer) {
+                this.renderer.destroy();
+            }
+            console.log('🧹 HTTP overlay destroyed');
         }
     }
 
     // ========== INITIALIZATION ==========
     function initialize() {
         try {
-            const overlay = new RealTimeOverlay();
-            window.realTimeOverlay = overlay; // For debugging
-            console.log('🎯 Real-time shape-adaptive overlay loaded');
+            const overlay = new HTTPPollingOverlay();
+            window.httpOverlay = overlay; // For debugging
+            console.log('🎯 HTTP-only overlay loaded successfully');
         } catch (error) { 
-            console.error('Failed to initialize real-time overlay:', error); 
+            console.error('Failed to initialize HTTP overlay:', error); 
         }
     }
 

@@ -192,15 +192,22 @@ const gameState = {
 
     async addClick(channelId, userId, x, y) {
     try {
-        // Store as separate fields instead of JSON
+        if (typeof x !== 'number' || typeof y !== 'number' || 
+            isNaN(x) || isNaN(y) || x < 0 || x > 1 || y < 0 || y > 1) {
+            throw new Error('Invalid coordinates');
+        }
+
         const redisKey = `clicks:${channelId}:${userId}`;
         
-        // Use Redis hash instead of string
-        await redis.hSetex(redisKey, 3600, {
+        // Use Redis hash with proper API
+        await redis.hSet(redisKey, {
             'x': x.toString(),
-            'y': y.toString(), 
+            'y': y.toString(),
             'timestamp': Date.now().toString()
         });
+        
+        // Set expiration separately
+        await redis.expire(redisKey, 3600);
         
     } catch (error) {
         logError('Redis addClick error:', error);
@@ -218,15 +225,20 @@ const gameState = {
         const clicks = new Map();
         
         for (const key of keys) {
-            const userId = key.split(':')[2];
-            const hashData = await redis.hGetAll(key);
-            
-            if (hashData && hashData.x && hashData.y) {
-                clicks.set(userId, {
-                    x: parseFloat(hashData.x),
-                    y: parseFloat(hashData.y),
-                    timestamp: parseInt(hashData.timestamp)
-                });
+            try {
+                const userId = key.split(':')[2];
+                const hashData = await redis.hGetAll(key);
+                
+                if (hashData && hashData.x && hashData.y) {
+                    clicks.set(userId, {
+                        x: parseFloat(hashData.x),
+                        y: parseFloat(hashData.y),
+                        timestamp: parseInt(hashData.timestamp || Date.now())
+                    });
+                }
+            } catch (keyError) {
+                // Skip individual key errors
+                await redis.del(key);
             }
         }
 
@@ -980,6 +992,23 @@ app.post('/cleanup', async (req, res) => {
             success: false,
             error: 'Cleanup failed'
         });
+    }
+});
+
+// Add this endpoint to clear everything
+app.post('/nuclear-reset', async (req, res) => {
+    try {
+        const keys = await redis.keys('clicks:*');
+        const gameKeys = await redis.keys('game:*');
+        const allKeys = [...keys, ...gameKeys];
+        
+        if (allKeys.length > 0) {
+            await redis.del(allKeys);
+        }
+        
+        res.json({ success: true, deleted: allKeys.length });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 

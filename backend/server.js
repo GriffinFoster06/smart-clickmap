@@ -7,13 +7,16 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { createClient } from 'redis';
 
-// Declare wss at module level but initialize later
-let wss = null;
-
 const PORT = process.env.PORT || 8080;
 const SECRET = Buffer.from(process.env.TWITCH_SECRET || '', 'base64');
 const INSTANCE_ID = process.env.RENDER_SERVICE_ID || `local_${Date.now()}`;
 const INSTANCE_TTL = 30; // seconds
+
+// FIXED: Declare global variables early
+let wss = null;
+let httpServer = null;
+const connectedClients = new Map(); // channelId → Set of WebSocket connections
+const configPanels = new Map(); // sessionId → WebSocket connection
 
 // REDIS SETUP with PubSub
 const redis = createClient({
@@ -51,7 +54,7 @@ redis.on('reconnecting', () => console.log('🔄 Redis reconnecting...'));
 redisPub.on('error', (err) => console.error('Redis Pub Error:', err));
 redisSub.on('error', (err) => console.error('Redis Sub Error:', err));
 
-// Connect all Redis clients
+// FIXED: Enhanced error handling for Redis connection
 async function connectRedis() {
     try {
         await Promise.all([
@@ -74,7 +77,7 @@ async function connectRedis() {
 
 await connectRedis();
 
-// Handle broadcast messages from other instances
+// FIXED: Enhanced broadcast message handlers with error handling
 function handleBroadcastMessage(message) {
     try {
         const data = JSON.parse(message);
@@ -108,200 +111,265 @@ function handleConfigMessage(message) {
     }
 }
 
-// ENHANCED GAME STATE with versioning and locking
+// ENHANCED GAME STATE with versioning and locking - FIXED Redis API
 const gameState = {
     async setRunning(running) {
-        const version = Date.now();
-        const pipeline = redis.multi();
-        pipeline.set('game:running', running.toString());
-        pipeline.set('game:lastUpdate', version.toString());
-        pipeline.set('game:version', version.toString());
-        await pipeline.exec();
-        return version;
+        try {
+            const version = Date.now();
+            const pipeline = redis.multi();
+            pipeline.set('game:running', running.toString());
+            pipeline.set('game:lastUpdate', version.toString());
+            pipeline.set('game:version', version.toString());
+            await pipeline.exec();
+            return version;
+        } catch (error) {
+            console.error('Redis setRunning error:', error);
+            throw error;
+        }
     },
 
     async isRunning() {
-        const running = await redis.get('game:running');
-        return running === 'true';
+        try {
+            const running = await redis.get('game:running');
+            return running === 'true';
+        } catch (error) {
+            console.error('Redis isRunning error:', error);
+            return false; // Safe default
+        }
     },
 
     async getVersion() {
-        const version = await redis.get('game:version');
-        return version ? parseInt(version) : 0;
+        try {
+            const version = await redis.get('game:version');
+            return version ? parseInt(version) : 0;
+        } catch (error) {
+            console.error('Redis getVersion error:', error);
+            return 0;
+        }
     },
 
     async getLastUpdate() {
-        const timestamp = await redis.get('game:lastUpdate');
-        return timestamp ? parseInt(timestamp) : Date.now();
+        try {
+            const timestamp = await redis.get('game:lastUpdate');
+            return timestamp ? parseInt(timestamp) : Date.now();
+        } catch (error) {
+            console.error('Redis getLastUpdate error:', error);
+            return Date.now();
+        }
     },
     
     async compareAndSetRunning(running, expectedVersion) {
-        const currentVersion = await this.getVersion();
-        
-        if (expectedVersion && parseInt(expectedVersion) !== currentVersion) {
-            return { success: false, conflict: true, currentVersion };
+        try {
+            const currentVersion = await this.getVersion();
+            
+            if (expectedVersion && parseInt(expectedVersion) !== currentVersion) {
+                return { success: false, conflict: true, currentVersion };
+            }
+            
+            const newVersion = await this.setRunning(running);
+            return { success: true, version: newVersion };
+        } catch (error) {
+            console.error('Redis compareAndSetRunning error:', error);
+            throw error;
         }
-        
-        const newVersion = await this.setRunning(running);
-        return { success: true, version: newVersion };
     },
 
     async addClick(channelId, userId, x, y) {
-        const clickData = JSON.stringify({ x, y, timestamp: Date.now() });
-        await redis.setex(`clicks:${channelId}:${userId}`, 3600, clickData);
+        try {
+            const clickData = JSON.stringify({ x, y, timestamp: Date.now() });
+            // FIXED: setex -> setEx
+            await redis.setEx(`clicks:${channelId}:${userId}`, 3600, clickData);
+        } catch (error) {
+            console.error('Redis addClick error:', error);
+            throw error;
+        }
     },
 
     async getChannelClicks(channelId) {
-        const pattern = `clicks:${channelId}:*`;
-        const keys = await redis.keys(pattern);
-        
-        if (keys.length === 0) return new Map();
-
-        const pipeline = redis.multi();
-        keys.forEach(key => pipeline.get(key));
-        const results = await pipeline.exec();
-
-        const clicks = new Map();
-        keys.forEach((key, index) => {
-            const userId = key.split(':')[2];
-            const result = results[index];
+        try {
+            const pattern = `clicks:${channelId}:*`;
+            const keys = await redis.keys(pattern);
             
-            if (result && result[1]) {
-                try {
-                    const clickData = JSON.parse(result[1]);
-                    clicks.set(userId, clickData);
-                } catch (parseError) {
-                    console.error(`Failed to parse click data for ${userId}:`, parseError);
-                }
-            }
-        });
+            if (keys.length === 0) return new Map();
 
-        return clicks;
-    },
+            const pipeline = redis.multi();
+            keys.forEach(key => pipeline.get(key));
+            const results = await pipeline.exec();
 
-    async getAllChannelClicks() {
-        const pattern = 'clicks:*';
-        const keys = await redis.keys(pattern);
-        
-        if (keys.length === 0) return new Map();
-
-        const channelGroups = new Map();
-        keys.forEach(key => {
-            const parts = key.split(':');
-            const channelId = parts[1];
-            const userId = parts[2];
-            
-            if (!channelGroups.has(channelId)) {
-                channelGroups.set(channelId, []);
-            }
-            channelGroups.get(channelId).push({ key, userId });
-        });
-
-        const pipeline = redis.multi();
-        keys.forEach(key => pipeline.get(key));
-        const results = await pipeline.exec();
-
-        const allClicks = new Map();
-        let resultIndex = 0;
-
-        for (const [channelId, channelKeys] of channelGroups.entries()) {
-            const channelClicks = new Map();
-            
-            channelKeys.forEach(({ userId }) => {
-                const result = results[resultIndex++];
+            const clicks = new Map();
+            keys.forEach((key, index) => {
+                const userId = key.split(':')[2];
+                const result = results[index];
+                
                 if (result && result[1]) {
                     try {
                         const clickData = JSON.parse(result[1]);
-                        channelClicks.set(userId, clickData);
+                        clicks.set(userId, clickData);
                     } catch (parseError) {
                         console.error(`Failed to parse click data for ${userId}:`, parseError);
                     }
                 }
             });
 
-            if (channelClicks.size > 0) {
-                allClicks.set(channelId, channelClicks);
-            }
+            return clicks;
+        } catch (error) {
+            console.error('Redis getChannelClicks error:', error);
+            return new Map(); // Safe default
         }
+    },
 
-        return allClicks;
+    async getAllChannelClicks() {
+        try {
+            const pattern = 'clicks:*';
+            const keys = await redis.keys(pattern);
+            
+            if (keys.length === 0) return new Map();
+
+            const channelGroups = new Map();
+            keys.forEach(key => {
+                const parts = key.split(':');
+                const channelId = parts[1];
+                const userId = parts[2];
+                
+                if (!channelGroups.has(channelId)) {
+                    channelGroups.set(channelId, []);
+                }
+                channelGroups.get(channelId).push({ key, userId });
+            });
+
+            const pipeline = redis.multi();
+            keys.forEach(key => pipeline.get(key));
+            const results = await pipeline.exec();
+
+            const allClicks = new Map();
+            let resultIndex = 0;
+
+            for (const [channelId, channelKeys] of channelGroups.entries()) {
+                const channelClicks = new Map();
+                
+                channelKeys.forEach(({ userId }) => {
+                    const result = results[resultIndex++];
+                    if (result && result[1]) {
+                        try {
+                            const clickData = JSON.parse(result[1]);
+                            channelClicks.set(userId, clickData);
+                        } catch (parseError) {
+                            console.error(`Failed to parse click data for ${userId}:`, parseError);
+                        }
+                    }
+                });
+
+                if (channelClicks.size > 0) {
+                    allClicks.set(channelId, channelClicks);
+                }
+            }
+
+            return allClicks;
+        } catch (error) {
+            console.error('Redis getAllChannelClicks error:', error);
+            return new Map();
+        }
     },
 
     async clearAllClicks() {
-        const clickKeys = await redis.keys('clicks:*');
-        if (clickKeys.length > 0) {
-            await redis.del(clickKeys);
+        try {
+            const clickKeys = await redis.keys('clicks:*');
+            if (clickKeys.length > 0) {
+                await redis.del(clickKeys);
+            }
+        } catch (error) {
+            console.error('Redis clearAllClicks error:', error);
+            throw error;
         }
     },
     
     async clearChannelClicks(channelId) {
-        const clickKeys = await redis.keys(`clicks:${channelId}:*`);
-        if (clickKeys.length > 0) {
-            await redis.del(clickKeys);
+        try {
+            const clickKeys = await redis.keys(`clicks:${channelId}:*`);
+            if (clickKeys.length > 0) {
+                await redis.del(clickKeys);
+            }
+        } catch (error) {
+            console.error('Redis clearChannelClicks error:', error);
+            throw error;
         }
     }
 };
 
-// Distributed lock implementation
+// FIXED: Enhanced distributed lock implementation with error handling
 async function acquireLock(key, ttl = 5000) {
-    const lockKey = `lock:${key}`;
-    const lockValue = `${INSTANCE_ID}_${Date.now()}`;
-    
-    const result = await redis.set(lockKey, lockValue, {
-        NX: true, // Only set if not exists
-        PX: ttl   // Expire after ttl milliseconds
-    });
-    
-    return result === 'OK' ? lockValue : null;
+    try {
+        const lockKey = `lock:${key}`;
+        const lockValue = `${INSTANCE_ID}_${Date.now()}`;
+        
+        const result = await redis.set(lockKey, lockValue, {
+            NX: true, // Only set if not exists
+            PX: ttl   // Expire after ttl milliseconds
+        });
+        
+        return result === 'OK' ? lockValue : null;
+    } catch (error) {
+        console.error('Failed to acquire lock:', error);
+        return null;
+    }
 }
 
 async function releaseLock(key, lockValue) {
-    const lockKey = `lock:${key}`;
-    const currentValue = await redis.get(lockKey);
-    
-    if (currentValue === lockValue) {
-        await redis.del(lockKey);
-        return true;
+    try {
+        const lockKey = `lock:${key}`;
+        const currentValue = await redis.get(lockKey);
+        
+        if (currentValue === lockValue) {
+            await redis.del(lockKey);
+            return true;
+        }
+        return false;
+    } catch (error) {
+        console.error('Failed to release lock:', error);
+        return false;
     }
-    return false;
 }
 
-// Instance registration
+// FIXED: Instance registration with safe wss handling
 async function registerInstance() {
-    const instanceData = {
-        id: INSTANCE_ID,
-        startTime: Date.now(),
-        websocketClients: wss?.clients?.size || 0,  // ✅ Safe optional chaining
-        endpoint: process.env.RENDER_SERVICE_URL || `http://localhost:${PORT}`,
-        lastHeartbeat: Date.now()
-    };
-    
-    await redis.setex(`instance:${INSTANCE_ID}`, INSTANCE_TTL, JSON.stringify(instanceData));
+    try {
+        const instanceData = {
+            id: INSTANCE_ID,
+            startTime: Date.now(),
+            websocketClients: wss ? wss.clients.size : 0, // ✅ Safe now
+            endpoint: process.env.RENDER_SERVICE_URL || `http://localhost:${PORT}`,
+            lastHeartbeat: Date.now()
+        };
+        
+        // FIXED: setex -> setEx
+        await redis.setEx(`instance:${INSTANCE_ID}`, INSTANCE_TTL, JSON.stringify(instanceData));
+    } catch (error) {
+        console.error('Failed to register instance:', error);
+    }
 }
 
 async function getActiveInstances() {
-    const keys = await redis.keys('instance:*');
-    const instances = [];
-    
-    for (const key of keys) {
-        const data = await redis.get(key);
-        if (data) {
-            try {
-                instances.push(JSON.parse(data));
-            } catch (e) {
-                console.error('Failed to parse instance data:', e);
+    try {
+        const keys = await redis.keys('instance:*');
+        const instances = [];
+        
+        for (const key of keys) {
+            const data = await redis.get(key);
+            if (data) {
+                try {
+                    instances.push(JSON.parse(data));
+                } catch (e) {
+                    console.error('Failed to parse instance data:', e);
+                }
             }
         }
+        
+        return instances;
+    } catch (error) {
+        console.error('Failed to get active instances:', error);
+        return [];
     }
-    
-    return instances;
 }
-
-// Register instance immediately and periodically
-await registerInstance();
-setInterval(async () => {
-    await registerInstance();
-}, 20000); // Every 20 seconds
 
 // Real-time performance monitoring
 const PERFORMANCE_MONITORING = process.env.NODE_ENV !== 'production';
@@ -312,10 +380,6 @@ const performanceStats = {
     totalRequests: 0,
     startTime: Date.now()
 };
-
-// Track WebSocket connections
-const connectedClients = new Map(); // channelId → Set of WebSocket connections
-const configPanels = new Map(); // sessionId → WebSocket connection
 
 const app = express();
 
@@ -1854,12 +1918,21 @@ function calculateDirectionalRadius(points, centerX, centerY, direction, maxRadi
 
 // Enhanced WebSocket broadcasting function with performance optimization
 function broadcastToChannel(channelId, data) {
+    if (!wss || !connectedClients) return;
+    
     const broadcastStart = performance.now();
     const clients = connectedClients.get(channelId);
     if (!clients || clients.size === 0) return;
 
     // REAL-TIME OPTIMIZATION: Pre-stringify message once
-    const message = JSON.stringify(data);
+    let message;
+    try {
+        message = JSON.stringify(data);
+    } catch (error) {
+        console.error('Failed to stringify broadcast data:', error);
+        return;
+    }
+
     let sentCount = 0;
     let failedCount = 0;
 
@@ -1882,7 +1955,7 @@ function broadcastToChannel(channelId, data) {
     const broadcastTime = performance.now() - broadcastStart;
     
     if (sentCount > 0) {
-        console.log(`📡 Real-time broadcast to ${channelId}: ${sentCount} clients, ${data.clusters.length} clusters in ${broadcastTime.toFixed(2)}ms`);
+        console.log(`📡 Real-time broadcast to ${channelId}: ${sentCount} clients, ${data.clusters?.length || 0} clusters in ${broadcastTime.toFixed(2)}ms`);
         if (failedCount > 0) {
             console.log(`   ⚠️ Cleaned up ${failedCount} stale connections`);
         }
@@ -1894,7 +1967,16 @@ function broadcastToLocalClients(channelId, data) {
 }
 
 function broadcastToConfigPanels(data) {
-    const message = JSON.stringify(data);
+    if (!configPanels) return;
+    
+    let message;
+    try {
+        message = JSON.stringify(data);
+    } catch (error) {
+        console.error('Failed to stringify config data:', error);
+        return;
+    }
+
     let sentCount = 0;
     
     configPanels.forEach((ws, sessionId) => {
@@ -1917,6 +1999,8 @@ function broadcastToConfigPanels(data) {
 }
 
 async function broadcastToAll(data) {
+    if (!connectedClients) return;
+    
     let totalSent = 0;
     const channelPromises = [];
     
@@ -1939,11 +2023,10 @@ async function broadcastToAll(data) {
     }
 }
 
-// ===== HTTP SERVER CREATION =====
+// FIXED: Create servers BEFORE registering instance
 console.log('🔧 Creating HTTP server...');
-const httpServer = createServer(app);
+httpServer = createServer(app);
 
-// ===== WEBSOCKET SERVER INTEGRATION =====
 console.log('🔧 Creating WebSocket server integrated with HTTP server...');
 try {
     wss = new WebSocketServer({
@@ -2106,31 +2189,40 @@ const connectionHealthInterval = setInterval(() => {
     }
 }, 30000); // Check every 30 seconds
 
-// Error handling
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection:', reason);
-});
-
-// Enhanced graceful shutdown with Redis cleanup
-process.on('SIGTERM', async () => {
+// FIXED: Enhanced graceful shutdown
+async function gracefulShutdown() {
     console.log('📝 Shutting down real-time server...');
-    clearInterval(connectionHealthInterval);
+    
+    // Clear intervals
+    if (typeof connectionHealthInterval !== 'undefined') {
+        clearInterval(connectionHealthInterval);
+    }
 
+    // Close WebSocket connections
     if (wss) {
         wss.clients.forEach((ws) => {
-            ws.close(1001, 'Server shutting down');
+            try {
+                ws.close(1001, 'Server shutting down');
+            } catch (error) {
+                console.error('Error closing WebSocket:', error);
+            }
         });
     }
 
+    // Close Redis connections
     try {
-        await redisSub.unsubscribe();
-        await redis.quit();
-        await redisPub.quit();
-        await redisSub.quit();
+        if (redisSub && redisSub.isReady) {
+            await redisSub.unsubscribe();
+        }
+        if (redis && redis.isReady) {
+            await redis.quit();
+        }
+        if (redisPub && redisPub.isReady) {
+            await redisPub.quit();
+        }
+        if (redisSub && redisSub.isReady) {
+            await redisSub.quit();
+        }
         console.log('✅ Redis connections closed');
     } catch (error) {
         console.error('❌ Error closing Redis:', error);
@@ -2144,11 +2236,45 @@ process.on('SIGTERM', async () => {
         console.log(`   Requests/sec: ${Math.round((performanceStats.totalRequests / (uptime / 1000)) * 100) / 100}`);
     }
 
-    httpServer.close(() => {
-        console.log('✅ Server closed gracefully');
+    if (httpServer) {
+        httpServer.close(() => {
+            console.log('✅ Server closed gracefully');
+            process.exit(0);
+        });
+    } else {
         process.exit(0);
-    });
+    }
+}
+
+// Enhanced process handlers
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    // Don't exit immediately, try graceful shutdown
+    setTimeout(() => {
+        process.exit(1);
+    }, 5000);
 });
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    // Log but don't exit for promise rejections
+});
+
+// FIXED: Safe instance registration and server startup
+async function safeRegisterInstance() {
+    try {
+        await registerInstance();
+    } catch (error) {
+        console.error('Failed to register instance:', error);
+    }
+}
+
+// NOW register instance (after servers are created)
+await safeRegisterInstance();
+setInterval(safeRegisterInstance, 20000);
 
 // Enhanced startup
 httpServer.listen(PORT, '0.0.0.0', async () => {

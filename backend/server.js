@@ -192,10 +192,12 @@ const gameState = {
 
     async addClick(channelId, userId, x, y) {
     try {
+        console.log(`💾 ADD CLICK START - Channel: ${channelId}, User: ${userId}, Coords: (${x}, ${y})`);
+        
         // Validate input data
         if (typeof x !== 'number' || typeof y !== 'number' || 
             isNaN(x) || isNaN(y) || x < 0 || x > 1 || y < 0 || y > 1) {
-            throw new Error('Invalid coordinates');
+            throw new Error(`Invalid coordinates: x=${x} (${typeof x}), y=${y} (${typeof y})`);
         }
 
         const clickData = {
@@ -204,16 +206,36 @@ const gameState = {
             timestamp: Date.now()
         };
 
+        console.log(`💾 CLICK DATA OBJECT - ${JSON.stringify(clickData)}`);
+
         // Ensure clean JSON serialization
         const jsonString = JSON.stringify(clickData);
+        console.log(`💾 JSON STRING - Length: ${jsonString.length}, Data: ${jsonString}`);
         
         // Validate the JSON can be parsed back
-        JSON.parse(jsonString);
+        const testParse = JSON.parse(jsonString);
+        console.log(`💾 TEST PARSE - ${JSON.stringify(testParse)}`);
         
-        await redis.setEx(`clicks:${channelId}:${userId}`, 3600, jsonString);
-        log(`Click stored: ${channelId}:${userId} at (${x.toFixed(3)}, ${y.toFixed(3)})`, 'debug');
+        const redisKey = `clicks:${channelId}:${userId}`;
+        console.log(`💾 REDIS KEY - ${redisKey}`);
+        
+        // Store in Redis with explicit error handling
+        await redis.setEx(redisKey, 3600, jsonString);
+        console.log(`💾 REDIS STORED - Key: ${redisKey}, TTL: 3600s`);
+        
+        // Immediately verify what was stored
+        const verifyData = await redis.get(redisKey);
+        console.log(`💾 VERIFICATION - Retrieved: ${verifyData}, Length: ${verifyData?.length}`);
+        
+        if (verifyData !== jsonString) {
+            throw new Error(`Storage verification failed: stored="${verifyData}", expected="${jsonString}"`);
+        }
+        
+        console.log(`✅ CLICK STORED SUCCESSFULLY - ${redisKey}`);
         
     } catch (error) {
+        console.log(`❌ ADD CLICK ERROR - ${error.message}`);
+        console.log(`❌ ADD CLICK STACK - ${error.stack}`);
         logError('Redis addClick error:', error);
         throw error;
     }

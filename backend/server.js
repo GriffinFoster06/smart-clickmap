@@ -270,49 +270,27 @@ const gameState = {
             }
         });
 
-        const pipeline = redis.multi();
-        keys.forEach(key => pipeline.get(key));
-        const results = await pipeline.exec();
-
         const allClicks = new Map();
-        let resultIndex = 0;
 
         for (const [channelId, channelKeys] of channelGroups.entries()) {
             const channelClicks = new Map();
             
-            channelKeys.forEach(({ key, userId }) => {
-                const result = results[resultIndex++];
-                if (result && result[1]) {
-                    try {
-                        const rawData = result[1];
-                        
-                        if (!rawData || typeof rawData !== 'string' || rawData.length < 10) {
-                            log(`Skipping corrupted data for ${userId}: ${rawData}`, 'debug');
-                            return;
-                        }
-
-                        const clickData = JSON.parse(rawData);
-                        
-                        // Validate structure
-                        if (clickData && 
-                            typeof clickData.x === 'number' && 
-                            typeof clickData.y === 'number' &&
-                            !isNaN(clickData.x) && !isNaN(clickData.y) &&
-                            clickData.x >= 0 && clickData.x <= 1 &&
-                            clickData.y >= 0 && clickData.y <= 1) {
-                            
-                            channelClicks.set(userId, clickData);
-                        }
-                        
-                    } catch (parseError) {
-                        logError(`Failed to parse click data for ${userId}:`, parseError);
-                        // Clean up corrupted data
-                        redis.del(key).catch(delError => 
-                            logError(`Failed to delete corrupted key ${key}:`, delError)
-                        );
+            for (const { key, userId } of channelKeys) {
+                try {
+                    const hashData = await redis.hGetAll(key);
+                    
+                    if (hashData && hashData.x && hashData.y) {
+                        channelClicks.set(userId, {
+                            x: parseFloat(hashData.x),
+                            y: parseFloat(hashData.y),
+                            timestamp: parseInt(hashData.timestamp || Date.now())
+                        });
                     }
+                } catch (keyError) {
+                    // Clean up corrupted keys
+                    await redis.del(key);
                 }
-            });
+            }
 
             if (channelClicks.size > 0) {
                 allClicks.set(channelId, channelClicks);

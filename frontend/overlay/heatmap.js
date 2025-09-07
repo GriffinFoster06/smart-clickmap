@@ -1,5 +1,5 @@
 // frontend/heatmap.js - Advanced HUD-style renderer with smart sizing and adaptive shapes
-export class HeatmapRenderer {
+class HeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d', { alpha: true });
@@ -453,7 +453,7 @@ export class HeatmapRenderer {
 }
 
 // Legacy compatibility
-export function drawBlobs(ctx, blobs) {
+function drawBlobs(ctx, blobs) {
     const renderer = new HeatmapRenderer(ctx.canvas);
     const clusters = (blobs || []).map(blob => ({
         x: blob.x, y: blob.y,
@@ -470,3 +470,7 @@ export function drawBlobs(ctx, blobs) {
     }));
     renderer.updateClusters(clusters);
 }
+
+// Make classes globally available
+window.HeatmapRenderer = HeatmapRenderer;
+window.drawBlobs = drawBlobs;

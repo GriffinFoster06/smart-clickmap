@@ -191,59 +191,103 @@ const gameState = {
     },
 
     async addClick(channelId, userId, x, y) {
-        try {
-            const clickData = JSON.stringify({ x, y, timestamp: Date.now() });
-            // FIXED: setex -> setEx
-            await redis.setEx(`clicks:${channelId}:${userId}`, 3600, clickData);
-        } catch (error) {
-            logError('Redis addClick error:', error);
-            throw error;
+    try {
+        // Validate input data
+        if (typeof x !== 'number' || typeof y !== 'number' || 
+            isNaN(x) || isNaN(y) || x < 0 || x > 1 || y < 0 || y > 1) {
+            throw new Error('Invalid coordinates');
         }
-    },
+
+        const clickData = {
+            x: Number(x),
+            y: Number(y), 
+            timestamp: Date.now()
+        };
+
+        // Ensure clean JSON serialization
+        const jsonString = JSON.stringify(clickData);
+        
+        // Validate the JSON can be parsed back
+        JSON.parse(jsonString);
+        
+        await redis.setEx(`clicks:${channelId}:${userId}`, 3600, jsonString);
+        log(`Click stored: ${channelId}:${userId} at (${x.toFixed(3)}, ${y.toFixed(3)})`, 'debug');
+        
+    } catch (error) {
+        logError('Redis addClick error:', error);
+        throw error;
+    }
+},
 
     async getChannelClicks(channelId) {
-        try {
-            const pattern = `clicks:${channelId}:*`;
-            const keys = await redis.keys(pattern);
+    try {
+        const pattern = `clicks:${channelId}:*`;
+        const keys = await redis.keys(pattern);
+        
+        if (keys.length === 0) return new Map();
+
+        const pipeline = redis.multi();
+        keys.forEach(key => pipeline.get(key));
+        const results = await pipeline.exec();
+
+        const clicks = new Map();
+        keys.forEach((key, index) => {
+            const userId = key.split(':')[2];
+            const result = results[index];
             
-            if (keys.length === 0) return new Map();
-
-            const pipeline = redis.multi();
-            keys.forEach(key => pipeline.get(key));
-            const results = await pipeline.exec();
-
-            const clicks = new Map();
-            keys.forEach((key, index) => {
-                const userId = key.split(':')[2];
-                const result = results[index];
-                
-                if (result && result[1]) {
-                    try {
-                        const clickData = JSON.parse(result[1]);
-                        clicks.set(userId, clickData);
-                    } catch (parseError) {
-                        logError(`Failed to parse click data for ${userId}:`, parseError);
+            if (result && result[1]) {
+                try {
+                    const rawData = result[1];
+                    
+                    // Skip if data is clearly corrupted
+                    if (!rawData || typeof rawData !== 'string' || rawData.length < 10) {
+                        log(`Skipping corrupted data for ${userId}: ${rawData}`, 'debug');
+                        return;
                     }
-                }
-            });
 
-            return clicks;
-        } catch (error) {
-            logError('Redis getChannelClicks error:', error);
-            return new Map(); // Safe default
-        }
-    },
+                    const clickData = JSON.parse(rawData);
+                    
+                    // Validate parsed data structure
+                    if (clickData && 
+                        typeof clickData.x === 'number' && 
+                        typeof clickData.y === 'number' &&
+                        !isNaN(clickData.x) && !isNaN(clickData.y) &&
+                        clickData.x >= 0 && clickData.x <= 1 &&
+                        clickData.y >= 0 && clickData.y <= 1) {
+                        
+                        clicks.set(userId, clickData);
+                    } else {
+                        log(`Invalid click data structure for ${userId}:`, clickData);
+                    }
+                    
+                } catch (parseError) {
+                    logError(`Failed to parse click data for ${userId}:`, parseError);
+                    // Remove corrupted data
+                    redis.del(key).catch(delError => 
+                        logError(`Failed to delete corrupted key ${key}:`, delError)
+                    );
+                }
+            }
+        });
+
+        return clicks;
+    } catch (error) {
+        logError('Redis getChannelClicks error:', error);
+        return new Map();
+    }
+},
 
     async getAllChannelClicks() {
-        try {
-            const pattern = 'clicks:*';
-            const keys = await redis.keys(pattern);
-            
-            if (keys.length === 0) return new Map();
+    try {
+        const pattern = 'clicks:*';
+        const keys = await redis.keys(pattern);
+        
+        if (keys.length === 0) return new Map();
 
-            const channelGroups = new Map();
-            keys.forEach(key => {
-                const parts = key.split(':');
+        const channelGroups = new Map();
+        keys.forEach(key => {
+            const parts = key.split(':');
+            if (parts.length >= 3) {
                 const channelId = parts[1];
                 const userId = parts[2];
                 
@@ -251,41 +295,64 @@ const gameState = {
                     channelGroups.set(channelId, []);
                 }
                 channelGroups.get(channelId).push({ key, userId });
+            }
+        });
+
+        const pipeline = redis.multi();
+        keys.forEach(key => pipeline.get(key));
+        const results = await pipeline.exec();
+
+        const allClicks = new Map();
+        let resultIndex = 0;
+
+        for (const [channelId, channelKeys] of channelGroups.entries()) {
+            const channelClicks = new Map();
+            
+            channelKeys.forEach(({ key, userId }) => {
+                const result = results[resultIndex++];
+                if (result && result[1]) {
+                    try {
+                        const rawData = result[1];
+                        
+                        if (!rawData || typeof rawData !== 'string' || rawData.length < 10) {
+                            log(`Skipping corrupted data for ${userId}: ${rawData}`, 'debug');
+                            return;
+                        }
+
+                        const clickData = JSON.parse(rawData);
+                        
+                        // Validate structure
+                        if (clickData && 
+                            typeof clickData.x === 'number' && 
+                            typeof clickData.y === 'number' &&
+                            !isNaN(clickData.x) && !isNaN(clickData.y) &&
+                            clickData.x >= 0 && clickData.x <= 1 &&
+                            clickData.y >= 0 && clickData.y <= 1) {
+                            
+                            channelClicks.set(userId, clickData);
+                        }
+                        
+                    } catch (parseError) {
+                        logError(`Failed to parse click data for ${userId}:`, parseError);
+                        // Clean up corrupted data
+                        redis.del(key).catch(delError => 
+                            logError(`Failed to delete corrupted key ${key}:`, delError)
+                        );
+                    }
+                }
             });
 
-            const pipeline = redis.multi();
-            keys.forEach(key => pipeline.get(key));
-            const results = await pipeline.exec();
-
-            const allClicks = new Map();
-            let resultIndex = 0;
-
-            for (const [channelId, channelKeys] of channelGroups.entries()) {
-                const channelClicks = new Map();
-                
-                channelKeys.forEach(({ userId }) => {
-                    const result = results[resultIndex++];
-                    if (result && result[1]) {
-                        try {
-                            const clickData = JSON.parse(result[1]);
-                            channelClicks.set(userId, clickData);
-                        } catch (parseError) {
-                            logError(`Failed to parse click data for ${userId}:`, parseError);
-                        }
-                    }
-                });
-
-                if (channelClicks.size > 0) {
-                    allClicks.set(channelId, channelClicks);
-                }
+            if (channelClicks.size > 0) {
+                allClicks.set(channelId, channelClicks);
             }
-
-            return allClicks;
-        } catch (error) {
-            logError('Redis getAllChannelClicks error:', error);
-            return new Map();
         }
-    },
+
+        return allClicks;
+    } catch (error) {
+        logError('Redis getAllChannelClicks error:', error);
+        return new Map();
+    }
+},
 
     async clearAllClicks() {
         try {
@@ -310,6 +377,36 @@ const gameState = {
             throw error;
         }
     }
+
+    // NEW: Clean up corrupted data
+async cleanupCorruptedData() {
+    try {
+        const clickKeys = await redis.keys('clicks:*');
+        let cleaned = 0;
+        
+        for (const key of clickKeys) {
+            try {
+                const data = await redis.get(key);
+                if (data) {
+                    JSON.parse(data); // Test if valid JSON
+                }
+            } catch (error) {
+                await redis.del(key);
+                cleaned++;
+                log(`Cleaned corrupted key: ${key}`, 'debug');
+            }
+        }
+        
+        if (cleaned > 0) {
+            log(`Cleaned up ${cleaned} corrupted click records`);
+        }
+        
+        return cleaned;
+    } catch (error) {
+        logError('Failed to cleanup corrupted data:', error);
+        return 0;
+    }
+}
 };
 
 // FIXED: Enhanced distributed lock implementation with error handling
@@ -837,6 +934,24 @@ app.get('/heatmap', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to get heatmap data'
+        });
+    }
+});
+
+// NEW: Cleanup endpoint for corrupted data
+app.post('/cleanup', async (req, res) => {
+    try {
+        const cleaned = await gameState.cleanupCorruptedData();
+        res.json({
+            success: true,
+            cleaned: cleaned,
+            message: `Cleaned ${cleaned} corrupted records`
+        });
+    } catch (error) {
+        logError('Cleanup error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Cleanup failed'
         });
     }
 });

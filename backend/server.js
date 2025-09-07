@@ -7,6 +7,9 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { createClient } from 'redis';
 
+// Declare wss at module level but initialize later
+let wss = null;
+
 const PORT = process.env.PORT || 8080;
 const SECRET = Buffer.from(process.env.TWITCH_SECRET || '', 'base64');
 const INSTANCE_ID = process.env.RENDER_SERVICE_ID || `local_${Date.now()}`;
@@ -268,7 +271,7 @@ async function registerInstance() {
     const instanceData = {
         id: INSTANCE_ID,
         startTime: Date.now(),
-        websocketClients: wss ? wss.clients.size : 0,
+        websocketClients: wss?.clients?.size || 0,  // ✅ Safe optional chaining
         endpoint: process.env.RENDER_SERVICE_URL || `http://localhost:${PORT}`,
         lastHeartbeat: Date.now()
     };
@@ -1942,7 +1945,6 @@ const httpServer = createServer(app);
 
 // ===== WEBSOCKET SERVER INTEGRATION =====
 console.log('🔧 Creating WebSocket server integrated with HTTP server...');
-let wss;
 try {
     wss = new WebSocketServer({
         server: httpServer,

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ClickMap Overlay</title>
+    <title>ClickMap Overlay - HTTP Only</title>
     <style>
         * {
             margin: 0;
@@ -59,7 +59,7 @@
             display: none;
         }
 
-        /* HUD-style glow animations for active state */
+        /* Enhanced styling for active state */
         body.clickmap-active #overlay-canvas {
             opacity: 1;
             transition: opacity 0.5s ease-in-out;
@@ -67,6 +67,11 @@
 
         body:not(.clickmap-active) #overlay-canvas {
             opacity: 0.8;
+        }
+
+        /* Data presence indicator */
+        body.clickmap-has-data #overlay-canvas {
+            filter: brightness(1.1);
         }
 
         /* Responsive optimizations */
@@ -88,6 +93,11 @@
             #overlay-canvas {
                 transition: none !important;
             }
+            
+            body.clickmap-active #overlay-canvas,
+            body:not(.clickmap-active) #overlay-canvas {
+                opacity: 1;
+            }
         }
 
         /* Performance optimizations */
@@ -96,11 +106,25 @@
                 -webkit-transform: translate3d(0, 0, 0);
             }
         }
+
+        /* Dark mode enhancements */
+        @media (prefers-color-scheme: dark) {
+            #overlay-canvas {
+                filter: brightness(1.05);
+            }
+        }
+
+        /* Print mode - hide overlay */
+        @media print {
+            body {
+                display: none;
+            }
+        }
     </style>
 </head>
 <body>
     <!-- Only the canvas - nothing else visible -->
-    <canvas id="overlay-canvas" aria-label="Interactive click heatmap overlay"></canvas>
+    <canvas id="overlay-canvas" aria-label="Interactive click heatmap overlay (HTTP polling)"></canvas>
 
     <!-- Hidden elements for error handling -->
     <div class="loading" id="loading"></div>
@@ -108,6 +132,7 @@
         <p>Connection error</p>
     </div>
 
+    <!-- Load the HTTP-only overlay script -->
     <script src="overlay.js"></script>
 </body>
 </html>

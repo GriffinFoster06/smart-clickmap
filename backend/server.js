@@ -221,31 +221,45 @@ const gameState = {
 
     async getChannelClicks(channelId) {
     try {
+        console.log(`🔍 GET CHANNEL CLICKS - Starting for channel: ${channelId}`);
+        
         const pattern = `clicks:${channelId}:*`;
         const keys = await redis.keys(pattern);
         
-        if (keys.length === 0) return new Map();
+        console.log(`🔍 REDIS KEYS FOUND - Pattern: ${pattern}, Count: ${keys.length}`);
+        console.log(`🔍 REDIS KEYS LIST - Keys: ${JSON.stringify(keys)}`);
+        
+        if (keys.length === 0) {
+            console.log(`🔍 NO KEYS FOUND - Returning empty map for channel ${channelId}`);
+            return new Map();
+        }
 
         const pipeline = redis.multi();
         keys.forEach(key => pipeline.get(key));
         const results = await pipeline.exec();
+
+        console.log(`🔍 REDIS RESULTS - Got ${results.length} results`);
 
         const clicks = new Map();
         keys.forEach((key, index) => {
             const userId = key.split(':')[2];
             const result = results[index];
             
+            console.log(`🔍 PROCESSING KEY [${index}] - Key: ${key}, UserId: ${userId}, HasResult: ${!!result}, HasData: ${!!(result && result[1])}`);
+            
             if (result && result[1]) {
                 try {
                     const rawData = result[1];
+                    console.log(`🔍 RAW DATA [${userId}] - Length: ${rawData.length}, Data: ${rawData}`);
                     
                     // Skip if data is clearly corrupted
                     if (!rawData || typeof rawData !== 'string' || rawData.length < 10) {
-                        log(`Skipping corrupted data for ${userId}: ${rawData}`, 'debug');
+                        console.log(`❌ SKIPPING CORRUPTED [${userId}] - Invalid data: ${rawData}`);
                         return;
                     }
 
                     const clickData = JSON.parse(rawData);
+                    console.log(`🔍 PARSED DATA [${userId}] - Parsed: ${JSON.stringify(clickData)}`);
                     
                     // Validate parsed data structure
                     if (clickData && 
@@ -256,22 +270,29 @@ const gameState = {
                         clickData.y >= 0 && clickData.y <= 1) {
                         
                         clicks.set(userId, clickData);
+                        console.log(`✅ CLICK VALID [${userId}] - Added to map, total count: ${clicks.size}`);
                     } else {
-                        log(`Invalid click data structure for ${userId}:`, clickData);
+                        console.log(`❌ CLICK INVALID [${userId}] - Failed validation: ${JSON.stringify(clickData)}`);
+                        console.log(`❌ VALIDATION DETAILS [${userId}] - x: ${clickData?.x} (${typeof clickData?.x}), y: ${clickData?.y} (${typeof clickData?.y})`);
                     }
                     
                 } catch (parseError) {
-                    logError(`Failed to parse click data for ${userId}:`, parseError);
+                    console.log(`❌ JSON PARSE ERROR [${userId}] - Error: ${parseError.message}, Data: ${result[1]}`);
                     // Remove corrupted data
                     redis.del(key).catch(delError => 
-                        logError(`Failed to delete corrupted key ${key}:`, delError)
+                        console.log(`❌ DELETE FAILED [${userId}] - ${delError.message}`)
                     );
                 }
+            } else {
+                console.log(`❌ NO DATA [${userId}] - Result: ${JSON.stringify(result)}`);
             }
         });
 
+        console.log(`🔍 FINAL RESULT - Channel: ${channelId}, Total valid clicks: ${clicks.size}`);
         return clicks;
+        
     } catch (error) {
+        console.log(`❌ GET CHANNEL CLICKS ERROR - Channel: ${channelId}, Error: ${error.message}`);
         logError('Redis getChannelClicks error:', error);
         return new Map();
     }

@@ -192,50 +192,17 @@ const gameState = {
 
     async addClick(channelId, userId, x, y) {
     try {
-        console.log(`💾 ADD CLICK START - Channel: ${channelId}, User: ${userId}, Coords: (${x}, ${y})`);
-        
-        // Validate input data
-        if (typeof x !== 'number' || typeof y !== 'number' || 
-            isNaN(x) || isNaN(y) || x < 0 || x > 1 || y < 0 || y > 1) {
-            throw new Error(`Invalid coordinates: x=${x} (${typeof x}), y=${y} (${typeof y})`);
-        }
-
-        const clickData = {
-            x: Number(x),
-            y: Number(y), 
-            timestamp: Date.now()
-        };
-
-        console.log(`💾 CLICK DATA OBJECT - ${JSON.stringify(clickData)}`);
-
-        // Ensure clean JSON serialization
-        const jsonString = JSON.stringify(clickData);
-        console.log(`💾 JSON STRING - Length: ${jsonString.length}, Data: ${jsonString}`);
-        
-        // Validate the JSON can be parsed back
-        const testParse = JSON.parse(jsonString);
-        console.log(`💾 TEST PARSE - ${JSON.stringify(testParse)}`);
-        
+        // Store as separate fields instead of JSON
         const redisKey = `clicks:${channelId}:${userId}`;
-        console.log(`💾 REDIS KEY - ${redisKey}`);
         
-        // Store in Redis with explicit error handling
-        await redis.setEx(redisKey, 3600, jsonString);
-        console.log(`💾 REDIS STORED - Key: ${redisKey}, TTL: 3600s`);
-        
-        // Immediately verify what was stored
-        const verifyData = await redis.get(redisKey);
-        console.log(`💾 VERIFICATION - Retrieved: ${verifyData}, Length: ${verifyData?.length}`);
-        
-        if (verifyData !== jsonString) {
-            throw new Error(`Storage verification failed: stored="${verifyData}", expected="${jsonString}"`);
-        }
-        
-        console.log(`✅ CLICK STORED SUCCESSFULLY - ${redisKey}`);
+        // Use Redis hash instead of string
+        await redis.hSetex(redisKey, 3600, {
+            'x': x.toString(),
+            'y': y.toString(), 
+            'timestamp': Date.now().toString()
+        });
         
     } catch (error) {
-        console.log(`❌ ADD CLICK ERROR - ${error.message}`);
-        console.log(`❌ ADD CLICK STACK - ${error.stack}`);
         logError('Redis addClick error:', error);
         throw error;
     }
@@ -243,78 +210,28 @@ const gameState = {
 
     async getChannelClicks(channelId) {
     try {
-        console.log(`🔍 GET CHANNEL CLICKS - Starting for channel: ${channelId}`);
-        
         const pattern = `clicks:${channelId}:*`;
         const keys = await redis.keys(pattern);
         
-        console.log(`🔍 REDIS KEYS FOUND - Pattern: ${pattern}, Count: ${keys.length}`);
-        console.log(`🔍 REDIS KEYS LIST - Keys: ${JSON.stringify(keys)}`);
-        
-        if (keys.length === 0) {
-            console.log(`🔍 NO KEYS FOUND - Returning empty map for channel ${channelId}`);
-            return new Map();
-        }
-
-        const pipeline = redis.multi();
-        keys.forEach(key => pipeline.get(key));
-        const results = await pipeline.exec();
-
-        console.log(`🔍 REDIS RESULTS - Got ${results.length} results`);
+        if (keys.length === 0) return new Map();
 
         const clicks = new Map();
-        keys.forEach((key, index) => {
-            const userId = key.split(':')[2];
-            const result = results[index];
-            
-            console.log(`🔍 PROCESSING KEY [${index}] - Key: ${key}, UserId: ${userId}, HasResult: ${!!result}, HasData: ${!!(result && result[1])}`);
-            
-            if (result && result[1]) {
-                try {
-                    const rawData = result[1];
-                    console.log(`🔍 RAW DATA [${userId}] - Length: ${rawData.length}, Data: ${rawData}`);
-                    
-                    // Skip if data is clearly corrupted
-                    if (!rawData || typeof rawData !== 'string' || rawData.length < 10) {
-                        console.log(`❌ SKIPPING CORRUPTED [${userId}] - Invalid data: ${rawData}`);
-                        return;
-                    }
-
-                    const clickData = JSON.parse(rawData);
-                    console.log(`🔍 PARSED DATA [${userId}] - Parsed: ${JSON.stringify(clickData)}`);
-                    
-                    // Validate parsed data structure
-                    if (clickData && 
-                        typeof clickData.x === 'number' && 
-                        typeof clickData.y === 'number' &&
-                        !isNaN(clickData.x) && !isNaN(clickData.y) &&
-                        clickData.x >= 0 && clickData.x <= 1 &&
-                        clickData.y >= 0 && clickData.y <= 1) {
-                        
-                        clicks.set(userId, clickData);
-                        console.log(`✅ CLICK VALID [${userId}] - Added to map, total count: ${clicks.size}`);
-                    } else {
-                        console.log(`❌ CLICK INVALID [${userId}] - Failed validation: ${JSON.stringify(clickData)}`);
-                        console.log(`❌ VALIDATION DETAILS [${userId}] - x: ${clickData?.x} (${typeof clickData?.x}), y: ${clickData?.y} (${typeof clickData?.y})`);
-                    }
-                    
-                } catch (parseError) {
-                    console.log(`❌ JSON PARSE ERROR [${userId}] - Error: ${parseError.message}, Data: ${result[1]}`);
-                    // Remove corrupted data
-                    redis.del(key).catch(delError => 
-                        console.log(`❌ DELETE FAILED [${userId}] - ${delError.message}`)
-                    );
-                }
-            } else {
-                console.log(`❌ NO DATA [${userId}] - Result: ${JSON.stringify(result)}`);
-            }
-        });
-
-        console.log(`🔍 FINAL RESULT - Channel: ${channelId}, Total valid clicks: ${clicks.size}`);
-        return clicks;
         
+        for (const key of keys) {
+            const userId = key.split(':')[2];
+            const hashData = await redis.hGetAll(key);
+            
+            if (hashData && hashData.x && hashData.y) {
+                clicks.set(userId, {
+                    x: parseFloat(hashData.x),
+                    y: parseFloat(hashData.y),
+                    timestamp: parseInt(hashData.timestamp)
+                });
+            }
+        }
+
+        return clicks;
     } catch (error) {
-        console.log(`❌ GET CHANNEL CLICKS ERROR - Channel: ${channelId}, Error: ${error.message}`);
         logError('Redis getChannelClicks error:', error);
         return new Map();
     }

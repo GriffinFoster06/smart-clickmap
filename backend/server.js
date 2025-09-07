@@ -376,7 +376,7 @@ const gameState = {
             logError('Redis clearChannelClicks error:', error);
             throw error;
         }
-    }
+    },
 
     // NEW: Clean up corrupted data
 async cleanupCorruptedData() {

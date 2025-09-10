@@ -21,6 +21,10 @@ let crashCount = 0;
 let lastCrashTime = 0;
 const MAX_CRASHES_PER_HOUR = 3;
 
+// Server load tracking variables
+let serverLoad = 0;
+let lastLoadCheck = Date.now();
+
 // Logging helpers
 function log(message, level = 'info') {
     if (level === 'debug' && !DEBUG_ENABLED) return;
@@ -398,11 +402,8 @@ function smartBotProtectionMiddleware(req, res, next) {
     next();
 }
 
-// Add right after bot protection in server.js
-let serverLoad = 0;
-let lastLoadCheck = Date.now();
-
-app.use((req, res, next) => {
+// Load shedding middleware function
+function loadSheddingMiddleware(req, res, next) {
     const now = Date.now();
 
     // Update load tracking
@@ -427,9 +428,7 @@ app.use((req, res, next) => {
     }
 
     next();
-});
-
-
+}
 
 // ENHANCED REDIS SETUP with robust reconnection
 const redisConfig = {
@@ -988,11 +987,109 @@ const performanceStats = {
     startTime: Date.now()
 };
 
-// Express app setup
+// Smart response caching system
+class SmartResponseCache {
+    constructor() {
+        this.cache = new Map(); // channelId -> { data, timestamp, running }
+        this.CACHE_DURATION_ACTIVE = 2000;   // 2 seconds when game is running
+        this.CACHE_DURATION_INACTIVE = 30000; // 30 seconds when game is stopped
+
+        // Cleanup old cache entries every 5 minutes
+        setInterval(() => this.cleanup(), 300000);
+    }
+
+    getCacheKey(channelId, threshold) {
+        return `${channelId || 'all'}_${threshold}`;
+    }
+
+    get(channelId, threshold) {
+        const key = this.getCacheKey(channelId, threshold);
+        const cached = this.cache.get(key);
+
+        if (!cached) return null;
+
+        const now = Date.now();
+        const maxAge = cached.running ? this.CACHE_DURATION_ACTIVE : this.CACHE_DURATION_INACTIVE;
+
+        if (now - cached.timestamp < maxAge) {
+            return cached.data;
+        }
+
+        // Cache expired
+        this.cache.delete(key);
+        return null;
+    }
+
+    set(channelId, threshold, data) {
+        const key = this.getCacheKey(channelId, threshold);
+        this.cache.set(key, {
+            data: data,
+            timestamp: Date.now(),
+            running: data.running || false
+        });
+    }
+
+    invalidate(channelId = null) {
+        if (channelId) {
+            // Invalidate specific channel
+            for (const key of this.cache.keys()) {
+                if (key.startsWith(`${channelId}_`)) {
+                    this.cache.delete(key);
+                }
+            }
+        } else {
+            // Invalidate all
+            this.cache.clear();
+        }
+    }
+
+    cleanup() {
+        const now = Date.now();
+        let cleaned = 0;
+
+        for (const [key, cached] of this.cache.entries()) {
+            const maxAge = cached.running ? this.CACHE_DURATION_ACTIVE : this.CACHE_DURATION_INACTIVE;
+            if (now - cached.timestamp > maxAge * 2) { // Keep cache 2x longer than serve time
+                this.cache.delete(key);
+                cleaned++;
+            }
+        }
+
+        if (cleaned > 0) {
+            log(`🧹 Cleaned ${cleaned} expired cache entries`);
+        }
+    }
+
+    getStats() {
+        const now = Date.now();
+        let activeEntries = 0;
+        let inactiveEntries = 0;
+
+        for (const cached of this.cache.values()) {
+            if (cached.running) {
+                activeEntries++;
+            } else {
+                inactiveEntries++;
+            }
+        }
+
+        return {
+            totalEntries: this.cache.size,
+            activeEntries,
+            inactiveEntries
+        };
+    }
+}
+
+// Initialize cache
+const responseCache = new SmartResponseCache();
+
+// Express app setup - MOVED TO CORRECT POSITION
 const app = express();
 
-// APPLY BOT PROTECTION FIRST (before CORS)
+// APPLY ALL MIDDLEWARE AFTER APP CREATION
 app.use(smartBotProtectionMiddleware);
+app.use(loadSheddingMiddleware);
 
 app.use(cors({
     origin: '*',
@@ -1523,103 +1620,6 @@ app.post('/click', async (req, res) => {
         });
     }
 });
-
-// Smart response caching system
-class SmartResponseCache {
-    constructor() {
-        this.cache = new Map(); // channelId -> { data, timestamp, running }
-        this.CACHE_DURATION_ACTIVE = 2000;   // 2 seconds when game is running
-        this.CACHE_DURATION_INACTIVE = 30000; // 30 seconds when game is stopped
-
-        // Cleanup old cache entries every 5 minutes
-        setInterval(() => this.cleanup(), 300000);
-    }
-
-    getCacheKey(channelId, threshold) {
-        return `${channelId || 'all'}_${threshold}`;
-    }
-
-    get(channelId, threshold) {
-        const key = this.getCacheKey(channelId, threshold);
-        const cached = this.cache.get(key);
-
-        if (!cached) return null;
-
-        const now = Date.now();
-        const maxAge = cached.running ? this.CACHE_DURATION_ACTIVE : this.CACHE_DURATION_INACTIVE;
-
-        if (now - cached.timestamp < maxAge) {
-            return cached.data;
-        }
-
-        // Cache expired
-        this.cache.delete(key);
-        return null;
-    }
-
-    set(channelId, threshold, data) {
-        const key = this.getCacheKey(channelId, threshold);
-        this.cache.set(key, {
-            data: data,
-            timestamp: Date.now(),
-            running: data.running || false
-        });
-    }
-
-    invalidate(channelId = null) {
-        if (channelId) {
-            // Invalidate specific channel
-            for (const key of this.cache.keys()) {
-                if (key.startsWith(`${channelId}_`)) {
-                    this.cache.delete(key);
-                }
-            }
-        } else {
-            // Invalidate all
-            this.cache.clear();
-        }
-    }
-
-    cleanup() {
-        const now = Date.now();
-        let cleaned = 0;
-
-        for (const [key, cached] of this.cache.entries()) {
-            const maxAge = cached.running ? this.CACHE_DURATION_ACTIVE : this.CACHE_DURATION_INACTIVE;
-            if (now - cached.timestamp > maxAge * 2) { // Keep cache 2x longer than serve time
-                this.cache.delete(key);
-                cleaned++;
-            }
-        }
-
-        if (cleaned > 0) {
-            log(`🧹 Cleaned ${cleaned} expired cache entries`);
-        }
-    }
-
-    getStats() {
-        const now = Date.now();
-        let activeEntries = 0;
-        let inactiveEntries = 0;
-
-        for (const cached of this.cache.values()) {
-            if (cached.running) {
-                activeEntries++;
-            } else {
-                inactiveEntries++;
-            }
-        }
-
-        return {
-            totalEntries: this.cache.size,
-            activeEntries,
-            inactiveEntries
-        };
-    }
-}
-
-// Initialize cache
-const responseCache = new SmartResponseCache();
 
 // REPLACE your existing /heatmap endpoint with this cached version:
 app.get('/heatmap', async (req, res) => {

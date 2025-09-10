@@ -56,39 +56,39 @@ class SmartBotProtection {
     getLimits(endpoint) {
         const limits = {
             '/click': {
-                perSecond: 125,     // 125 clicks per second per IP (7500/minute)
-                perMinute: 7500,    // Extremely high for legitimate users
-                burst: 250          // Allow bursts of rapid clicking
+                perSecond: 25000,     // 125 clicks per second per IP (7500/minute)
+                perMinute: 1500000,    // Extremely high for legitimate users
+                burst: 25000          // Allow bursts of rapid clicking
             },
             '/heatmap': {
-                perSecond: 25,      // 25 requests per second  
-                perMinute: 1500,    // Very high polling rate
-                burst: 50
+                perSecond: 25000,      // 25 requests per second  
+                perMinute: 1500000,    // Very high polling rate
+                burst: 25000
             },
             '/health': {
-                perSecond: 2.5,     // 2.5 per second (round to 3 for burst)
-                perMinute: 150,     // Health checks
-                burst: 12
+                perSecond: 25000,     // 2.5 per second (round to 3 for burst)
+                perMinute: 1500000,     // Health checks
+                burst: 25000
             },
             '/start': {
-                perSecond: 0.25,    // 1 every 4 seconds
-                perMinute: 15,      // Still limited but reasonable
-                burst: 5
+                perSecond: 25000,    // 1 every 4 seconds
+                perMinute: 1500000,      // Still limited but reasonable
+                burst: 25000
             },
             '/stop': {
-                perSecond: 0.25,    // 1 every 4 seconds  
-                perMinute: 15,      // Still limited but reasonable
-                burst: 5
+                perSecond: 25000,    // 1 every 4 seconds  
+                perMinute: 1500000,      // Still limited but reasonable
+                burst: 25000
             },
             '/reset': {
-                perSecond: 0.125,   // 1 every 8 seconds
-                perMinute: 8,       // Very limited
-                burst: 3
+                perSecond: 25000,   // 1 every 8 seconds
+                perMinute: 1500000,       // Very limited
+                burst: 25000
             },
             'default': {
-                perSecond: 12.5,    // 12.5 per second for other endpoints
-                perMinute: 750,     // 750 per minute
-                burst: 25
+                perSecond: 25000,    // 12.5 per second for other endpoints
+                perMinute: 1500000,     // 750 per minute
+                burst: 25000
             }
         };
 
@@ -1189,12 +1189,12 @@ app.get('/health', async (req, res) => {
             },
             bot_protection: botStats,
             rate_limits: {
-                click_per_second: 125,
-                click_per_minute: 7500,
-                heatmap_per_second: 25,
-                heatmap_per_minute: 1500,
-                burst_click: 250,
-                burst_heatmap: 50
+                click_per_second: 25000,
+                click_per_minute: 1500000,
+                heatmap_per_second: 25000,
+                heatmap_per_minute: 1500000,
+                burst_click: 25000,
+                burst_heatmap: 25000
             }
         });
     }
@@ -1237,9 +1237,9 @@ app.get('/admin/bot-stats', (req, res) => {
         ...stats,
         timestamp: new Date().toISOString(),
         limits: {
-            click: { perSecond: 125, perMinute: 7500, burst: 250 },
-            heatmap: { perSecond: 25, perMinute: 1500, burst: 50 },
-            health: { perSecond: 2.5, perMinute: 150, burst: 12 }
+            click: { perSecond: 25000, perMinute: 1500000, burst: 25000 },
+            heatmap: { perSecond: 25000, perMinute: 1500000, burst: 25000 },
+            health: { perSecond: 25000, perMinute: 1500000, burst: 25000 }
         }
     });
 });

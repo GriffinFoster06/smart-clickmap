@@ -1,5 +1,4 @@
-﻿// frontend/config.js - Bulletproof configuration panel with improved Twitch integration
-import { HeatmapRenderer } from './heatmap.js';
+﻿// frontend/config.js - Configuration panel with HTTP-only communication
 
 class BulletproofConfigPanel {
     constructor() {
@@ -43,7 +42,7 @@ class BulletproofConfigPanel {
             this.log('Testing backend connection...');
             await this.testConnection();
 
-            this.log('Starting polling...');
+            this.log('Starting HTTP polling (NO WEBSOCKET)...');
             this.startPolling();
 
             this.log('✅ Configuration panel ready!');
@@ -316,9 +315,10 @@ class BulletproofConfigPanel {
             clearInterval(this.pollInterval);
         }
 
-        this.pollInterval = setInterval(() => this.pollData(), 1000);
+        // CONFIG PANEL: Slower polling (every 2 seconds) - doesn't need real-time
+        this.pollInterval = setInterval(() => this.pollData(), 2000);
         this.pollData(); // Initial poll
-        this.log('✅ Polling started');
+        this.log('✅ HTTP Polling started (2 second interval - NO WEBSOCKET)');
     }
 
     async pollData() {

@@ -1,11 +1,14 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ClickMap Control Panel</title>
 
-    <!-- Twitch Extension Helper Library - MUST LOAD FIRST -->
+    <!-- Preload Twitch Extension Helper -->
+    <link rel="preload" href="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js" as="script">
+
+    <!-- Twitch Extension Helper MUST BE FIRST -->
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
 
     <!-- Config Panel Styles -->
@@ -18,9 +21,17 @@
         <div class="subtitle">Interactive overlay control panel</div>
     </div>
 
+    <!-- Connection Status Bar -->
+    <div class="connection-status" id="connection-status">
+        <span class="connection-dot"></span>
+        <span id="connection-text">Connecting...</span>
+        <span id="instance-id"></span>
+    </div>
+
     <!-- Error Display -->
     <div class="error-message" id="error" style="display: none;">
-        Connection error. Retrying...
+        <span id="error-text">Connection error. Retrying...</span>
+        <button id="error-retry" style="float: right;">Retry</button>
     </div>
 
     <!-- Status Section -->
@@ -68,7 +79,7 @@
         <h3>Settings</h3>
         <div class="control-group">
             <span class="control-label">Server</span>
-            <span class="control-value" id="server-status">Connected</span>
+            <span class="control-value" id="server-status">Connecting</span>
         </div>
         <div class="control-group">
             <span class="control-label">Overlay</span>
@@ -82,9 +93,18 @@
             <span class="control-label">Last Update</span>
             <span class="control-value" id="last-update">-</span>
         </div>
+        <div class="control-group">
+            <span class="control-label">Active Instances</span>
+            <span class="control-value" id="active-instances">-</span>
+        </div>
+        <div class="control-group">
+            <span class="control-label">State Version</span>
+            <span class="control-value" id="state-version">-</span>
+        </div>
     </div>
 
-    <!-- External script loader (replaces inline script) -->
-    <script src="config-loader.js"></script>
+    <!-- All scripts come AFTER the Extension Helper -->
+    <script src="heatmap.js"></script>
+    <script src="config.js"></script>
 </body>
 </html>

@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "version": "0.0.1",
+  "version": "0.5.1",
   "author_name": "PhummyLW",
-  "description": "Smart Click Map Replica",
+  "description": "Smart Click Map with Real-time Clustering",
   "permissions": [
     "EXTENSION_BACKEND"
   ],
@@ -19,5 +19,5 @@
       "width": 400
     }
   },
-  "content_security_policy": "default-src 'self'; script-src 'self' https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js; connect-src 'self' https://smart-clickmap-backend.onrender.com wss://smart-clickmap-backend.onrender.com; img-src 'self' data:; style-src 'self'; frame-ancestors https://www.twitch.tv"
+  "content_security_policy": "default-src 'self'; script-src 'self' https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js; connect-src 'self' https://smart-clickmap-backend.onrender.com https://smart-clickmap-backend.onrender.com/ wss://smart-clickmap-backend.onrender.com wss://smart-clickmap-backend.onrender.com/ https://api.twitch.tv https://pubsub-edge.twitch.tv wss://pubsub-edge.twitch.tv; img-src 'self' data:; style-src 'self'; frame-ancestors https://www.twitch.tv"
 }

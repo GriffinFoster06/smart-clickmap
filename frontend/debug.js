@@ -204,5 +204,3 @@ const debugManager = new DebugManager();
 // Export for global access
 window.debugManager = debugManager;
 window.analytics = debugManager.analytics;
-
-export default debugManager;

@@ -1,29 +1,46 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Click Map - Twitch Extension</title>
 
-    <!-- Twitch Extension Helper Library - MUST LOAD FIRST -->
+    <!-- Preload Twitch Extension Helper -->
+    <link rel="preload" href="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js" as="script">
+
+    <!-- Twitch Extension Helper MUST BE FIRST -->
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
 
     <!-- Extension Styles -->
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <!-- No canvas - this extension only collects clicks, doesn't display -->
-    <!-- Hidden elements for functionality -->
+    <!-- Loading Overlay -->
     <div class="loading-overlay" id="loading-overlay" style="display: none;">
         <div class="loading-spinner"></div>
         <span>Connecting...</span>
     </div>
 
+    <!-- Error Overlay -->
     <div class="error-overlay" id="error-overlay" style="display: none;">
         <div class="error-content">
             <h3>⚠️ Connection Issue</h3>
             <p id="error-message">Unable to connect to ClickMap server.</p>
             <button id="retry-button">🔄 Retry</button>
+        </div>
+    </div>
+
+    <!-- Debug Panel (Hidden by default) -->
+    <div class="debug-panel" id="debug-panel" style="display: none;">
+        <div class="debug-header">
+            Debug Info
+            <button id="debug-toggle">×</button>
+        </div>
+        <div class="debug-stats">
+            <div>Status: <span id="debug-status">-</span></div>
+            <div>Channel: <span id="debug-channel">-</span></div>
+            <div>Clicks: <span id="debug-clicks">0</span></div>
+            <div>Instance: <span id="debug-instance">-</span></div>
         </div>
     </div>
 
@@ -35,34 +52,13 @@
         {
             "name": "Smart ClickMap",
             "version": "2.0.0",
-            "description": "Interactive click collector for heatmap overlay",
-            "features": ["click-collection", "real-time", "interactive"],
-            "thresholds": {
-                "default": 3,
-                "minimum": 1,
-                "maximum": 50
-            }
+            "description": "Interactive click collector for heatmap overlay"
         }
     </script>
 
-    <!-- Structured data for better indexing -->
-    <script type="application/ld+json">
-        {
-            "@context": "https://schema.org",
-            "@type": "WebApplication",
-            "name": "Smart ClickMap",
-            "applicationCategory": "Twitch Extension",
-            "operatingSystem": "Web Browser",
-            "permissions": "Interactive Overlay",
-            "featureList": [
-                "Real-time click collection",
-                "Touch and mouse support",
-                "Accessibility features"
-            ]
-        }
-    </script>
-
-    <!-- External script loader (replaces inline script) -->
-    <script src="loader.js"></script>
+    <!-- All scripts come AFTER the Extension Helper -->
+    <script src="debug.js"></script>
+    <script src="heatmap.js"></script>
+    <script src="script.js"></script>
 </body>
 </html>

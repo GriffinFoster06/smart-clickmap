@@ -398,6 +398,39 @@ function smartBotProtectionMiddleware(req, res, next) {
     next();
 }
 
+// Add right after bot protection in server.js
+let serverLoad = 0;
+let lastLoadCheck = Date.now();
+
+app.use((req, res, next) => {
+    const now = Date.now();
+
+    // Update load tracking
+    if (now - lastLoadCheck > 1000) {
+        serverLoad = Math.max(0, serverLoad - 10); // Decay load
+        lastLoadCheck = now;
+    }
+
+    serverLoad++;
+
+    // EMERGENCY: Shed load if too high
+    if (serverLoad > 1000) { // More than 1000 requests/second
+        const shouldShed = Math.random() < 0.8; // Drop 80% of requests
+
+        if (shouldShed) {
+            logError(`🚨 LOAD SHEDDING: Dropping request (load: ${serverLoad})`);
+            return res.status(503).json({
+                error: 'Server overloaded',
+                retryAfter: 5
+            });
+        }
+    }
+
+    next();
+});
+
+
+
 // ENHANCED REDIS SETUP with robust reconnection
 const redisConfig = {
     url: process.env.REDIS_URL,
@@ -1683,6 +1716,21 @@ app.post('/nuclear-reset', async (req, res) => {
 
 // ==================== CLUSTERING ALGORITHM ====================
 async function getCurrentHeatmapData(channelId, threshold = 3) {
+    // EMERGENCY: Skip expensive clustering if under load
+    if (serverLoad > 25000) {
+        log('🚨 Skipping clustering due to high load');
+        const running = await gameState.isRunning();
+        return {
+            running,
+            clusters: [], // Return empty clusters to save CPU
+            totalClicks: 0,
+            uniqueUsers: 0,
+            coverage: 0,
+            threshold,
+            lastUpdate: Date.now(),
+            version: await gameState.getVersion()
+        };
+    }
     const running = await gameState.isRunning();
     const lastUpdate = await gameState.getLastUpdate();
     const version = await gameState.getVersion();
@@ -2207,6 +2255,11 @@ try {
 
 // Enhanced WebSocket connection handling with cleanup
 wss.on('connection', async (ws, req) => {
+    if (wss.clients.size > 25000) {
+        log('🚨 Connection limit reached - rejecting new connection');
+        ws.close(1013, 'Server overloaded');
+        return;
+    }
     const connectionId = Math.random().toString(36).substr(2, 9);
     const startTime = Date.now();
     log(`🔗 NEW WEBSOCKET CONNECTION [${connectionId}]: ${req.url}`, 'debug');

@@ -369,21 +369,21 @@
         destroy() { this.stop(); }
     }
 
-    // ========== PROPERLY SMART POLLING OVERLAY CONTROLLER ==========
-    class ProperlySmartOverlay {
+    // ========== TRULY SMART OVERLAY CONTROLLER ==========
+    class TrulySmartOverlay {
         constructor() {
             this.channelId = this.getChannelFromUrl();
             this.renderer = null;
             this.pollInterval = null;
             this.consecutiveErrors = 0;
-            this.maxRetries = 3;
+            this.maxRetries = 2; // Reduced from 3
             this.lastUpdateTime = 0;
             this.updateCount = 0;
 
             // ✅ FIXED SMART POLLING LOGIC
             this.isGameRunning = false;
             this.consecutiveInactivePolls = 0;
-            this.maxInactivePolls = 3; // Stop after 3 polls showing game is not running
+            this.maxInactivePolls = 1; // Stop after just 1 poll showing game is not running
             this.hasEverHadData = false;
             
             // Page visibility tracking
@@ -406,7 +406,7 @@
                 this.checkInitialStatus();
             }
             
-            console.log(`🎯 Properly smart overlay initialized for: ${this.channelId}`);
+            console.log(`🎯 Truly smart overlay initialized for: ${this.channelId}`);
         }
 
         async checkInitialStatus() {
@@ -416,8 +416,19 @@
                     headers: { 'Content-Type': 'application/json' }
                 });
                 
+                if (response.status === 429) {
+                    console.log('🚫 Rate limited on initial check - will retry much later');
+                    setTimeout(() => {
+                        if (this.isPageVisible && !this.pollInterval) {
+                            this.checkInitialStatus();
+                        }
+                    }, 300000); // 5 minutes
+                    return;
+                }
+                
                 if (!response.ok) {
                     console.log('❌ Backend not reachable - overlay will remain inactive');
+                    this.scheduleStatusCheck();
                     return;
                 }
 
@@ -443,12 +454,13 @@
         }
 
         scheduleStatusCheck() {
-            // Check again in 30 seconds if game might have started
+            // Check again in 5 minutes if game might have started
             setTimeout(() => {
                 if (this.isPageVisible && !this.pollInterval) {
+                    console.log('🔍 Scheduled status check...');
                     this.checkInitialStatus();
                 }
-            }, 30000);
+            }, 300000); // 5 minutes instead of 30 seconds
         }
 
         setupVisibilityTracking() {
@@ -487,8 +499,8 @@
             this.consecutiveInactivePolls = 0;
             this.consecutiveErrors = 0;
             
-            this.pollInterval = setInterval(() => this.poll(), 2000); // 2 second polling when active
-            console.log(`🚀 Polling started (2s interval)`);
+            this.pollInterval = setInterval(() => this.poll(), 3000); // 3 second polling when active
+            console.log(`🚀 Polling started (3s interval)`);
         }
 
         stopPolling() {
@@ -511,6 +523,20 @@
                     headers: { 'Content-Type': 'application/json' }
                 });
                 
+                if (response.status === 429) {
+                    console.log('🚫 Rate limited - stopping polling and backing off');
+                    this.isGameRunning = false;
+                    this.stopPolling();
+                    // Wait 10 minutes before checking again
+                    setTimeout(() => {
+                        if (this.isPageVisible && !this.pollInterval) {
+                            console.log('🔍 Post-rate-limit status check...');
+                            this.checkInitialStatus();
+                        }
+                    }, 600000); // 10 minutes
+                    return;
+                }
+                
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
@@ -529,16 +555,16 @@
             
             this.consecutiveErrors = 0; // Reset errors on successful poll
             
-            // ✅ KEY FIX: Stop polling when game becomes inactive
+            // ✅ KEY FIX: Stop polling immediately when game becomes inactive
             if (!gameRunning) {
                 this.consecutiveInactivePolls++;
                 console.log(`🔍 Game inactive (${this.consecutiveInactivePolls}/${this.maxInactivePolls})`);
                 
                 if (this.consecutiveInactivePolls >= this.maxInactivePolls) {
-                    console.log('🛑 Game confirmed inactive - stopping polling to save costs');
+                    console.log('🛑 Game confirmed inactive - stopping polling completely');
                     this.isGameRunning = false;
                     this.stopPolling();
-                    this.scheduleStatusCheck(); // Check again later
+                    this.scheduleStatusCheck(); // Check again in 5 minutes
                     return;
                 }
             } else {
@@ -559,8 +585,8 @@
                 console.warn(`Connection issue ${this.consecutiveErrors}/3:`, error.message);
             }
             
-            if (this.consecutiveErrors >= 3) {
-                console.error('❌ Too many errors - stopping polling');
+            if (this.consecutiveErrors >= 2) {
+                console.error('❌ Multiple errors - stopping polling to reduce load');
                 this.stopPolling();
                 this.scheduleStatusCheck();
             }
@@ -586,7 +612,7 @@
         getStatus() {
             return {
                 channelId: this.channelId,
-                transport: 'Properly Smart HTTP',
+                transport: 'Truly Smart HTTP',
                 updateCount: this.updateCount,
                 consecutiveErrors: this.consecutiveErrors,
                 isGameRunning: this.isGameRunning,
@@ -602,16 +628,16 @@
             if (this.renderer) {
                 this.renderer.destroy();
             }
-            console.log('🧹 Properly smart overlay destroyed');
+            console.log('🧹 Truly smart overlay destroyed');
         }
     }
 
     // ========== INITIALIZATION ==========
     function initialize() {
         try {
-            const overlay = new ProperlySmartOverlay();
+            const overlay = new TrulySmartOverlay();
             window.smartOverlay = overlay; // For debugging
-            console.log('🎯 Properly smart overlay loaded');
+            console.log('🎯 Truly smart overlay loaded with aggressive rate limit protection');
         } catch (error) { 
             console.error('Failed to initialize overlay:', error); 
         }

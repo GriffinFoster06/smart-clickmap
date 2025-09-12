@@ -1810,7 +1810,7 @@ setInterval(safeRegisterInstance, 20000);
 
 // Enhanced startup
 httpServer.listen(PORT, '0.0.0.0', async () => {
-    log('🚀 ClickMap EBS v5.0.0 PRODUCTION READY with RATE LIMITING');
+    log('🚀 ClickMap EBS v5.0.0 PRODUCTION READY with RATE LIMITING + AUTO-RESET');
     log(`📡 Instance ID: ${INSTANCE_ID}`);
     log(`📡 Port: ${PORT}`);
     log(`💾 Redis connected: ${redis.isReady}`);
@@ -1818,6 +1818,7 @@ httpServer.listen(PORT, '0.0.0.0', async () => {
     log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
     log(`📊 Debug logging: ${DEBUG_ENABLED ? 'ENABLED' : 'DISABLED'}`);
     log(`🛡️ Rate limiting: ${MAX_REQUESTS_PER_IP}/min per IP, ${MAX_REQUESTS_PER_CHANNEL}/min per channel`);
+    log(`🧹 Auto-reset: Rate limits clear on start/stop/reset for clean slate`);
     
     try {
         const running = await gameState.isRunning();
@@ -1834,7 +1835,7 @@ httpServer.listen(PORT, '0.0.0.0', async () => {
         log(`   WebSocket: ${wss ? 'READY' : 'NOT READY'}`);
         log(`   Channels: ${connectedClients.size}`);
         log(`   Config panels: ${configPanels.size}`);
-        log('🎊 Server fully operational with protection!');
+        log('🎊 Server fully operational with smart protection!');
     }, 1000);
 });
 

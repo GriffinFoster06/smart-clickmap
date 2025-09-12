@@ -1,4 +1,4 @@
-// backend/server.js - Complete server with Redis PubSub, autoscaling support, AND full clustering
+// backend/server.js - Complete server with Redis PubSub, autoscaling support, AND rate limiting
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -26,6 +26,107 @@ function log(message, level = 'info') {
 
 function logError(message, error = null) {
     console.error(message, error || '');
+}
+
+// RATE LIMITING SYSTEM
+const requestCounts = new Map();
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const MAX_REQUESTS_PER_IP = 20; // Max 20 requests per minute per IP
+const MAX_REQUESTS_PER_CHANNEL = 60; // Max 60 requests per minute per channel
+
+function rateLimit(req, res, next) {
+    const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+    const channelId = req.query.channel || 'unknown';
+    const now = Date.now();
+    
+    // Clean old entries every minute
+    if (requestCounts.size > 1000) {
+        for (const [key, data] of requestCounts.entries()) {
+            if (now - data.firstRequest > RATE_LIMIT_WINDOW) {
+                requestCounts.delete(key);
+            }
+        }
+    }
+    
+    // Check IP rate limit
+    const ipKey = `ip:${clientIP}`;
+    const ipData = requestCounts.get(ipKey) || { count: 0, firstRequest: now };
+    
+    if (now - ipData.firstRequest > RATE_LIMIT_WINDOW) {
+        ipData.count = 1;
+        ipData.firstRequest = now;
+    } else {
+        ipData.count++;
+    }
+    
+    requestCounts.set(ipKey, ipData);
+    
+    if (ipData.count > MAX_REQUESTS_PER_IP) {
+        log(`🚫 Rate limited IP: ${clientIP} (${ipData.count} requests)`, 'warn');
+        return res.status(429).json({
+            error: 'Rate limit exceeded',
+            retryAfter: Math.ceil((RATE_LIMIT_WINDOW - (now - ipData.firstRequest)) / 1000)
+        });
+    }
+    
+    // Check channel rate limit
+    const channelKey = `channel:${channelId}`;
+    const channelData = requestCounts.get(channelKey) || { count: 0, firstRequest: now };
+    
+    if (now - channelData.firstRequest > RATE_LIMIT_WINDOW) {
+        channelData.count = 1;
+        channelData.firstRequest = now;
+    } else {
+        channelData.count++;
+    }
+    
+    requestCounts.set(channelKey, channelData);
+    
+    if (channelData.count > MAX_REQUESTS_PER_CHANNEL) {
+        log(`🚫 Rate limited channel: ${channelId} (${channelData.count} requests)`, 'warn');
+        return res.status(429).json({
+            error: 'Channel rate limit exceeded',
+            retryAfter: Math.ceil((RATE_LIMIT_WINDOW - (now - channelData.firstRequest)) / 1000)
+        });
+    }
+    
+    next();
+}
+
+// RESPONSE CACHING
+const responseCache = new Map();
+const CACHE_TTL = 3000; // 3 seconds
+
+function cacheResponse(req, res, next) {
+    const cacheKey = `${req.url}`;
+    const cached = responseCache.get(cacheKey);
+    
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return res.json(cached.data);
+    }
+    
+    // Override res.json to cache response
+    const originalJson = res.json;
+    res.json = function(data) {
+        responseCache.set(cacheKey, {
+            data: data,
+            timestamp: Date.now()
+        });
+        
+        // Clean cache periodically
+        if (responseCache.size > 100) {
+            const now = Date.now();
+            for (const [key, cache] of responseCache.entries()) {
+                if (now - cache.timestamp > CACHE_TTL) {
+                    responseCache.delete(key);
+                }
+            }
+        }
+        
+        return originalJson.call(this, data);
+    };
+    
+    next();
 }
 
 // FIXED: Declare global variables early
@@ -932,8 +1033,8 @@ app.post('/click', async (req, res) => {
     }
 });
 
-// Heatmap endpoint - minimal logging
-app.get('/heatmap', async (req, res) => {
+// Heatmap endpoint with rate limiting and caching
+app.get('/heatmap', rateLimit, cacheResponse, async (req, res) => {
     const channelId = req.query.channel;
     const threshold = parseInt(req.query.threshold) || 3;
 
@@ -1709,13 +1810,14 @@ setInterval(safeRegisterInstance, 20000);
 
 // Enhanced startup
 httpServer.listen(PORT, '0.0.0.0', async () => {
-    log('🚀 ClickMap EBS v5.0.0 PRODUCTION READY');
+    log('🚀 ClickMap EBS v5.0.0 PRODUCTION READY with RATE LIMITING');
     log(`📡 Instance ID: ${INSTANCE_ID}`);
     log(`📡 Port: ${PORT}`);
     log(`💾 Redis connected: ${redis.isReady}`);
     log(`📢 PubSub active: ${redisSub.isReady && redisPub.isReady}`);
     log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
     log(`📊 Debug logging: ${DEBUG_ENABLED ? 'ENABLED' : 'DISABLED'}`);
+    log(`🛡️ Rate limiting: ${MAX_REQUESTS_PER_IP}/min per IP, ${MAX_REQUESTS_PER_CHANNEL}/min per channel`);
     
     try {
         const running = await gameState.isRunning();
@@ -1732,7 +1834,7 @@ httpServer.listen(PORT, '0.0.0.0', async () => {
         log(`   WebSocket: ${wss ? 'READY' : 'NOT READY'}`);
         log(`   Channels: ${connectedClients.size}`);
         log(`   Config panels: ${configPanels.size}`);
-        log('🎊 Server fully operational!');
+        log('🎊 Server fully operational with protection!');
     }, 1000);
 });
 

@@ -602,6 +602,17 @@
                 console.log(`🎨 Update #${this.updateCount} (${source}): ${clusters.length} clusters`);
             }
             
+            // ✅ If we detect a state change action, and we're not currently polling, try to resume
+            if ((data?.action === 'start' || data?.action === 'reset') && !this.pollInterval && this.isPageVisible) {
+                console.log(`🔄 Detected ${data.action} action - attempting to resume polling`);
+                this.isGameRunning = data?.running === true;
+                if (this.isGameRunning) {
+                    this.consecutiveErrors = 0;
+                    this.consecutiveInactivePolls = 0;
+                    this.startPolling();
+                }
+            }
+            
             this.renderer.updateClusters(clusters);
             
             // Update body classes for CSS styling

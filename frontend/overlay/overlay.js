@@ -43,6 +43,9 @@
             this.lastRenderTime = 0;
             this.frameCount = 0;
             this.fps = 60;
+            
+            // Debug tracking
+            this.lastDrawableCount = 0;
 
             this.resize();
             this.start();

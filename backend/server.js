@@ -23,9 +23,9 @@ const BATCH_TIMEOUT = 1000; // 1 second max batch time
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const DEBUG_ENABLED = process.env.DEBUG === 'true' || !IS_PRODUCTION;
 
-// STICKY RESET SYSTEM - Keep broadcasting reset signals for 15 seconds
+// STICKY RESET SYSTEM - Keep broadcasting reset signals for 30 seconds
 const stickyResetSignals = new Map(); // channelId -> { signal, expiry }
-const RESET_SIGNAL_DURATION = 15000; // 15 seconds
+const RESET_SIGNAL_DURATION = 30000; // 30 seconds (much longer)
 
 function log(message, level = 'info') {
     if (level === 'debug' && !DEBUG_ENABLED) return;
@@ -52,8 +52,10 @@ function addStickyResetSignal(channelId, resetData) {
     
     // Auto-cleanup after expiry
     setTimeout(() => {
-        stickyResetSignals.delete(key);
-        log(`🧹 Cleaned up sticky reset signal for ${key}`);
+        if (stickyResetSignals.has(key)) {
+            stickyResetSignals.delete(key);
+            log(`🧹 Cleaned up sticky reset signal for ${key}`);
+        }
     }, RESET_SIGNAL_DURATION);
 }
 
@@ -905,22 +907,22 @@ class BroadcastManager {
 
 const broadcastManager = new BroadcastManager();
 
-// ========== PRESERVE: Original heatmap generation with performance and sticky reset ==========
+// ========== ENHANCED HEATMAP DATA WITH STICKY RESET ==========
 async function getCurrentHeatmapData(channelId, threshold = 3) {
-    const running = await gameState.isRunning();
-    const lastUpdate = Date.now();
-
     // CHECK FOR STICKY RESET SIGNAL FIRST
     const stickyReset = getStickyResetSignal(channelId);
     if (stickyReset) {
         log(`🔄 Serving sticky reset signal for ${channelId || 'all'}`);
         return {
             ...stickyReset,
-            lastUpdate: lastUpdate,
+            lastUpdate: Date.now(),
             version: gameState._version,
             stickyReset: true // Flag that this is a sticky signal
         };
     }
+
+    const running = await gameState.isRunning();
+    const lastUpdate = Date.now();
 
     if (!channelId || channelId === 'all') {
         let allPoints = [];
@@ -1051,7 +1053,8 @@ app.get('/health', async (req, res) => {
             broadcastInterval: BROADCAST_INTERVAL,
             clickSampling: `1-in-${CLICK_SAMPLING_RATE}`,
             batchSize: BATCH_SIZE
-        }
+        },
+        sticky_reset_signals: stickyResetSignals.size
     });
 });
 
@@ -1185,86 +1188,6 @@ app.get('/heatmap', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to get heatmap data'
-        });
-    }
-});
-
-// DEBUG ENDPOINT - Enhanced to see current state better
-app.get('/debug/state', async (req, res) => {
-    try {
-        const allChannels = await clickEngine.getAllChannelClicks();
-        const stats = clickEngine.getPerformanceStats();
-        const running = await gameState.isRunning();
-        
-        const channelData = {};
-        let totalClicksAcrossAllChannels = 0;
-        
-        allChannels.forEach((clicks, channelId) => {
-            totalClicksAcrossAllChannels += clicks.size;
-            channelData[channelId] = {
-                clickCount: clicks.size,
-                clicks: Array.from(clicks.entries()).slice(0, 5).map(([userId, click]) => ({
-                    userId: userId.substring(0, 8) + '...',
-                    x: click.x,
-                    y: click.y,
-                    timestamp: click.timestamp
-                })) // Only show first 5 for brevity
-            };
-        });
-        
-        res.json({
-            running: running,
-            totalChannels: allChannels.size,
-            totalClicksAcrossAllChannels: totalClicksAcrossAllChannels,
-            channelData: channelData,
-            performance: stats,
-            timestamp: Date.now(),
-            redisConnected: redis.isReady,
-            stickyResetSignals: stickyResetSignals.size,
-            message: totalClicksAcrossAllChannels === 0 ? 'NO CLICKS IN MEMORY' : `${totalClicksAcrossAllChannels} clicks found`
-        });
-        
-    } catch (error) {
-        logError('❌ Debug state error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to get debug state'
-        });
-    }
-});
-
-// Enhanced verification endpoint
-app.get('/debug/verify-reset', async (req, res) => {
-    try {
-        const allChannels = await clickEngine.getAllChannelClicks();
-        const totalClicks = Array.from(allChannels.values()).reduce((sum, channelClicks) => sum + channelClicks.size, 0);
-        const stats = clickEngine.getPerformanceStats();
-        
-        let redisKeys = [];
-        if (redis.isReady) {
-            redisKeys = await redis.keys('clicks:*');
-        }
-        
-        res.json({
-            success: true,
-            verification: {
-                inMemoryChannels: allChannels.size,
-                totalClicksInMemory: totalClicks,
-                redisClickKeys: redisKeys.length,
-                jwtCacheSize: stats.jwtCacheSize,
-                batchBufferSize: stats.batchBufferSize,
-                stickyResetSignals: stickyResetSignals.size,
-                isEmpty: allChannels.size === 0 && totalClicks === 0 && redisKeys.length === 0 && stickyResetSignals.size === 0,
-                message: allChannels.size === 0 && totalClicks === 0 ? 'RESET SUCCESSFUL - All data cleared' : 'RESET INCOMPLETE - Data still exists'
-            },
-            detailedStats: stats
-        });
-        
-    } catch (error) {
-        logError('❌ Verify reset error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to verify reset'
         });
     }
 });
@@ -1433,14 +1356,14 @@ app.post('/reset', async (req, res) => {
             resetSignalId: Math.random().toString(36).substr(2, 9) // Unique ID for tracking
         };
         
-        // STICKY RESET: Add to sticky signals for 15 seconds
+        // STICKY RESET: Add to sticky signals for 30 seconds
         addStickyResetSignal(channelId, broadcastData);
         
         // IMMEDIATE BROADCAST: Send right now
         await broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
         
-        // REPEATED BROADCASTS: Send 5 more times over 10 seconds to catch polling
-        const broadcastTimes = [1000, 2000, 4000, 6000, 8000]; // 1s, 2s, 4s, 6s, 8s
+        // REPEATED BROADCASTS: Send 8 more times over 20 seconds to catch polling
+        const broadcastTimes = [1000, 2000, 3000, 5000, 7000, 10000, 15000, 20000];
         
         broadcastTimes.forEach((delay, index) => {
             setTimeout(async () => {
@@ -1448,7 +1371,7 @@ app.post('/reset', async (req, res) => {
                 await broadcastManager.forceImmediateBroadcast(channelId || 'all', {
                     ...broadcastData,
                     timestamp: Date.now(),
-                    broadcastNumber: index + 2 // 2, 3, 4, 5, 6
+                    broadcastNumber: index + 2 // 2, 3, 4, 5, 6, 7, 8, 9
                 });
             }, delay);
         });
@@ -1462,7 +1385,7 @@ app.post('/reset', async (req, res) => {
             hardReset: true,
             instanceId: INSTANCE_ID,
             resetSignalId: broadcastData.resetSignalId,
-            message: 'Brute force reset with 15-second sticky signal'
+            message: 'Brute force reset with 30-second sticky signal and 9 broadcasts'
         });
         
     } catch (error) {
@@ -1470,6 +1393,91 @@ app.post('/reset', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to reset data'
+        });
+    }
+});
+
+// DEBUG ENDPOINT - Enhanced to see current state better
+app.get('/debug/state', async (req, res) => {
+    try {
+        const allChannels = await clickEngine.getAllChannelClicks();
+        const stats = clickEngine.getPerformanceStats();
+        const running = await gameState.isRunning();
+        
+        const channelData = {};
+        let totalClicksAcrossAllChannels = 0;
+        
+        allChannels.forEach((clicks, channelId) => {
+            totalClicksAcrossAllChannels += clicks.size;
+            channelData[channelId] = {
+                clickCount: clicks.size,
+                clicks: Array.from(clicks.entries()).slice(0, 5).map(([userId, click]) => ({
+                    userId: userId.substring(0, 8) + '...',
+                    x: click.x,
+                    y: click.y,
+                    timestamp: click.timestamp
+                })) // Only show first 5 for brevity
+            };
+        });
+        
+        res.json({
+            running: running,
+            totalChannels: allChannels.size,
+            totalClicksAcrossAllChannels: totalClicksAcrossAllChannels,
+            channelData: channelData,
+            performance: stats,
+            stickyResetSignals: Array.from(stickyResetSignals.entries()).map(([key, data]) => ({
+                channel: key,
+                resetId: data.signal.resetSignalId,
+                expiresIn: Math.max(0, data.expiry - Date.now()),
+                action: data.signal.action
+            })),
+            timestamp: Date.now(),
+            redisConnected: redis.isReady,
+            message: totalClicksAcrossAllChannels === 0 ? 'NO CLICKS IN MEMORY' : `${totalClicksAcrossAllChannels} clicks found`
+        });
+        
+    } catch (error) {
+        logError('❌ Debug state error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get debug state'
+        });
+    }
+});
+
+// Also add verification endpoint to confirm clearing works:
+app.get('/debug/verify-reset', async (req, res) => {
+    try {
+        const allChannels = await clickEngine.getAllChannelClicks();
+        const totalClicks = Array.from(allChannels.values()).reduce((sum, channelClicks) => sum + channelClicks.size, 0);
+        const stats = clickEngine.getPerformanceStats();
+        
+        let redisKeys = [];
+        if (redis.isReady) {
+            redisKeys = await redis.keys('clicks:*');
+        }
+        
+        res.json({
+            success: true,
+            verification: {
+                inMemoryChannels: allChannels.size,
+                totalClicksInMemory: totalClicks,
+                redisClickKeys: redisKeys.length,
+                jwtCacheSize: stats.jwtCacheSize,
+                batchBufferSize: stats.batchBufferSize,
+                stickyResetSignals: stickyResetSignals.size,
+                isEmpty: allChannels.size === 0 && totalClicks === 0 && redisKeys.length === 0,
+                message: allChannels.size === 0 && totalClicks === 0 ? 'RESET SUCCESSFUL - All data cleared' : 'RESET INCOMPLETE - Data still exists'
+            },
+            detailedStats: stats
+        });
+        
+    } catch (error) {
+        logError('❌ Verify reset error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to verify reset'
         });
     }
 });
@@ -1713,7 +1721,7 @@ httpServer.listen(PORT, '0.0.0.0', async () => {
         log(`   JWT cache: ${stats.jwtCacheSize} tokens`);
         log(`   Total channels: ${stats.totalChannels}`);
         log(`   Clicks in memory: ${stats.totalClicksInMemory}`);
-        log(`   Sticky reset system: ACTIVE`);
+        log(`   Sticky reset signals: ${stickyResetSignals.size}`);
         log('🎊 Ultra high-performance server ready for millions of clicks/second!');
     }, 1000);
 });

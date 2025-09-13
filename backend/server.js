@@ -1202,6 +1202,198 @@ app.get('/intelligence', (req, res) => {
     res.json(stats);
 });
 
+// Add these endpoints to your backend/server.js 
+// Insert AFTER the existing endpoints but BEFORE the WebSocket section
+
+// =============================================================================
+// LOAD TESTING ENDPOINTS - Add these to your backend/server.js
+// =============================================================================
+
+// Test click endpoint for high-performance load testing (bypasses Twitch auth)
+app.post('/test-click', async (req, res) => {
+    console.log(`🧪 Load test click received`);
+    
+    if (!await intelligentGameState.isRunning()) {
+        return res.status(400).json({ 
+            error: 'Game not running - start session first',
+            hint: 'Use POST /start to begin session'
+        });
+    }
+    
+    const { x = Math.random(), y = Math.random(), channelId = 'load-test-channel', userId } = req.body;
+    
+    // Validate coordinates
+    if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || x > 1 || y < 0 || y > 1) {
+        return res.status(400).json({ error: 'Invalid coordinates (must be 0-1 range)' });
+    }
+    
+    // Generate unique user ID for load testing
+    const testUserId = userId || `load-test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Add the click using the intelligent engine
+    const accepted = intelligentClickEngine.addClick(
+        channelId,
+        testUserId,
+        x, y
+    );
+    
+    const intelligence = intelligentMonitor.getIntelligenceStats();
+    
+    res.json({
+        success: true,
+        accepted,
+        tier: intelligence.currentTier,
+        predicted: intelligence.predictedCPS,
+        confidence: intelligence.confidence,
+        instanceId: INSTANCE_ID,
+        testMode: true,
+        coordinates: { x, y },
+        userId: testUserId
+    });
+});
+
+// Batch test clicks endpoint for ultra-high performance testing
+app.post('/test-batch-clicks', async (req, res) => {
+    console.log(`🧪 Batch test clicks received`);
+    
+    if (!await intelligentGameState.isRunning()) {
+        return res.status(400).json({ 
+            error: 'Game not running - start session first'
+        });
+    }
+    
+    const { clicks = [], channelId = 'load-test-channel' } = req.body;
+    
+    if (!Array.isArray(clicks) || clicks.length === 0) {
+        return res.status(400).json({ error: 'No clicks provided' });
+    }
+    
+    if (clicks.length > 1000) {
+        return res.status(400).json({ error: 'Too many clicks in batch (max 1000)' });
+    }
+    
+    let processed = 0;
+    let accepted = 0;
+    
+    for (const click of clicks) {
+        const { x = Math.random(), y = Math.random(), userId } = click;
+        
+        // Validate coordinates
+        if (typeof x === 'number' && typeof y === 'number' && x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+            const testUserId = userId || `batch-test-${Date.now()}-${processed}`;
+            const clickAccepted = intelligentClickEngine.addClick(channelId, testUserId, x, y);
+            if (clickAccepted) accepted++;
+            processed++;
+        }
+    }
+    
+    const intelligence = intelligentMonitor.getIntelligenceStats();
+    
+    res.json({
+        success: true,
+        processed,
+        accepted,
+        tier: intelligence.currentTier,
+        predicted: intelligence.predictedCPS,
+        confidence: intelligence.confidence,
+        instanceId: INSTANCE_ID,
+        batchMode: true
+    });
+});
+
+// Load test statistics endpoint
+app.get('/test-stats', (req, res) => {
+    const stats = intelligentClickEngine.getStats();
+    const gameState = intelligentGameState.getState();
+    const intelligence = intelligentMonitor.getIntelligenceStats();
+    
+    res.json({
+        // Core stats
+        ...stats,
+        gameState,
+        intelligence,
+        
+        // Load test specific
+        testMode: true,
+        timestamp: Date.now(),
+        uptime: process.uptime(),
+        memory: {
+            used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+            total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+            rss: Math.round(process.memoryUsage().rss / 1024 / 1024)
+        },
+        
+        // Performance metrics
+        performance: {
+            tier: intelligence.currentTier,
+            currentCPS: intelligence.currentCPS,
+            predictedCPS: intelligence.predictedCPS,
+            trendDirection: intelligence.trendDirection,
+            confidence: intelligence.confidence,
+            adaptations: intelligence.adaptations
+        }
+    });
+});
+
+// Test session quick-start endpoint
+app.post('/test-quickstart', async (req, res) => {
+    console.log('🚀 Quick-starting test session...');
+    
+    try {
+        // Reset data first
+        intelligentClickEngine.clearAll();
+        
+        // Start session
+        const version = await intelligentGameState.start();
+        
+        res.json({
+            success: true,
+            message: 'Test session ready for load testing',
+            version,
+            tier: intelligentMonitor.currentTier,
+            instanceId: INSTANCE_ID,
+            endpoints: {
+                singleClick: '/test-click',
+                batchClick: '/test-batch-clicks',
+                stats: '/test-stats',
+                heatmap: '/heatmap',
+                stop: '/stop',
+                reset: '/reset'
+            }
+        });
+        
+        console.log('✅ Test session quick-started successfully');
+        
+    } catch (error) {
+        console.error('❌ Quick-start failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to quick-start session',
+            message: error.message
+        });
+    }
+});
+
+// Health check with load test info
+app.get('/test-health', (req, res) => {
+    const stats = intelligentClickEngine.getStats();
+    const state = intelligentGameState.getState();
+    const intelligence = intelligentMonitor.getIntelligenceStats();
+    
+    res.json({
+        status: 'healthy',
+        testMode: true,
+        version: 'load-test-enabled-v1.0',
+        ...state,
+        ...intelligence,
+        endpoints: ['/test-click', '/test-batch-clicks', '/test-stats', '/test-quickstart'],
+        timestamp: Date.now(),
+        redisConnected: redis.isReady,
+        memory: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`,
+        uptime: `${Math.round(process.uptime())}s`
+    });
+});
+
 // ========== WEBSOCKET ==========
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: '/ws', perMessageDeflate: false });

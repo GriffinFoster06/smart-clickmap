@@ -1,5 +1,5 @@
 // backend/server.js - ULTRA HIGH-PERFORMANCE: 50,000 clicks/second capable
-// Extreme optimizations for massive scale with 1-in-20 sampling and aggressive batching
+// Extreme optimizations for massive scale with optimal WebSocket manager
 
 import 'dotenv/config';
 import express from 'express';
@@ -444,7 +444,6 @@ function processClicksIntoVisualClusters(points, threshold) {
     return finalClusters;
 }
 
-// [All original clustering functions preserved - keeping them exactly the same]
 function performSimpleDistanceClustering(points) {
     if (points.length === 0) return [];
     
@@ -898,6 +897,636 @@ const gameState = {
     }
 };
 
+// ========== OPTIMAL HIGH-PERFORMANCE WEBSOCKET MANAGER ==========
+class OptimalWebSocketManager {
+    constructor(redisClient, redisPub, redisSub, instanceId) {
+        this.redis = redisClient;
+        this.redisPub = redisPub;
+        this.redisSub = redisSub;
+        this.instanceId = instanceId;
+        
+        // LOCAL connection storage for maximum performance
+        this.localConnections = new Map(); // channelId -> Set<{ws, connectionId, connectedAt}>
+        this.localConfigPanels = new Map(); // sessionId -> {ws, connectionId, connectedAt}
+        
+        // PERFORMANCE optimizations
+        this.broadcastQueue = new Map(); // channelId -> {data, timestamp}
+        this.batchBroadcastInterval = 100; // Batch broadcasts every 100ms
+        this.maxBroadcastsPerSecond = 50; // Rate limit broadcasts
+        this.lastBroadcastTime = new Map(); // channelId -> timestamp
+        
+        // CONNECTION management
+        this.connectionCounter = 0;
+        this.heartbeatInterval = 30000; // 30 seconds
+        this.connectionCleanupInterval = 60000; // 1 minute
+        this.maxConnectionsPerChannel = 1000; // Prevent memory issues
+        
+        // CROSS-INSTANCE coordination (minimal Redis usage)
+        this.instanceRegistry = new Map(); // instanceId -> lastSeen
+        this.instanceHeartbeatInterval = 5000; // 5 seconds
+        this.crossInstanceBroadcastDebounce = 200; // Debounce cross-instance broadcasts
+        
+        // METRICS
+        this.metrics = {
+            totalConnections: 0,
+            broadcastsSent: 0,
+            crossInstanceBroadcasts: 0,
+            connectionsDropped: 0,
+            lastCleanup: Date.now()
+        };
+        
+        console.log(`🚀 OPTIMAL WebSocket Manager initialized on instance ${this.instanceId}`);
+        this.initialize();
+    }
+
+    async initialize() {
+        // Setup cross-instance communication with minimal overhead
+        await this.setupCrossInstanceCommunication();
+        
+        // Start background processes
+        this.startInstanceHeartbeat();
+        this.startConnectionCleanup();
+        this.startBatchBroadcasting();
+        this.startMetricsReporting();
+        
+        console.log(`✅ WebSocket manager fully initialized`);
+    }
+
+    async setupCrossInstanceCommunication() {
+        try {
+            // Subscribe to critical cross-instance events only
+            await this.redisSub.subscribe('ws:cluster:broadcast', (message) => {
+                this.handleCrossInstanceBroadcast(message);
+            });
+            
+            await this.redisSub.subscribe('ws:cluster:reset', (message) => {
+                this.handleCrossInstanceReset(message);
+            });
+            
+            console.log(`✅ Cross-instance communication setup complete`);
+        } catch (error) {
+            logError('Failed to setup cross-instance communication:', error);
+        }
+    }
+
+    // ========== CONNECTION MANAGEMENT ==========
+    
+    async registerConnection(channelId, ws, req) {
+        const connectionId = `${this.instanceId}_${++this.connectionCounter}_${Date.now()}`;
+        const connectionInfo = {
+            ws: ws,
+            connectionId: connectionId,
+            connectedAt: Date.now(),
+            lastPing: Date.now(),
+            userAgent: req.headers['user-agent']?.substring(0, 100) || 'unknown'
+        };
+
+        // Store locally for maximum performance
+        if (!this.localConnections.has(channelId)) {
+            this.localConnections.set(channelId, new Set());
+        }
+        
+        const channelConnections = this.localConnections.get(channelId);
+        
+        // Prevent memory issues - limit connections per channel
+        if (channelConnections.size >= this.maxConnectionsPerChannel) {
+            // Remove oldest connection
+            const oldestConnection = Array.from(channelConnections)[0];
+            this.unregisterConnectionLocal(channelId, oldestConnection.ws, oldestConnection.connectionId);
+            console.log(`⚠️ Connection limit reached for ${channelId}, dropped oldest`);
+        }
+        
+        channelConnections.add(connectionInfo);
+        this.metrics.totalConnections++;
+
+        // MINIMAL Redis usage - only store count and instance presence
+        try {
+            await this.updateChannelMetrics(channelId);
+        } catch (error) {
+            // Don't fail connection on Redis error
+            logError('Redis connection registration failed:', error);
+        }
+
+        console.log(`📡 Registered WebSocket: ${channelId} (${connectionId}) - Total: ${channelConnections.size}`);
+        return connectionInfo;
+    }
+
+    unregisterConnectionLocal(channelId, ws, connectionId) {
+        const channelConnections = this.localConnections.get(channelId);
+        if (!channelConnections) return;
+
+        // Find and remove connection
+        for (const conn of channelConnections) {
+            if (conn.connectionId === connectionId || conn.ws === ws) {
+                channelConnections.delete(conn);
+                this.metrics.totalConnections--;
+                
+                // Close WebSocket if still open
+                if (conn.ws.readyState === WebSocket.OPEN) {
+                    try {
+                        conn.ws.close();
+                    } catch (error) {
+                        // Ignore close errors
+                    }
+                }
+                break;
+            }
+        }
+
+        // Clean up empty channel
+        if (channelConnections.size === 0) {
+            this.localConnections.delete(channelId);
+        }
+
+        console.log(`🔒 Unregistered WebSocket: ${channelId} (${connectionId})`);
+    }
+
+    async unregisterConnection(channelId, ws, connectionId) {
+        this.unregisterConnectionLocal(channelId, ws, connectionId);
+        
+        // Update Redis metrics
+        try {
+            await this.updateChannelMetrics(channelId);
+        } catch (error) {
+            logError('Redis unregistration failed:', error);
+        }
+    }
+
+    // ========== OPTIMIZED BROADCASTING ==========
+    
+    async broadcastToChannel(channelId, data, options = {}) {
+        const now = Date.now();
+        const isImmediate = options.immediate || false;
+        const isCrossInstance = options.crossInstance !== false;
+
+        // Rate limiting for performance
+        const lastBroadcast = this.lastBroadcastTime.get(channelId) || 0;
+        if (!isImmediate && (now - lastBroadcast) < (1000 / this.maxBroadcastsPerSecond)) {
+            // Queue for batching
+            this.broadcastQueue.set(channelId, { data, timestamp: now });
+            return;
+        }
+
+        this.lastBroadcastTime.set(channelId, now);
+        
+        // LOCAL broadcast first (maximum performance)
+        const localCount = this.broadcastToChannelLocal(channelId, data);
+        
+        // CROSS-INSTANCE broadcast only if needed
+        if (isCrossInstance && localCount === 0) {
+            // Only broadcast to other instances if no local connections
+            await this.broadcastCrossInstance(channelId, data, options);
+        }
+        
+        this.metrics.broadcastsSent++;
+        return localCount;
+    }
+
+    broadcastToChannelLocal(channelId, data) {
+        const connections = this.localConnections.get(channelId);
+        if (!connections || connections.size === 0) return 0;
+
+        let message;
+        try {
+            message = JSON.stringify(data);
+        } catch (error) {
+            logError('Failed to stringify broadcast data:', error);
+            return 0;
+        }
+
+        let sentCount = 0;
+        const deadConnections = [];
+        const now = Date.now();
+
+        connections.forEach(connInfo => {
+            const ws = connInfo.ws;
+            
+            if (ws.readyState === WebSocket.OPEN) {
+                try {
+                    ws.send(message);
+                    connInfo.lastPing = now; // Update activity
+                    sentCount++;
+                } catch (error) {
+                    deadConnections.push(connInfo);
+                }
+            } else {
+                deadConnections.push(connInfo);
+            }
+        });
+
+        // Clean up dead connections efficiently
+        deadConnections.forEach(connInfo => {
+            connections.delete(connInfo);
+            this.metrics.connectionsDropped++;
+        });
+
+        if (sentCount > 0) {
+            console.log(`📡 Local broadcast to ${channelId}: ${sentCount} clients`);
+        }
+
+        return sentCount;
+    }
+
+    async broadcastCrossInstance(channelId, data, options = {}) {
+        if (!this.redis.isReady) return;
+
+        try {
+            const payload = {
+                type: 'channel_broadcast',
+                channelId: channelId,
+                data: data,
+                fromInstance: this.instanceId,
+                timestamp: Date.now(),
+                options: options
+            };
+
+            await this.redisPub.publish('ws:cluster:broadcast', JSON.stringify(payload));
+            this.metrics.crossInstanceBroadcasts++;
+            
+        } catch (error) {
+            logError('Cross-instance broadcast failed:', error);
+        }
+    }
+
+    // ========== BATCH BROADCASTING FOR PERFORMANCE ==========
+    
+    startBatchBroadcasting() {
+        setInterval(() => {
+            this.processBroadcastQueue();
+        }, this.batchBroadcastInterval);
+    }
+
+    processBroadcastQueue() {
+        if (this.broadcastQueue.size === 0) return;
+
+        const now = Date.now();
+        const batch = new Map(this.broadcastQueue);
+        this.broadcastQueue.clear();
+
+        for (const [channelId, broadcastInfo] of batch) {
+            // Only process if not too old
+            if (now - broadcastInfo.timestamp < 1000) {
+                this.broadcastToChannelLocal(channelId, broadcastInfo.data);
+            }
+        }
+    }
+
+    // ========== CROSS-INSTANCE EVENT HANDLING ==========
+    
+    handleCrossInstanceBroadcast(message) {
+        try {
+            const payload = JSON.parse(message);
+            
+            // Ignore our own broadcasts
+            if (payload.fromInstance === this.instanceId) return;
+            
+            switch (payload.type) {
+                case 'channel_broadcast':
+                    this.broadcastToChannelLocal(payload.channelId, payload.data);
+                    break;
+                case 'config_broadcast':
+                    this.broadcastToConfigPanelsLocal(payload.data);
+                    break;
+            }
+        } catch (error) {
+            logError('Cross-instance broadcast handling error:', error);
+        }
+    }
+
+    handleCrossInstanceReset(message) {
+        try {
+            const payload = JSON.parse(message);
+            
+            if (payload.fromInstance === this.instanceId) return;
+            
+            console.log(`🔄 Cross-instance reset signal received from ${payload.fromInstance}`);
+            
+            // Apply reset locally
+            if (payload.channelId) {
+                this.localConnections.delete(payload.channelId);
+            } else {
+                this.localConnections.clear();
+            }
+            
+        } catch (error) {
+            logError('Cross-instance reset handling error:', error);
+        }
+    }
+
+    // ========== CONFIG PANEL MANAGEMENT ==========
+    
+    registerConfigPanel(sessionId, ws, req) {
+        const connectionId = `config_${this.instanceId}_${++this.connectionCounter}_${Date.now()}`;
+        const connectionInfo = {
+            ws: ws,
+            connectionId: connectionId,
+            connectedAt: Date.now(),
+            lastPing: Date.now()
+        };
+
+        this.localConfigPanels.set(sessionId, connectionInfo);
+        console.log(`⚙️ Config panel registered: ${sessionId}`);
+        
+        return connectionInfo;
+    }
+
+    unregisterConfigPanel(sessionId) {
+        const removed = this.localConfigPanels.delete(sessionId);
+        if (removed) {
+            console.log(`⚙️ Config panel unregistered: ${sessionId}`);
+        }
+    }
+
+    broadcastToConfigPanelsLocal(data) {
+        if (this.localConfigPanels.size === 0) return 0;
+
+        let message;
+        try {
+            message = JSON.stringify(data);
+        } catch (error) {
+            return 0;
+        }
+
+        let sentCount = 0;
+        const deadPanels = [];
+
+        this.localConfigPanels.forEach((connInfo, sessionId) => {
+            const ws = connInfo.ws;
+            
+            if (ws.readyState === WebSocket.OPEN) {
+                try {
+                    ws.send(message);
+                    sentCount++;
+                } catch (error) {
+                    deadPanels.push(sessionId);
+                }
+            } else {
+                deadPanels.push(sessionId);
+            }
+        });
+
+        // Clean up dead panels
+        deadPanels.forEach(sessionId => {
+            this.localConfigPanels.delete(sessionId);
+        });
+
+        return sentCount;
+    }
+
+    async broadcastToConfigPanels(data) {
+        const localCount = this.broadcastToConfigPanelsLocal(data);
+        
+        // Cross-instance config broadcast
+        if (this.redis.isReady) {
+            try {
+                await this.redisPub.publish('ws:cluster:broadcast', JSON.stringify({
+                    type: 'config_broadcast',
+                    data: data,
+                    fromInstance: this.instanceId,
+                    timestamp: Date.now()
+                }));
+            } catch (error) {
+                logError('Config cross-instance broadcast failed:', error);
+            }
+        }
+        
+        return localCount;
+    }
+
+    // ========== MAINTENANCE & HEALTH ==========
+    
+    startInstanceHeartbeat() {
+        setInterval(async () => {
+            try {
+                if (this.redis.isReady) {
+                    await this.redis.setEx(
+                        `ws:instance:${this.instanceId}`,
+                        15, // 15 second TTL
+                        JSON.stringify({
+                            lastSeen: Date.now(),
+                            connections: this.metrics.totalConnections,
+                            channels: this.localConnections.size,
+                            configPanels: this.localConfigPanels.size
+                        })
+                    );
+                }
+            } catch (error) {
+                logError('Instance heartbeat failed:', error);
+            }
+        }, this.instanceHeartbeatInterval);
+    }
+
+    startConnectionCleanup() {
+        setInterval(() => {
+            this.cleanupStaleConnections();
+            this.metrics.lastCleanup = Date.now();
+        }, this.connectionCleanupInterval);
+    }
+
+    cleanupStaleConnections() {
+        const now = Date.now();
+        const staleThreshold = 300000; // 5 minutes
+        let cleanedCount = 0;
+
+        // Clean up stale regular connections
+        this.localConnections.forEach((connections, channelId) => {
+            const staleConnections = [];
+            
+            connections.forEach(connInfo => {
+                if (now - connInfo.lastPing > staleThreshold || 
+                    connInfo.ws.readyState !== WebSocket.OPEN) {
+                    staleConnections.push(connInfo);
+                }
+            });
+            
+            staleConnections.forEach(connInfo => {
+                connections.delete(connInfo);
+                cleanedCount++;
+                
+                if (connInfo.ws.readyState === WebSocket.OPEN) {
+                    try {
+                        connInfo.ws.close();
+                    } catch (error) {
+                        // Ignore
+                    }
+                }
+            });
+            
+            if (connections.size === 0) {
+                this.localConnections.delete(channelId);
+            }
+        });
+
+        // Clean up stale config panels
+        this.localConfigPanels.forEach((connInfo, sessionId) => {
+            if (now - connInfo.lastPing > staleThreshold || 
+                connInfo.ws.readyState !== WebSocket.OPEN) {
+                this.localConfigPanels.delete(sessionId);
+                cleanedCount++;
+                
+                if (connInfo.ws.readyState === WebSocket.OPEN) {
+                    try {
+                        connInfo.ws.close();
+                    } catch (error) {
+                        // Ignore
+                    }
+                }
+            }
+        });
+
+        if (cleanedCount > 0) {
+            console.log(`🧹 Cleaned up ${cleanedCount} stale connections`);
+        }
+    }
+
+    async updateChannelMetrics(channelId) {
+        if (!this.redis.isReady) return;
+        
+        try {
+            const connections = this.localConnections.get(channelId);
+            const count = connections ? connections.size : 0;
+            
+            if (count > 0) {
+                await this.redis.hSet('ws:channel:metrics', channelId, JSON.stringify({
+                    instanceId: this.instanceId,
+                    connections: count,
+                    lastUpdate: Date.now()
+                }));
+            } else {
+                await this.redis.hDel('ws:channel:metrics', channelId);
+            }
+        } catch (error) {
+            // Don't log Redis errors in production
+        }
+    }
+
+    startMetricsReporting() {
+        setInterval(() => {
+            const totalLocalConnections = Array.from(this.localConnections.values())
+                .reduce((sum, connections) => sum + connections.size, 0);
+            
+            console.log(`📊 WebSocket Metrics [${this.instanceId}]:`);
+            console.log(`   Local connections: ${totalLocalConnections} across ${this.localConnections.size} channels`);
+            console.log(`   Config panels: ${this.localConfigPanels.size}`);
+            console.log(`   Broadcasts sent: ${this.metrics.broadcastsSent}`);
+            console.log(`   Cross-instance broadcasts: ${this.metrics.crossInstanceBroadcasts}`);
+            console.log(`   Connections dropped: ${this.metrics.connectionsDropped}`);
+            
+            // Reset counters
+            this.metrics.broadcastsSent = 0;
+            this.metrics.crossInstanceBroadcasts = 0;
+            this.metrics.connectionsDropped = 0;
+            
+        }, 30000); // Every 30 seconds
+    }
+
+    // ========== CLUSTER-WIDE OPERATIONS ==========
+    
+    async broadcastToAll(data, options = {}) {
+        const promises = [];
+        let totalLocal = 0;
+        
+        // Broadcast to all local channels
+        this.localConnections.forEach((connections, channelId) => {
+            if (connections.size > 0) {
+                const channelData = channelId === 'all' ? data : 
+                    { ...data, channelId: channelId };
+                totalLocal += this.broadcastToChannelLocal(channelId, channelData);
+            }
+        });
+        
+        // Cross-instance broadcast
+        if (options.crossInstance !== false && this.redis.isReady) {
+            try {
+                await this.redisPub.publish('ws:cluster:broadcast', JSON.stringify({
+                    type: 'broadcast_all',
+                    data: data,
+                    fromInstance: this.instanceId,
+                    timestamp: Date.now()
+                }));
+            } catch (error) {
+                logError('Broadcast to all cross-instance failed:', error);
+            }
+        }
+        
+        return totalLocal;
+    }
+
+    async resetAll(channelId = null) {
+        // Local reset
+        if (channelId) {
+            this.localConnections.delete(channelId);
+        } else {
+            this.localConnections.clear();
+            this.localConfigPanels.clear();
+        }
+        
+        // Cross-instance reset signal
+        if (this.redis.isReady) {
+            try {
+                await this.redisPub.publish('ws:cluster:reset', JSON.stringify({
+                    channelId: channelId,
+                    fromInstance: this.instanceId,
+                    timestamp: Date.now()
+                }));
+            } catch (error) {
+                logError('Reset cross-instance signal failed:', error);
+            }
+        }
+        
+        console.log(`🔄 Reset triggered for ${channelId || 'ALL'} on ${this.instanceId}`);
+    }
+
+    // ========== PUBLIC API ==========
+    
+    getStatus() {
+        const totalConnections = Array.from(this.localConnections.values())
+            .reduce((sum, connections) => sum + connections.size, 0);
+            
+        return {
+            instanceId: this.instanceId,
+            totalConnections: totalConnections,
+            channels: this.localConnections.size,
+            configPanels: this.localConfigPanels.size,
+            broadcastQueueSize: this.broadcastQueue.size,
+            metrics: { ...this.metrics },
+            performance: {
+                maxBroadcastsPerSecond: this.maxBroadcastsPerSecond,
+                batchBroadcastInterval: this.batchBroadcastInterval,
+                maxConnectionsPerChannel: this.maxConnectionsPerChannel
+            }
+        };
+    }
+
+    async getClusterStatus() {
+        if (!this.redis.isReady) {
+            return { instances: [this.getStatus()] };
+        }
+        
+        try {
+            const instanceKeys = await this.redis.keys('ws:instance:*');
+            const instances = [];
+            
+            for (const key of instanceKeys) {
+                const data = await this.redis.get(key);
+                if (data) {
+                    const instanceData = JSON.parse(data);
+                    const instanceId = key.replace('ws:instance:', '');
+                    instances.push({
+                        instanceId: instanceId,
+                        ...instanceData,
+                        isLocal: instanceId === this.instanceId
+                    });
+                }
+            }
+            
+            return { instances };
+        } catch (error) {
+            return { instances: [this.getStatus()], error: error.message };
+        }
+    }
+}
+
 // ========== BROADCAST SYSTEM ==========
 class BroadcastManager {
     constructor() {
@@ -979,8 +1608,6 @@ class BroadcastManager {
         }
     }
 }
-
-const broadcastManager = new BroadcastManager();
 
 // ========== CACHED HEATMAP DATA ==========
 async function getCurrentHeatmapData(channelId, threshold = 3) {
@@ -1086,6 +1713,47 @@ setInterval(() => {
     }
 }, HEATMAP_CACHE_TTL);
 
+// ========== INITIALIZE WEBSOCKET MANAGER ==========
+const wsManager = new OptimalWebSocketManager(redis, redisPub, redisSub, INSTANCE_ID);
+const broadcastManager = new BroadcastManager();
+
+// Replace your existing broadcast functions with these optimal versions
+async function broadcastToChannel(channelId, data) {
+    return await wsManager.broadcastToChannel(channelId, data);
+}
+
+function broadcastToLocalClients(channelId, data) {
+    return wsManager.broadcastToChannelLocal(channelId, data);
+}
+
+async function broadcastToConfigPanels(data) {
+    return await wsManager.broadcastToConfigPanels(data);
+}
+
+async function broadcastToAll(data) {
+    return await wsManager.broadcastToAll(data);
+}
+
+function handleBroadcastMessage(message) {
+    try {
+        const data = JSON.parse(message);
+        if (data.fromInstance === INSTANCE_ID) return;
+        broadcastToLocalClients(data.channelId, data.payload);
+    } catch (error) {
+        logError('Error handling broadcast message:', error);
+    }
+}
+
+function handleConfigMessage(message) {
+    try {
+        const data = JSON.parse(message);
+        if (data.fromInstance === INSTANCE_ID) return;
+        broadcastToConfigPanels(data.payload);
+    } catch (error) {
+        logError('Error handling config message:', error);
+    }
+}
+
 // ========== EXPRESS APP ==========
 const app = express();
 
@@ -1124,6 +1792,7 @@ app.get('/health', async (req, res) => {
     const running = await gameState.isRunning();
     const allClicks = await clickEngine.getAllChannelClicks();
     const stats = clickEngine.getPerformanceStats();
+    const wsStatus = wsManager.getStatus();
     
     res.json({
         status: 'ok',
@@ -1132,8 +1801,9 @@ app.get('/health', async (req, res) => {
         version: '8.0.0-extreme-50k',
         instanceId: INSTANCE_ID,
         websocket: {
-            clients: wss ? wss.clients.size : 0,
-            channels: connectedClients.size
+            totalConnections: wsStatus.totalConnections,
+            channels: wsStatus.channels,
+            configPanels: wsStatus.configPanels
         },
         redis: {
             connected: redis.isReady
@@ -1352,13 +2022,15 @@ app.post('/reset', async (req, res) => {
         clickEngine.allChannelClicks.clear();
         clickEngine.clickBuffer.clear();
         clickEngine.jwtCache.clear();
-        heatmapCache.clear(); // Clear response cache
+        heatmapCache.clear();
+        
+        // Reset WebSocket connections across all instances
+        await wsManager.resetAll(channelId);
         
         if (redis.isReady) {
             try {
                 const clickKeys = await redis.keys('clicks:*');
                 if (clickKeys.length > 0) {
-                    // Process in chunks
                     const chunkSize = 1000;
                     for (let i = 0; i < clickKeys.length; i += chunkSize) {
                         const chunk = clickKeys.slice(i, i + chunkSize);
@@ -1399,7 +2071,8 @@ app.post('/reset', async (req, res) => {
             unfrozen: true,
             hardReset: true,
             instanceId: INSTANCE_ID,
-            resetSignalId: broadcastData.resetSignalId
+            resetSignalId: broadcastData.resetSignalId,
+            wsReset: true
         });
         
     } catch (error) {
@@ -1411,124 +2084,65 @@ app.post('/reset', async (req, res) => {
     }
 });
 
-// ========== PRESERVE: WEBSOCKET & BROADCASTING ==========
+app.get('/ws-status', async (req, res) => {
+    try {
+        const status = wsManager.getStatus();
+        res.json({
+            success: true,
+            ...status
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+app.get('/cluster-status', async (req, res) => {
+    try {
+        const clusterStatus = await wsManager.getClusterStatus();
+        res.json({
+            success: true,
+            ...clusterStatus
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// ========== WEBSOCKET SERVER ==========
 const httpServer = createServer(app);
 let wss = null;
-const connectedClients = new Map();
-const configPanels = new Map();
 
-function handleBroadcastMessage(message) {
-    try {
-        const data = JSON.parse(message);
-        if (data.fromInstance === INSTANCE_ID) return;
-        broadcastToLocalClients(data.channelId, data.payload);
-    } catch (error) {
-        logError('Error handling broadcast message:', error);
-    }
-}
-
-function handleConfigMessage(message) {
-    try {
-        const data = JSON.parse(message);
-        if (data.fromInstance === INSTANCE_ID) return;
-        broadcastToConfigPanels(data.payload);
-    } catch (error) {
-        logError('Error handling config message:', error);
-    }
-}
-
-function broadcastToChannel(channelId, data) {
-    if (!wss || !connectedClients) return;
-    
-    const clients = connectedClients.get(channelId);
-    if (!clients || clients.size === 0) return;
-
-    let message;
-    try {
-        message = JSON.stringify(data);
-    } catch (error) {
-        logError('Failed to stringify broadcast data:', error);
-        return;
-    }
-
-    let sentCount = 0;
-
-    clients.forEach(ws => {
-        if (ws.readyState === WebSocket.OPEN) {
-            try {
-                ws.send(message);
-                sentCount++;
-            } catch (error) {
-                clients.delete(ws);
-            }
-        } else {
-            clients.delete(ws);
-        }
-    });
-}
-
-function broadcastToLocalClients(channelId, data) {
-    broadcastToChannel(channelId, data);
-}
-
-function broadcastToConfigPanels(data) {
-    if (!configPanels) return;
-    
-    let message;
-    try {
-        message = JSON.stringify(data);
-    } catch (error) {
-        return;
-    }
-
-    configPanels.forEach((ws, sessionId) => {
-        if (ws.readyState === WebSocket.OPEN) {
-            try {
-                ws.send(message);
-            } catch (error) {
-                configPanels.delete(sessionId);
-            }
-        } else {
-            configPanels.delete(sessionId);
-        }
-    });
-}
-
-async function broadcastToAll(data) {
-    if (!connectedClients) return;
-    
-    const promises = [];
-    
-    connectedClients.forEach((clients, channelId) => {
-        const promise = (async () => {
-            const channelData = channelId === 'all' ? data : await getCurrentHeatmapData(channelId);
-            Object.assign(channelData, { running: data.running, action: data.action });
-            broadcastToChannel(channelId, channelData);
-        })();
-        promises.push(promise);
-    });
-    
-    await Promise.all(promises);
-}
-
-// Create WebSocket server
+// Create WebSocket server with optimal settings
 try {
     wss = new WebSocketServer({
         server: httpServer,
         path: '/ws',
         perMessageDeflate: false,
-        clientTracking: true
+        clientTracking: false, // We handle this ourselves
+        maxPayload: 16 * 1024 // 16KB max message size
     });
+    console.log('✅ WebSocket server created with optimal settings');
 } catch (error) {
     logError('❌ WebSocket server creation failed:', error);
     process.exit(1);
 }
 
+// OPTIMAL WebSocket connection handler
 wss.on('connection', async (ws, req) => {
+    const startTime = Date.now();
+    
     let channelId = null;
     let sessionId = null;
     let isConfigPanel = false;
+    let connectionInfo = null;
 
+    // Parse connection type from URL
     if (req.url) {
         const urlPath = req.url.replace('/ws/', '').split('?')[0];
         
@@ -1540,82 +2154,105 @@ wss.on('connection', async (ws, req) => {
         }
     }
 
-    if (isConfigPanel && sessionId) {
-        configPanels.set(sessionId, ws);
-        
-        try {
+    try {
+        if (isConfigPanel && sessionId) {
+            // Register config panel
+            connectionInfo = wsManager.registerConfigPanel(sessionId, ws, req);
+            
+            // Send initial data
             const initialData = await getCurrentHeatmapData('all');
             initialData.type = 'state_update';
             initialData.instanceId = INSTANCE_ID;
             ws.send(JSON.stringify(initialData));
-        } catch (error) {
-            logError('Error sending initial config data:', error);
-        }
-        
-    } else if (channelId) {
-        if (!connectedClients.has(channelId)) {
-            connectedClients.set(channelId, new Set());
-        }
-        connectedClients.get(channelId).add(ws);
-
-        try {
+            
+        } else if (channelId) {
+            // Register regular connection
+            connectionInfo = await wsManager.registerConnection(channelId, ws, req);
+            
+            // Send initial data
             const initialData = await getCurrentHeatmapData(channelId);
             ws.send(JSON.stringify(initialData));
-        } catch (error) {
-            logError('Error sending initial data:', error);
         }
+    } catch (error) {
+        logError('Error during WebSocket registration:', error);
+        ws.close();
+        return;
     }
 
+    // Message handling
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            if (data.type === 'ping') {
-                ws.send(JSON.stringify({ type: 'pong' }));
+            
+            switch (data.type) {
+                case 'ping':
+                    ws.send(JSON.stringify({ 
+                        type: 'pong', 
+                        instanceId: INSTANCE_ID,
+                        timestamp: Date.now()
+                    }));
+                    if (connectionInfo) {
+                        connectionInfo.lastPing = Date.now();
+                    }
+                    break;
+                    
+                case 'heartbeat':
+                    if (connectionInfo) {
+                        connectionInfo.lastPing = Date.now();
+                    }
+                    break;
             }
         } catch (error) {
-            // Ignore parse errors
+            // Ignore malformed messages
         }
     });
 
+    // Connection close handling
     ws.on('close', () => {
+        const duration = Date.now() - startTime;
+        
         if (isConfigPanel && sessionId) {
-            configPanels.delete(sessionId);
-        } else if (channelId) {
-            const clients = connectedClients.get(channelId);
-            if (clients) {
-                clients.delete(ws);
-                if (clients.size === 0) {
-                    connectedClients.delete(channelId);
-                }
-            }
+            wsManager.unregisterConfigPanel(sessionId);
+        } else if (channelId && connectionInfo) {
+            wsManager.unregisterConnection(channelId, ws, connectionInfo.connectionId);
         }
     });
 
+    // Error handling
     ws.on('error', (error) => {
         logError(`WebSocket error for ${channelId || sessionId}:`, error);
+        
+        if (isConfigPanel && sessionId) {
+            wsManager.unregisterConfigPanel(sessionId);
+        } else if (channelId && connectionInfo) {
+            wsManager.unregisterConnection(channelId, ws, connectionInfo.connectionId);
+        }
     });
 });
 
 // ========== START SERVER ==========
 httpServer.listen(PORT, '0.0.0.0', async () => {
-    log('🚀 ClickMap EBS v8.0.0 EXTREME HIGH-PERFORMANCE: 50,000 CLICKS/SECOND');
+    log('🚀 ClickMap EBS v8.0.0 OPTIMAL HIGH-PERFORMANCE: 50,000 CLICKS/SECOND');
     log(`📡 Instance ID: ${INSTANCE_ID}`);
     log(`📡 Port: ${PORT}`);
     log(`💾 Redis connected: ${redis.isReady}`);
-    log(`⚡ EXTREME Performance: 1-in-${CLICK_SAMPLING_RATE} sampling (2,500 processed/sec)`);
+    log(`⚡ OPTIMAL Performance: 1-in-${CLICK_SAMPLING_RATE} sampling (2,500 processed/sec)`);
     log(`🔥 Batch size: ${BATCH_SIZE}, Timeout: ${BATCH_TIMEOUT}ms`);
     log(`📦 Request queue: ${REQUEST_QUEUE_SIZE} max, ${MAX_CONCURRENT_REQUESTS} concurrent`);
     log(`💾 Heatmap cache: ${HEATMAP_CACHE_TTL}ms TTL`);
     log(`🧹 Memory limits: ${MAX_MEMORY_CHANNELS} channels, ${clickEngine.maxClicksPerChannel} clicks/channel`);
+    log(`🌐 OPTIMAL WebSocket Manager: Cross-instance coordination, batch broadcasting`);
     
     setTimeout(() => {
         const stats = clickEngine.getPerformanceStats();
-        log('🔍 EXTREME STATUS:');
-        log(`   Channels: ${connectedClients.size}, Config panels: ${configPanels.size}`);
+        const wsStatus = wsManager.getStatus();
+        log('🔍 OPTIMAL STATUS:');
+        log(`   WebSocket connections: ${wsStatus.totalConnections} across ${wsStatus.channels} channels`);
+        log(`   Config panels: ${wsStatus.configPanels}`);
         log(`   JWT cache: ${stats.jwtCacheSize}, Memory channels: ${stats.totalChannels}`);
         log(`   Request queue: ${requestQueue.length}, Active requests: ${activeRequests}`);
         log(`   Heatmap cache: ${heatmapCache.size} entries`);
-        log('💥 Ready for 50,000 clicks/second with extreme optimizations!');
+        log('💥 Ready for 50,000 clicks/second with optimal WebSocket management!');
     }, 1000);
 });
 

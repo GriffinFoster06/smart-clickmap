@@ -1138,6 +1138,43 @@ app.get('/heatmap', async (req, res) => {
     }
 });
 
+// DEBUG ENDPOINT - Add this for debugging data state
+app.get('/debug/state', async (req, res) => {
+    try {
+        const allChannels = await clickEngine.getAllChannelClicks();
+        const stats = clickEngine.getPerformanceStats();
+        const running = await gameState.isRunning();
+        
+        const channelData = {};
+        allChannels.forEach((clicks, channelId) => {
+            channelData[channelId] = {
+                clickCount: clicks.size,
+                clicks: Array.from(clicks.entries()).map(([userId, click]) => ({
+                    userId,
+                    x: click.x,
+                    y: click.y,
+                    timestamp: click.timestamp
+                }))
+            };
+        });
+        
+        res.json({
+            running: running,
+            totalChannels: allChannels.size,
+            channelData: channelData,
+            performance: stats,
+            timestamp: Date.now()
+        });
+        
+    } catch (error) {
+        logError('❌ Debug state error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get debug state'
+        });
+    }
+});
+
 // FIXED START/STOP/RESET with proper data preservation
 app.post('/start', async (req, res) => {
     log('🚀 START endpoint called');

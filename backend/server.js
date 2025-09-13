@@ -1000,7 +1000,7 @@ app.get('/health', async (req, res) => {
     });
 });
 
-// ULTRA-OPTIMIZED CLICK ENDPOINT with sampling
+// ULTRA-OPTIMIZED CLICK ENDPOINT with sampling and freeze rejection
 app.post('/click', async (req, res) => {
     const start = performance.now();
     const requestId = Math.random().toString(36).substr(2, 9);
@@ -1010,10 +1010,12 @@ app.post('/click', async (req, res) => {
     try {
         const running = await gameState.isRunning();
         if (!running) {
-            console.log(`❌ CLICK REJECTED [${requestId}] - Game not running`);
+            console.log(`❌ CLICK REJECTED [${requestId}] - Game stopped (visualization frozen)`);
             return res.status(400).json({
                 success: false,
-                error: 'Game not running',
+                error: 'Game not running - visualization is frozen',
+                frozen: true,
+                status: 'frozen',
                 requestId: requestId
             });
         }
@@ -1097,7 +1099,8 @@ app.post('/click', async (req, res) => {
             instanceId: INSTANCE_ID,
             requestId: requestId,
             processingTime: Math.round(processingTime),
-            sampled: !wasProcessed
+            sampled: !wasProcessed,
+            gameRunning: true
         });
 
     } catch (error) {
@@ -1131,7 +1134,7 @@ app.get('/heatmap', async (req, res) => {
     }
 });
 
-// IMPROVED START/STOP/RESET with immediate broadcasts
+// FIXED START/STOP/RESET with proper data preservation
 app.post('/start', async (req, res) => {
     log('🚀 START endpoint called');
     
@@ -1139,24 +1142,30 @@ app.post('/start', async (req, res) => {
         const channelId = req.headers['x-channel-id'] || req.body.channelId;
         const result = await gameState.setRunning(true);
         
-        if (channelId) {
-            await gameState.clearChannelClicks(channelId);
-        } else {
-            await gameState.clearAllClicks();
+        // START: Clear processing queues/backlogs but PRESERVE existing click data
+        if (clickEngine.clickBuffer) {
+            if (channelId) {
+                clickEngine.clickBuffer.delete(channelId);
+            } else {
+                clickEngine.clickBuffer.clear();
+            }
         }
         
-        log(`✅ Game started (Version: ${result})`);
+        // Force flush any pending batches to ensure clean state
+        if (clickEngine.flushBatches) {
+            await clickEngine.flushBatches();
+        }
         
-        const broadcastData = {
-            running: true,
-            clusters: [],
-            totalClicks: 0,
-            uniqueUsers: 0,
-            action: 'start',
-            version: result,
-            channelId: channelId || 'all',
-            timestamp: Date.now()
-        };
+        log(`✅ Game started (Version: ${result}) - PRESERVING existing click data`);
+        
+        // Get current data (which preserves existing clusters)
+        const broadcastData = await getCurrentHeatmapData(channelId || 'all');
+        broadcastData.running = true;
+        broadcastData.action = 'start';
+        broadcastData.version = result;
+        broadcastData.channelId = channelId || 'all';
+        broadcastData.timestamp = Date.now();
+        broadcastData.dataPreserved = true; // Signal that data was preserved
         
         // Immediate broadcast for start
         broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
@@ -1165,6 +1174,7 @@ app.post('/start', async (req, res) => {
             success: true,
             status: 'started',
             running: true,
+            dataPreserved: true,
             stateVersion: result,
             instanceId: INSTANCE_ID
         });
@@ -1185,21 +1195,40 @@ app.post('/stop', async (req, res) => {
         const channelId = req.headers['x-channel-id'] || req.body.channelId;
         const result = await gameState.setRunning(false);
         
-        log(`✅ Game stopped (Version: ${result})`);
+        // STOP: Clear processing queues/backlogs but PRESERVE existing click data
+        if (clickEngine.clickBuffer) {
+            if (channelId) {
+                clickEngine.clickBuffer.delete(channelId);
+            } else {
+                clickEngine.clickBuffer.clear();
+            }
+        }
         
+        // Force flush any pending batches to ensure clean state
+        if (clickEngine.flushBatches) {
+            await clickEngine.flushBatches();
+        }
+        
+        log(`✅ Game stopped (Version: ${result}) - PRESERVING existing click data for freeze`);
+        
+        // Get current data to freeze (preserves existing clusters)
         const currentData = await getCurrentHeatmapData(channelId || 'all');
         currentData.running = false;
         currentData.action = 'stop';
         currentData.version = result;
         currentData.timestamp = Date.now();
+        currentData.frozen = true; // Signal that visualization should be frozen
+        currentData.dataPreserved = true; // Signal that data was preserved
         
-        // Immediate broadcast for stop
+        // Immediate broadcast for stop with freeze
         broadcastManager.forceImmediateBroadcast(channelId || 'all', currentData);
         
         res.json({
             success: true,
             status: 'stopped',
             running: false,
+            frozen: true,
+            dataPreserved: true,
             stateVersion: result,
             instanceId: INSTANCE_ID
         });
@@ -1219,13 +1248,14 @@ app.post('/reset', async (req, res) => {
     try {
         const channelId = req.headers['x-channel-id'] || req.body.channelId;
         
+        // RESET: Clear EVERYTHING - processing queues AND stored click data
         if (channelId) {
             await gameState.clearChannelClicks(channelId);
         } else {
             await gameState.clearAllClicks();
         }
         
-        log(`✅ Data reset`);
+        log(`✅ Data reset - ALL click data cleared`);
         
         const running = await gameState.isRunning();
         
@@ -1234,9 +1264,11 @@ app.post('/reset', async (req, res) => {
             clusters: [],
             totalClicks: 0,
             uniqueUsers: 0,
+            coverage: 0,
             action: 'reset',
             channelId: channelId || 'all',
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            allDataCleared: true // Signal that all data was cleared
         };
         
         // Immediate broadcast for reset
@@ -1246,6 +1278,7 @@ app.post('/reset', async (req, res) => {
             success: true,
             status: 'reset',
             running: running,
+            allDataCleared: true,
             instanceId: INSTANCE_ID
         });
         

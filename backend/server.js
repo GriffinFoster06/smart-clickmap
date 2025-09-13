@@ -1,4 +1,4 @@
-// backend/server.js - Smart, efficient, gorgeous with crash prevention
+// backend/intelligent-server.js - Smart, efficient, gorgeous
 // Uses predictive scaling, intelligent batching, and adaptive optimization
 
 import 'dotenv/config';
@@ -70,178 +70,6 @@ const INTEL_CONFIG = {
 };
 
 console.log(`🧠 Intelligent Adaptive ClickMap Server - Instance: ${INSTANCE_ID}`);
-
-// ========== CRASH PREVENTION SYSTEM ==========
-class CrashPrevention {
-    constructor() {
-        this.memoryThresholds = {
-            warning: 0.75,    // 75% memory usage
-            critical: 0.85,   // 85% memory usage
-            emergency: 0.95   // 95% memory usage
-        };
-        
-        this.loadThresholds = {
-            moderate: 5000,   // 5k CPS
-            high: 10000,      // 10k CPS
-            extreme: 20000,   // 20k CPS
-            maximum: 50000    // 50k CPS absolute limit
-        };
-        
-        this.emergencyMode = false;
-        this.lastGC = 0;
-        this.requestQueue = [];
-        this.maxQueueSize = 10000;
-        
-        this.startMonitoring();
-    }
-    
-    startMonitoring() {
-        // Memory monitoring every 2 seconds
-        setInterval(() => {
-            this.checkMemoryPressure();
-        }, 2000);
-        
-        // Load monitoring every second
-        setInterval(() => {
-            this.processQueue();
-        }, 1000);
-        
-        // Emergency cleanup every 30 seconds
-        setInterval(() => {
-            this.emergencyCleanup();
-        }, 30000);
-        
-        console.log('🛡️ Crash prevention system initialized');
-    }
-    
-    checkMemoryPressure() {
-        const memUsage = process.memoryUsage();
-        const memoryRatio = memUsage.heapUsed / memUsage.heapTotal;
-        
-        if (memoryRatio > this.memoryThresholds.emergency) {
-            console.log('🚨 EMERGENCY MEMORY PRESSURE - Activating extreme measures');
-            this.emergencyMode = true;
-            this.forceGarbageCollection();
-            this.clearNonEssentialData();
-        } else if (memoryRatio > this.memoryThresholds.critical) {
-            console.log('⚠️ Critical memory pressure - Aggressive cleanup');
-            this.emergencyMode = true;
-            this.forceGarbageCollection();
-        } else if (memoryRatio > this.memoryThresholds.warning) {
-            console.log('⚠️ Memory pressure detected - Preventive cleanup');
-            this.emergencyMode = false;
-            this.preventiveCleanup();
-        } else {
-            this.emergencyMode = false;
-        }
-    }
-    
-    forceGarbageCollection() {
-        const now = Date.now();
-        if (now - this.lastGC > 5000) { // Don't GC more than once per 5 seconds
-            this.lastGC = now;
-            if (global.gc) {
-                global.gc();
-                console.log('🧹 Forced garbage collection');
-            }
-        }
-    }
-    
-    preventiveCleanup() {
-        // Clear old data from click engine
-        if (intelligentClickEngine) {
-            intelligentClickEngine.predictiveCleanup();
-        }
-    }
-    
-    clearNonEssentialData() {
-        // Emergency data clearing
-        if (intelligentClickEngine) {
-            console.log('🚨 Emergency: Clearing non-essential data');
-            
-            // Clear old clusters
-            const cutoff = Date.now() - 60000; // Keep only last 60 seconds
-            for (const [channelId, data] of intelligentClickEngine.channelData.entries()) {
-                if (data.lastUpdate < cutoff) {
-                    intelligentClickEngine.channelData.delete(channelId);
-                }
-            }
-            
-            // Clear caches
-            intelligentClickEngine.jwtCache.clear(0.7); // Clear 70%
-            intelligentClickEngine.clusterCache.clear(0.8); // Clear 80%
-        }
-    }
-    
-    emergencyCleanup() {
-        if (this.emergencyMode) {
-            console.log('🧹 Emergency cleanup cycle');
-            this.clearNonEssentialData();
-            this.forceGarbageCollection();
-        }
-    }
-    
-    shouldAcceptRequest(currentCPS) {
-        // Rate limiting based on current load
-        if (this.emergencyMode) {
-            return currentCPS < this.loadThresholds.moderate; // Only accept 5k CPS in emergency
-        }
-        
-        if (currentCPS > this.loadThresholds.maximum) {
-            console.log(`🚨 LOAD LIMIT EXCEEDED: ${currentCPS} CPS > ${this.loadThresholds.maximum} CPS`);
-            return false;
-        }
-        
-        return true;
-    }
-    
-    addToQueue(request) {
-        if (this.requestQueue.length >= this.maxQueueSize) {
-            // Remove oldest requests
-            this.requestQueue = this.requestQueue.slice(-Math.floor(this.maxQueueSize * 0.8));
-        }
-        
-        this.requestQueue.push({
-            ...request,
-            timestamp: Date.now()
-        });
-    }
-    
-    processQueue() {
-        if (this.requestQueue.length === 0) return;
-        
-        const batchSize = this.emergencyMode ? 50 : 200;
-        const batch = this.requestQueue.splice(0, batchSize);
-        
-        batch.forEach(request => {
-            try {
-                intelligentClickEngine.addClick(
-                    request.channelId,
-                    request.userId,
-                    request.x,
-                    request.y
-                );
-            } catch (error) {
-                console.error('Queue processing error:', error);
-            }
-        });
-        
-        if (batch.length > 0) {
-            console.log(`🔄 Processed ${batch.length} queued requests (${this.requestQueue.length} remaining)`);
-        }
-    }
-    
-    getStatus() {
-        const memUsage = process.memoryUsage();
-        return {
-            emergencyMode: this.emergencyMode,
-            memoryUsage: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100),
-            queueSize: this.requestQueue.length,
-            maxQueueSize: this.maxQueueSize,
-            lastGC: this.lastGC
-        };
-    }
-}
 
 // ========== PREDICTIVE PERFORMANCE MONITOR ==========
 class PredictivePerformanceMonitor {
@@ -463,18 +291,6 @@ class PredictivePerformanceMonitor {
         this.metrics.avgResponseTime = (this.metrics.avgResponseTime * 0.9) + (time * 0.1);
     }
     
-    recordClickWithLoadCheck() {
-        const currentCPS = this.getCurrentCPS();
-        
-        // Check if we should accept this click
-        if (!crashPrevention.shouldAcceptRequest(currentCPS)) {
-            return false; // Reject the click due to load
-        }
-        
-        this.recordClick();
-        return true;
-    }
-    
     getCurrentConfig() {
         return INTEL_CONFIG.PERFORMANCE_TIERS[this.currentTier];
     }
@@ -494,318 +310,313 @@ class PredictivePerformanceMonitor {
     }
 }
 
-// ========== VISUAL INTELLIGENCE ==========
-class VisualIntelligence {
-    constructor() {
-        this.quality = 1.0;
-        this.precomputedElements = new Map();
-        
-        console.log('🎨 Visual Intelligence system ready');
-    }
-    
-    setQuality(quality) {
-        this.quality = quality;
-    }
-    
-    enhanceClusters(clusters, visualQuality) {
-        return clusters.map((cluster, i) => ({
-            ...cluster,
-            
-            // Smart visual properties
-            complexity: this.calculateSmartComplexity(cluster, visualQuality),
-            eccentricity: this.calculateSmartEccentricity(cluster, visualQuality),
-            irregularity: this.calculateSmartIrregularity(cluster, visualQuality),
-            circularity: this.calculateSmartCircularity(cluster, visualQuality),
-            
-            // Intelligent shape determination
-            shapeType: this.determineIntelligentShape(cluster, visualQuality),
-            preferredSides: this.calculateIntelligentSides(cluster),
-            visualSize: this.calculateIntelligentSize(cluster),
-            
-            // Visual metadata
-            isTop: i === 0,
-            visualPriority: this.calculateVisualPriority(cluster, i),
-            renderOptimization: this.calculateRenderOptimization(cluster, visualQuality),
-            
-            id: `intel_${Date.now()}_${i}`
-        }));
-    }
-    
-    calculateSmartComplexity(cluster, quality) {
-        const baseComplexity = Math.min(0.6, (cluster.spread || 0.02) * 8);
-        const densityFactor = Math.log10((cluster.count || 1) + 1) * 0.1;
-        const areaFactor = Math.min(0.3, (cluster.area || 0.01) * 5);
-        
-        return Math.max(0.1, (baseComplexity + densityFactor + areaFactor) * quality);
-    }
-    
-    calculateSmartEccentricity(cluster, quality) {
-        if (!cluster.realPoints || cluster.realPoints.length < 3) return 0.1 * quality;
-        
-        const points = cluster.realPoints;
-        const xs = points.map(p => p.x);
-        const ys = points.map(p => p.y);
-        
-        const xRange = Math.max(...xs) - Math.min(...xs);
-        const yRange = Math.max(...ys) - Math.min(...ys);
-        
-        const ratio = Math.min(xRange, yRange) / Math.max(xRange, yRange, 0.001);
-        return Math.min(0.5, (1 - ratio) * quality);
-    }
-    
-    calculateSmartIrregularity(cluster, quality) {
-        if (!cluster.realPoints || cluster.realPoints.length < 4) return 0.1 * quality;
-        
-        const points = cluster.realPoints;
-        const distances = points.map(p => 
-            Math.sqrt(Math.pow(p.x - cluster.x, 2) + Math.pow(p.y - cluster.y, 2))
-        );
-        
-        const avgDistance = distances.reduce((a, b) => a + b, 0) / distances.length;
-        const variance = distances.reduce((sum, d) => sum + Math.pow(d - avgDistance, 2), 0) / distances.length;
-        
-        return Math.min(0.5, Math.sqrt(variance) * 15 * quality);
-    }
-    
-    calculateSmartCircularity(cluster, quality) {
-        const irregularity = this.calculateSmartIrregularity(cluster, quality);
-        const eccentricity = this.calculateSmartEccentricity(cluster, quality);
-        
-        return Math.max(0.4, 1 - (irregularity + eccentricity) * 0.6);
-    }
-    
-    determineIntelligentShape(cluster, quality) {
-        const complexity = this.calculateSmartComplexity(cluster, quality);
-        const circularity = this.calculateSmartCircularity(cluster, quality);
-        const percentage = cluster.percentage || 0;
-        
-        // Smart shape logic based on multiple factors
-        if (quality > 0.8 && (complexity > 0.35 || circularity < 0.7 || percentage > 15)) {
-            return 'polygon';
-        }
-        
-        return 'circle';
-    }
-    
-    calculateIntelligentSides(cluster) {
-        const complexity = cluster.complexity || 0.2;
-        const percentage = cluster.percentage || 5;
-        const count = cluster.count || 1;
-        
-        const baseSides = 6;
-        const complexityBonus = Math.floor(complexity * 10);
-        const percentageBonus = Math.floor(percentage / 6);
-        const countBonus = Math.floor(Math.log10(count + 1));
-        
-        return Math.max(6, Math.min(18, baseSides + complexityBonus + percentageBonus + countBonus));
-    }
-    
-    calculateIntelligentSize(cluster) {
-        const baseSize = 55;
-        const percentageBonus = Math.sqrt((cluster.percentage || 5) / 100) * 90;
-        const countBonus = Math.log10((cluster.count || 1) + 1) * 20;
-        const spreadBonus = (cluster.spread || 0.02) * 150;
-        const complexityBonus = (cluster.complexity || 0.2) * 25;
-        
-        return Math.max(45, Math.min(200, baseSize + percentageBonus + countBonus + spreadBonus + complexityBonus));
-    }
-    
-    calculateVisualPriority(cluster, index) {
-        const percentage = cluster.percentage || 0;
-        const complexity = cluster.complexity || 0;
-        const isTop = index === 0;
-        
-        return (percentage * 0.4) + (complexity * 30) + (isTop ? 20 : 0);
-    }
-    
-    calculateRenderOptimization(cluster, quality) {
-        return {
-            useGradients: quality > 0.8,
-            useBlur: quality > 0.9,
-            useGlow: quality > 0.85 && cluster.percentage > 15,
-            animationIntensity: quality,
-            lodLevel: quality < 0.7 ? 'low' : quality < 0.9 ? 'medium' : 'high'
-        };
-    }
-    
-    precomputeVisualElements(channelData) {
-        // Pre-calculate expensive visual elements
-        for (const [channelId, data] of channelData.entries()) {
-            if (data.clusters && data.clusters.length > 0) {
-                const key = `visual_${channelId}_${data.lastUpdate}`;
-                this.precomputedElements.set(key, {
-                    gradients: this.precomputeGradients(data.clusters),
-                    animations: this.precomputeAnimations(data.clusters),
-                    timestamp: Date.now()
-                });
-            }
-        }
-        
-        // Cleanup old precomputed elements
-        for (const [key, element] of this.precomputedElements.entries()) {
-            if (Date.now() - element.timestamp > 30000) {
-                this.precomputedElements.delete(key);
-            }
-        }
-    }
-    
-    precomputeGradients(clusters) {
-        return clusters.map(cluster => ({
-            id: cluster.id,
-            gradient: `radial-gradient(circle, rgba(147,51,234,${cluster.percentage/100}) 0%, transparent 70%)`,
-            shadow: `0 0 ${cluster.visualSize/4}px rgba(147,51,234,0.4)`
-        }));
-    }
-    
-    precomputeAnimations(clusters) {
-        return clusters.map(cluster => ({
-            id: cluster.id,
-            pulseSpeed: Math.max(0.5, 2 - (cluster.percentage / 50)),
-            rotationSpeed: cluster.shapeType === 'polygon' ? cluster.complexity * 0.5 : 0,
-            scaleVariation: Math.min(0.2, cluster.irregularity)
-        }));
-    }
-}
+// Add this BEFORE your existing IntelligentClickEngine class in backend/server.js
 
-// ========== INTELLIGENT BATCHER ==========
-class IntelligentBatcher {
-    constructor(clickEngine) {
-        this.clickEngine = clickEngine;
-        this.batches = new Map(); // channelId -> batch
-        this.timers = new Map();
-        this.stats = { created: 0, processed: 0, optimized: 0 };
+// ========== CRASH PREVENTION SYSTEM ==========
+class CrashPrevention {
+    constructor() {
+        this.memoryThresholds = {
+            warning: 0.75,    // 75% memory usage
+            critical: 0.85,   // 85% memory usage
+            emergency: 0.95   // 95% memory usage
+        };
+        
+        this.loadThresholds = {
+            moderate: 5000,   // 5k CPS
+            high: 10000,      // 10k CPS
+            extreme: 20000,   // 20k CPS
+            maximum: 50000    // 50k CPS absolute limit
+        };
+        
+        this.emergencyMode = false;
+        this.lastGC = 0;
+        this.requestQueue = [];
+        this.maxQueueSize = 10000;
+        
+        this.startMonitoring();
     }
     
-    addToBatch(channelId, userId, x, y) {
-        const config = this.clickEngine.monitor.getCurrentConfig();
-        const dynamicBatchSize = this.calculateDynamicBatchSize(config, channelId);
+    startMonitoring() {
+        // Memory monitoring every 2 seconds
+        setInterval(() => {
+            this.checkMemoryPressure();
+        }, 2000);
         
-        if (!this.batches.has(channelId)) {
-            this.batches.set(channelId, []);
+        // Load monitoring every second
+        setInterval(() => {
+            this.processQueue();
+        }, 1000);
+        
+        // Emergency cleanup every 30 seconds
+        setInterval(() => {
+            this.emergencyCleanup();
+        }, 30000);
+        
+        console.log('🛡️ Crash prevention system initialized');
+    }
+    
+    checkMemoryPressure() {
+        const memUsage = process.memoryUsage();
+        const memoryRatio = memUsage.heapUsed / memUsage.heapTotal;
+        
+        if (memoryRatio > this.memoryThresholds.emergency) {
+            console.log('🚨 EMERGENCY MEMORY PRESSURE - Activating extreme measures');
+            this.emergencyMode = true;
+            this.forceGarbageCollection();
+            this.clearNonEssentialData();
+        } else if (memoryRatio > this.memoryThresholds.critical) {
+            console.log('⚠️ Critical memory pressure - Aggressive cleanup');
+            this.emergencyMode = true;
+            this.forceGarbageCollection();
+        } else if (memoryRatio > this.memoryThresholds.warning) {
+            console.log('⚠️ Memory pressure detected - Preventive cleanup');
+            this.emergencyMode = false;
+            this.preventiveCleanup();
+        } else {
+            this.emergencyMode = false;
+        }
+    }
+    
+    forceGarbageCollection() {
+        const now = Date.now();
+        if (now - this.lastGC > 5000) { // Don't GC more than once per 5 seconds
+            this.lastGC = now;
+            if (global.gc) {
+                global.gc();
+                console.log('🧹 Forced garbage collection');
+            }
+        }
+    }
+    
+    preventiveCleanup() {
+        // Clear old data from click engine
+        if (intelligentClickEngine) {
+            intelligentClickEngine.predictiveCleanup();
+        }
+    }
+    
+    clearNonEssentialData() {
+        // Emergency data clearing
+        if (intelligentClickEngine) {
+            console.log('🚨 Emergency: Clearing non-essential data');
+            
+            // Clear old clusters
+            const cutoff = Date.now() - 60000; // Keep only last 60 seconds
+            for (const [channelId, data] of intelligentClickEngine.channelData.entries()) {
+                if (data.lastUpdate < cutoff) {
+                    intelligentClickEngine.channelData.delete(channelId);
+                }
+            }
+            
+            // Clear caches
+            intelligentClickEngine.jwtCache.clear(0.7); // Clear 70%
+            intelligentClickEngine.clusterCache.clear(0.8); // Clear 80%
+        }
+    }
+    
+    emergencyCleanup() {
+        if (this.emergencyMode) {
+            console.log('🧹 Emergency cleanup cycle');
+            this.clearNonEssentialData();
+            this.forceGarbageCollection();
+        }
+    }
+    
+    shouldAcceptRequest(currentCPS) {
+        // Rate limiting based on current load
+        if (this.emergencyMode) {
+            return currentCPS < this.loadThresholds.moderate; // Only accept 5k CPS in emergency
         }
         
-        const batch = this.batches.get(channelId);
-        batch.push({ userId, x, y, timestamp: Date.now() });
-        this.stats.created++;
-        
-        // Process batch when full or start/update timer
-        if (batch.length >= dynamicBatchSize) {
-            this.processBatch(channelId);
-        } else {
-            this.setIntelligentTimer(channelId, config);
+        if (currentCPS > this.loadThresholds.maximum) {
+            console.log(`🚨 LOAD LIMIT EXCEEDED: ${currentCPS} CPS > ${this.loadThresholds.maximum} CPS`);
+            return false;
         }
         
         return true;
     }
     
-    calculateDynamicBatchSize(config, channelId) {
-        // Smart batch sizing based on channel activity and performance
-        const baseSize = config.batchSize[0];
-        const maxSize = config.batchSize[1];
-        
-        // Adjust based on current load
-        const currentCPS = this.clickEngine.monitor.getCurrentCPS();
-        const threshold = config.threshold;
-        const loadFactor = Math.min(1, currentCPS / threshold);
-        
-        return Math.floor(baseSize + (maxSize - baseSize) * loadFactor);
-    }
-    
-    setIntelligentTimer(channelId, config) {
-        if (this.timers.has(channelId)) {
-            return; // Timer already running
+    addToQueue(request) {
+        if (this.requestQueue.length >= this.maxQueueSize) {
+            // Remove oldest requests
+            this.requestQueue = this.requestQueue.slice(-Math.floor(this.maxQueueSize * 0.8));
         }
         
-        const dynamicTimeout = this.calculateDynamicTimeout(config, channelId);
-        
-        const timer = setTimeout(() => {
-            this.processBatch(channelId);
-        }, dynamicTimeout);
-        
-        this.timers.set(channelId, timer);
+        this.requestQueue.push({
+            ...request,
+            timestamp: Date.now()
+        });
     }
     
-    calculateDynamicTimeout(config, channelId) {
-        const baseTimeout = config.batchTimeout[0];
-        const maxTimeout = config.batchTimeout[1];
+    processQueue() {
+        if (this.requestQueue.length === 0) return;
         
-        // Faster timeout for higher loads
-        const currentCPS = this.clickEngine.monitor.getCurrentCPS();
-        const threshold = config.threshold;
-        const urgencyFactor = Math.min(1, currentCPS / threshold);
+        const batchSize = this.emergencyMode ? 50 : 200;
+        const batch = this.requestQueue.splice(0, batchSize);
         
-        return Math.floor(maxTimeout - (maxTimeout - baseTimeout) * urgencyFactor);
-    }
-    
-    processBatch(channelId) {
-        const batch = this.batches.get(channelId);
-        if (!batch || batch.length === 0) return;
+        batch.forEach(request => {
+            try {
+                intelligentClickEngine.addClick(
+                    request.channelId,
+                    request.userId,
+                    request.x,
+                    request.y
+                );
+            } catch (error) {
+                console.error('Queue processing error:', error);
+            }
+        });
         
-        // Clear batch and timer
-        this.batches.set(channelId, []);
-        const timer = this.timers.get(channelId);
-        if (timer) {
-            clearTimeout(timer);
-            this.timers.delete(channelId);
+        if (batch.length > 0) {
+            console.log(`🔄 Processed ${batch.length} queued requests (${this.requestQueue.length} remaining)`);
         }
-        
-        // Process the batch
-        this.clickEngine.processChannelBatch(channelId, batch);
-        this.stats.processed++;
     }
     
-    getStats() {
+    getStatus() {
+        const memUsage = process.memoryUsage();
         return {
-            ...this.stats,
-            activeBatches: this.batches.size,
-            activeTimers: this.timers.size
+            emergencyMode: this.emergencyMode,
+            memoryUsage: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100),
+            queueSize: this.requestQueue.length,
+            maxQueueSize: this.maxQueueSize,
+            lastGC: this.lastGC
         };
-    }
-    
-    clearAll() {
-        this.batches.clear();
-        this.timers.forEach(timer => clearTimeout(timer));
-        this.timers.clear();
     }
 }
 
-// ========== LRU CACHE IMPLEMENTATION ==========
-class LRUCache {
-    constructor(maxSize) {
-        this.maxSize = maxSize;
-        this.cache = new Map();
+// Initialize crash prevention
+const crashPrevention = new CrashPrevention();
+
+// ========== ENHANCED INTELLIGENT MONITOR WITH CRASH PREVENTION ==========
+// Modify your PredictivePerformanceMonitor class to include this method:
+
+// Add this method to your existing PredictivePerformanceMonitor class:
+PredictivePerformanceMonitor.prototype.recordClickWithLoadCheck = function() {
+    const currentCPS = this.getCurrentCPS();
+    
+    // Check if we should accept this click
+    if (!crashPrevention.shouldAcceptRequest(currentCPS)) {
+        return false; // Reject the click due to load
     }
     
-    get(key) {
-        if (this.cache.has(key)) {
-            const value = this.cache.get(key);
-            this.cache.delete(key);
-            this.cache.set(key, value);
-            return value;
+    this.recordClick();
+    return true;
+};
+
+// ========== ENHANCED TEST ENDPOINTS WITH CRASH PREVENTION ==========
+// Replace your test-click endpoint with this crash-protected version:
+
+app.post('/test-click', async (req, res) => {
+    const startTime = Date.now();
+    
+    try {
+        if (!await intelligentGameState.isRunning()) {
+            return res.status(400).json({ 
+                error: 'Game not running - start session first',
+                hint: 'Use POST /start to begin session'
+            });
         }
-        return null;
-    }
-    
-    set(key, value) {
-        if (this.cache.has(key)) {
-            this.cache.delete(key);
-        } else if (this.cache.size >= this.maxSize) {
-            const firstKey = this.cache.keys().next().value;
-            this.cache.delete(firstKey);
+        
+        // Check system status
+        const crashStatus = crashPrevention.getStatus();
+        const currentCPS = intelligentMonitor.getCurrentCPS();
+        
+        // Emergency load shedding
+        if (crashStatus.emergencyMode && Math.random() > 0.3) {
+            return res.status(503).json({ 
+                error: 'System overloaded - request dropped',
+                emergencyMode: true,
+                currentCPS: currentCPS,
+                retryAfter: 1
+            });
         }
-        this.cache.set(key, value);
+        
+        // Validate input
+        const { x = Math.random(), y = Math.random(), channelId = 'load-test-channel', userId } = req.body;
+        
+        if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || x > 1 || y < 0 || y > 1) {
+            return res.status(400).json({ error: 'Invalid coordinates (must be 0-1 range)' });
+        }
+        
+        const testUserId = userId || `load-test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        let accepted = false;
+        
+        // Try to process immediately if load is manageable
+        if (currentCPS < 15000 && !crashStatus.emergencyMode) {
+            accepted = intelligentMonitor.recordClickWithLoadCheck();
+            if (accepted) {
+                intelligentClickEngine.addClick(channelId, testUserId, x, y);
+            }
+        } else {
+            // Queue for later processing if overloaded
+            crashPrevention.addToQueue({
+                channelId,
+                userId: testUserId,
+                x,
+                y
+            });
+            accepted = true; // Accept but queue
+        }
+        
+        const intelligence = intelligentMonitor.getIntelligenceStats();
+        const responseTime = Date.now() - startTime;
+        
+        // Log high-load situations
+        if (currentCPS > 10000) {
+            console.log(`🔥 HIGH LOAD: ${currentCPS} CPS, Tier: ${intelligence.currentTier}, Emergency: ${crashStatus.emergencyMode}`);
+        }
+        
+        res.json({
+            success: true,
+            accepted,
+            queued: currentCPS >= 15000,
+            tier: intelligence.currentTier,
+            predicted: intelligence.predictedCPS,
+            currentCPS: intelligence.currentCPS,
+            confidence: intelligence.confidence,
+            emergencyMode: crashStatus.emergencyMode,
+            queueSize: crashStatus.queueSize,
+            memoryUsage: crashStatus.memoryUsage,
+            instanceId: INSTANCE_ID,
+            testMode: true,
+            coordinates: { x, y },
+            userId: testUserId,
+            responseTime: responseTime
+        });
+        
+    } catch (error) {
+        console.error('Test click error:', error);
+        
+        // Don't crash on individual click errors
+        res.status(500).json({
+            success: false,
+            error: 'Click processing failed',
+            message: error.message,
+            emergencyMode: crashPrevention.emergencyMode
+        });
     }
+});
+
+// Enhanced system status endpoint
+app.get('/test-system-status', (req, res) => {
+    const crashStatus = crashPrevention.getStatus();
+    const intelligence = intelligentMonitor.getIntelligenceStats();
+    const memUsage = process.memoryUsage();
     
-    clear(ratio = 1.0) {
-        const keysToRemove = Math.floor(this.cache.size * ratio);
-        const keys = Array.from(this.cache.keys()).slice(0, keysToRemove);
-        keys.forEach(key => this.cache.delete(key));
-    }
-    
-    size() {
-        return this.cache.size;
-    }
-}
+    res.json({
+        crashPrevention: crashStatus,
+        intelligence: intelligence,
+        memory: {
+            used: Math.round(memUsage.heapUsed / 1024 / 1024),
+            total: Math.round(memUsage.heapTotal / 1024 / 1024),
+            external: Math.round(memUsage.external / 1024 / 1024),
+            rss: Math.round(memUsage.rss / 1024 / 1024)
+        },
+        uptime: Math.round(process.uptime()),
+        timestamp: Date.now()
+    });
+});
 
 // ========== INTELLIGENT CLICK ENGINE ==========
 class IntelligentClickEngine {
@@ -1165,10 +976,325 @@ class IntelligentClickEngine {
     }
 }
 
+// ========== VISUAL INTELLIGENCE ==========
+class VisualIntelligence {
+    constructor() {
+        this.quality = 1.0;
+        this.precomputedElements = new Map();
+        
+        console.log('🎨 Visual Intelligence system ready');
+    }
+    
+    setQuality(quality) {
+        this.quality = quality;
+    }
+    
+    enhanceClusters(clusters, visualQuality) {
+        return clusters.map((cluster, i) => ({
+            ...cluster,
+            
+            // Smart visual properties
+            complexity: this.calculateSmartComplexity(cluster, visualQuality),
+            eccentricity: this.calculateSmartEccentricity(cluster, visualQuality),
+            irregularity: this.calculateSmartIrregularity(cluster, visualQuality),
+            circularity: this.calculateSmartCircularity(cluster, visualQuality),
+            
+            // Intelligent shape determination
+            shapeType: this.determineIntelligentShape(cluster, visualQuality),
+            preferredSides: this.calculateIntelligentSides(cluster),
+            visualSize: this.calculateIntelligentSize(cluster),
+            
+            // Visual metadata
+            isTop: i === 0,
+            visualPriority: this.calculateVisualPriority(cluster, i),
+            renderOptimization: this.calculateRenderOptimization(cluster, visualQuality),
+            
+            id: `intel_${Date.now()}_${i}`
+        }));
+    }
+    
+    calculateSmartComplexity(cluster, quality) {
+        const baseComplexity = Math.min(0.6, (cluster.spread || 0.02) * 8);
+        const densityFactor = Math.log10((cluster.count || 1) + 1) * 0.1;
+        const areaFactor = Math.min(0.3, (cluster.area || 0.01) * 5);
+        
+        return Math.max(0.1, (baseComplexity + densityFactor + areaFactor) * quality);
+    }
+    
+    calculateSmartEccentricity(cluster, quality) {
+        if (!cluster.realPoints || cluster.realPoints.length < 3) return 0.1 * quality;
+        
+        const points = cluster.realPoints;
+        const xs = points.map(p => p.x);
+        const ys = points.map(p => p.y);
+        
+        const xRange = Math.max(...xs) - Math.min(...xs);
+        const yRange = Math.max(...ys) - Math.min(...ys);
+        
+        const ratio = Math.min(xRange, yRange) / Math.max(xRange, yRange, 0.001);
+        return Math.min(0.5, (1 - ratio) * quality);
+    }
+    
+    calculateSmartIrregularity(cluster, quality) {
+        if (!cluster.realPoints || cluster.realPoints.length < 4) return 0.1 * quality;
+        
+        const points = cluster.realPoints;
+        const distances = points.map(p => 
+            Math.sqrt(Math.pow(p.x - cluster.x, 2) + Math.pow(p.y - cluster.y, 2))
+        );
+        
+        const avgDistance = distances.reduce((a, b) => a + b, 0) / distances.length;
+        const variance = distances.reduce((sum, d) => sum + Math.pow(d - avgDistance, 2), 0) / distances.length;
+        
+        return Math.min(0.5, Math.sqrt(variance) * 15 * quality);
+    }
+    
+    calculateSmartCircularity(cluster, quality) {
+        const irregularity = this.calculateSmartIrregularity(cluster, quality);
+        const eccentricity = this.calculateSmartEccentricity(cluster, quality);
+        
+        return Math.max(0.4, 1 - (irregularity + eccentricity) * 0.6);
+    }
+    
+    determineIntelligentShape(cluster, quality) {
+        const complexity = this.calculateSmartComplexity(cluster, quality);
+        const circularity = this.calculateSmartCircularity(cluster, quality);
+        const percentage = cluster.percentage || 0;
+        
+        // Smart shape logic based on multiple factors
+        if (quality > 0.8 && (complexity > 0.35 || circularity < 0.7 || percentage > 15)) {
+            return 'polygon';
+        }
+        
+        return 'circle';
+    }
+    
+    calculateIntelligentSides(cluster) {
+        const complexity = cluster.complexity || 0.2;
+        const percentage = cluster.percentage || 5;
+        const count = cluster.count || 1;
+        
+        const baseSides = 6;
+        const complexityBonus = Math.floor(complexity * 10);
+        const percentageBonus = Math.floor(percentage / 6);
+        const countBonus = Math.floor(Math.log10(count + 1));
+        
+        return Math.max(6, Math.min(18, baseSides + complexityBonus + percentageBonus + countBonus));
+    }
+    
+    calculateIntelligentSize(cluster) {
+        const baseSize = 55;
+        const percentageBonus = Math.sqrt((cluster.percentage || 5) / 100) * 90;
+        const countBonus = Math.log10((cluster.count || 1) + 1) * 20;
+        const spreadBonus = (cluster.spread || 0.02) * 150;
+        const complexityBonus = (cluster.complexity || 0.2) * 25;
+        
+        return Math.max(45, Math.min(200, baseSize + percentageBonus + countBonus + spreadBonus + complexityBonus));
+    }
+    
+    calculateVisualPriority(cluster, index) {
+        const percentage = cluster.percentage || 0;
+        const complexity = cluster.complexity || 0;
+        const isTop = index === 0;
+        
+        return (percentage * 0.4) + (complexity * 30) + (isTop ? 20 : 0);
+    }
+    
+    calculateRenderOptimization(cluster, quality) {
+        return {
+            useGradients: quality > 0.8,
+            useBlur: quality > 0.9,
+            useGlow: quality > 0.85 && cluster.percentage > 15,
+            animationIntensity: quality,
+            lodLevel: quality < 0.7 ? 'low' : quality < 0.9 ? 'medium' : 'high'
+        };
+    }
+    
+    precomputeVisualElements(channelData) {
+        // Pre-calculate expensive visual elements
+        for (const [channelId, data] of channelData.entries()) {
+            if (data.clusters && data.clusters.length > 0) {
+                const key = `visual_${channelId}_${data.lastUpdate}`;
+                this.precomputedElements.set(key, {
+                    gradients: this.precomputeGradients(data.clusters),
+                    animations: this.precomputeAnimations(data.clusters),
+                    timestamp: Date.now()
+                });
+            }
+        }
+        
+        // Cleanup old precomputed elements
+        for (const [key, element] of this.precomputedElements.entries()) {
+            if (Date.now() - element.timestamp > 30000) {
+                this.precomputedElements.delete(key);
+            }
+        }
+    }
+    
+    precomputeGradients(clusters) {
+        return clusters.map(cluster => ({
+            id: cluster.id,
+            gradient: `radial-gradient(circle, rgba(147,51,234,${cluster.percentage/100}) 0%, transparent 70%)`,
+            shadow: `0 0 ${cluster.visualSize/4}px rgba(147,51,234,0.4)`
+        }));
+    }
+    
+    precomputeAnimations(clusters) {
+        return clusters.map(cluster => ({
+            id: cluster.id,
+            pulseSpeed: Math.max(0.5, 2 - (cluster.percentage / 50)),
+            rotationSpeed: cluster.shapeType === 'polygon' ? cluster.complexity * 0.5 : 0,
+            scaleVariation: Math.min(0.2, cluster.irregularity)
+        }));
+    }
+}
+
+// ========== INTELLIGENT BATCHER ==========
+class IntelligentBatcher {
+    constructor(clickEngine) {
+        this.clickEngine = clickEngine;
+        this.batches = new Map(); // channelId -> batch
+        this.timers = new Map();
+        this.stats = { created: 0, processed: 0, optimized: 0 };
+    }
+    
+    addToBatch(channelId, userId, x, y) {
+        const config = this.clickEngine.monitor.getCurrentConfig();
+        const dynamicBatchSize = this.calculateDynamicBatchSize(config, channelId);
+        
+        if (!this.batches.has(channelId)) {
+            this.batches.set(channelId, []);
+        }
+        
+        const batch = this.batches.get(channelId);
+        batch.push({ userId, x, y, timestamp: Date.now() });
+        this.stats.created++;
+        
+        // Process batch when full or start/update timer
+        if (batch.length >= dynamicBatchSize) {
+            this.processBatch(channelId);
+        } else {
+            this.setIntelligentTimer(channelId, config);
+        }
+        
+        return true;
+    }
+    
+    calculateDynamicBatchSize(config, channelId) {
+        // Smart batch sizing based on channel activity and performance
+        const baseSize = config.batchSize[0];
+        const maxSize = config.batchSize[1];
+        
+        // Adjust based on current load
+        const currentCPS = this.clickEngine.monitor.getCurrentCPS();
+        const threshold = config.threshold;
+        const loadFactor = Math.min(1, currentCPS / threshold);
+        
+        return Math.floor(baseSize + (maxSize - baseSize) * loadFactor);
+    }
+    
+    setIntelligentTimer(channelId, config) {
+        if (this.timers.has(channelId)) {
+            return; // Timer already running
+        }
+        
+        const dynamicTimeout = this.calculateDynamicTimeout(config, channelId);
+        
+        const timer = setTimeout(() => {
+            this.processBatch(channelId);
+        }, dynamicTimeout);
+        
+        this.timers.set(channelId, timer);
+    }
+    
+    calculateDynamicTimeout(config, channelId) {
+        const baseTimeout = config.batchTimeout[0];
+        const maxTimeout = config.batchTimeout[1];
+        
+        // Faster timeout for higher loads
+        const currentCPS = this.clickEngine.monitor.getCurrentCPS();
+        const threshold = config.threshold;
+        const urgencyFactor = Math.min(1, currentCPS / threshold);
+        
+        return Math.floor(maxTimeout - (maxTimeout - baseTimeout) * urgencyFactor);
+    }
+    
+    processBatch(channelId) {
+        const batch = this.batches.get(channelId);
+        if (!batch || batch.length === 0) return;
+        
+        // Clear batch and timer
+        this.batches.set(channelId, []);
+        const timer = this.timers.get(channelId);
+        if (timer) {
+            clearTimeout(timer);
+            this.timers.delete(channelId);
+        }
+        
+        // Process the batch
+        this.clickEngine.processChannelBatch(channelId, batch);
+        this.stats.processed++;
+    }
+    
+    getStats() {
+        return {
+            ...this.stats,
+            activeBatches: this.batches.size,
+            activeTimers: this.timers.size
+        };
+    }
+    
+    clearAll() {
+        this.batches.clear();
+        this.timers.forEach(timer => clearTimeout(timer));
+        this.timers.clear();
+    }
+}
+
+// ========== LRU CACHE IMPLEMENTATION ==========
+class LRUCache {
+    constructor(maxSize) {
+        this.maxSize = maxSize;
+        this.cache = new Map();
+    }
+    
+    get(key) {
+        if (this.cache.has(key)) {
+            const value = this.cache.get(key);
+            this.cache.delete(key);
+            this.cache.set(key, value);
+            return value;
+        }
+        return null;
+    }
+    
+    set(key, value) {
+        if (this.cache.has(key)) {
+            this.cache.delete(key);
+        } else if (this.cache.size >= this.maxSize) {
+            const firstKey = this.cache.keys().next().value;
+            this.cache.delete(firstKey);
+        }
+        this.cache.set(key, value);
+    }
+    
+    clear(ratio = 1.0) {
+        const keysToRemove = Math.floor(this.cache.size * ratio);
+        const keys = Array.from(this.cache.keys()).slice(0, keysToRemove);
+        keys.forEach(key => this.cache.delete(key));
+    }
+    
+    size() {
+        return this.cache.size;
+    }
+}
+
 // ========== INITIALIZE INTELLIGENT SYSTEM ==========
-const crashPrevention = new CrashPrevention();
 const intelligentMonitor = new PredictivePerformanceMonitor();
 const intelligentClickEngine = new IntelligentClickEngine(intelligentMonitor);
+
+// ========== REDIS SETUP ==========
+// Replace the Redis setup section in your backend/server.js with this:
 
 // ========== REDIS SETUP WITH PROPER ERROR HANDLING ==========
 const redis = createClient({
@@ -1344,9 +1470,78 @@ app.post('/click', async (req, res) => {
     });
 });
 
-// ========== ENHANCED TEST ENDPOINTS WITH CRASH PREVENTION ==========
+// Heatmap endpoint
+app.get('/heatmap', async (req, res) => {
+    const channelId = req.query.channel;
+    const data = intelligentClickEngine.getHeatmapData(channelId);
+    const state = intelligentGameState.getState();
+    
+    res.json({
+        running: state.running,
+        ...data,
+        version: state.version,
+        timestamp: Date.now()
+    });
+});
 
-// Enhanced test click endpoint with crash protection
+// Control endpoints
+app.post('/start', async (req, res) => {
+    console.log(`🧠 START command on ${INSTANCE_ID}`);
+    intelligentClickEngine.clearAll();
+    const version = await intelligentGameState.start();
+    
+    res.json({
+        success: true,
+        status: 'started',
+        version,
+        tier: intelligentMonitor.currentTier,
+        instanceId: INSTANCE_ID
+    });
+});
+
+app.post('/stop', async (req, res) => {
+    console.log(`🧠 STOP command on ${INSTANCE_ID}`);
+    const version = await intelligentGameState.stop();
+    intelligentClickEngine.clearAll();
+    
+    res.json({
+        success: true,
+        status: 'stopped',
+        version,
+        instanceId: INSTANCE_ID
+    });
+});
+
+app.post('/reset', async (req, res) => {
+    console.log(`🧠 RESET command on ${INSTANCE_ID}`);
+    intelligentClickEngine.clearAll();
+    const version = await intelligentGameState.reset();
+    
+    res.json({
+        success: true,
+        status: 'reset',
+        version,
+        instanceId: INSTANCE_ID
+    });
+});
+
+// Intelligence stats endpoint
+app.get('/intelligence', (req, res) => {
+    const stats = intelligentClickEngine.getStats();
+    res.json(stats);
+});
+
+// Add these endpoints to your backend/server.js 
+// Insert AFTER the existing endpoints but BEFORE the WebSocket section
+
+// =============================================================================
+// LOAD TESTING ENDPOINTS - Add these to your backend/server.js
+// =============================================================================
+
+// Test click endpoint for high-performance load testing (bypasses Twitch auth)
+// Replace your test-click endpoint in backend/server.js with this improved version:
+
+// Enhanced test click endpoint that properly feeds the overlay
 app.post('/test-click', async (req, res) => {
     const startTime = Date.now();
     
@@ -1358,67 +1553,31 @@ app.post('/test-click', async (req, res) => {
             });
         }
         
-        // Check system status
-        const crashStatus = crashPrevention.getStatus();
-        const currentCPS = intelligentMonitor.getCurrentCPS();
-        
-        // Emergency load shedding
-        if (crashStatus.emergencyMode && Math.random() > 0.3) {
-            return res.status(503).json({ 
-                error: 'System overloaded - request dropped',
-                emergencyMode: true,
-                currentCPS: currentCPS,
-                retryAfter: 1
-            });
-        }
-        
-        // Validate input
         const { x = Math.random(), y = Math.random(), channelId = 'load-test-channel', userId } = req.body;
         
+        // Validate coordinates
         if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || x > 1 || y < 0 || y > 1) {
             return res.status(400).json({ error: 'Invalid coordinates (must be 0-1 range)' });
         }
         
+        // Generate unique user ID for load testing
         const testUserId = userId || `load-test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         
-        let accepted = false;
-        
-        // Try to process immediately if load is manageable
-        if (currentCPS < 15000 && !crashStatus.emergencyMode) {
-            accepted = intelligentMonitor.recordClickWithLoadCheck();
-            if (accepted) {
-                intelligentClickEngine.addClick(channelId, testUserId, x, y);
-            }
-        } else {
-            // Queue for later processing if overloaded
-            crashPrevention.addToQueue({
-                channelId,
-                userId: testUserId,
-                x,
-                y
-            });
-            accepted = true; // Accept but queue
-        }
+        // IMPORTANT: Add the click using the same path as real clicks
+        const accepted = intelligentClickEngine.addClick(channelId, testUserId, x, y);
         
         const intelligence = intelligentMonitor.getIntelligenceStats();
         const responseTime = Date.now() - startTime;
         
-        // Log high-load situations
-        if (currentCPS > 10000) {
-            console.log(`🔥 HIGH LOAD: ${currentCPS} CPS, Tier: ${intelligence.currentTier}, Emergency: ${crashStatus.emergencyMode}`);
-        }
+        console.log(`🧪 Test click: (${x.toFixed(3)}, ${y.toFixed(3)}) -> Tier: ${intelligence.currentTier}, CPS: ${intelligence.currentCPS}`);
         
         res.json({
             success: true,
             accepted,
-            queued: currentCPS >= 15000,
             tier: intelligence.currentTier,
             predicted: intelligence.predictedCPS,
             currentCPS: intelligence.currentCPS,
             confidence: intelligence.confidence,
-            emergencyMode: crashStatus.emergencyMode,
-            queueSize: crashStatus.queueSize,
-            memoryUsage: crashStatus.memoryUsage,
             instanceId: INSTANCE_ID,
             testMode: true,
             coordinates: { x, y },
@@ -1428,13 +1587,10 @@ app.post('/test-click', async (req, res) => {
         
     } catch (error) {
         console.error('Test click error:', error);
-        
-        // Don't crash on individual click errors
         res.status(500).json({
             success: false,
-            error: 'Click processing failed',
-            message: error.message,
-            emergencyMode: crashPrevention.emergencyMode
+            error: 'Internal server error',
+            message: error.message
         });
     }
 });
@@ -1557,7 +1713,6 @@ app.post('/test-force-broadcast', async (req, res) => {
         });
     }
 });
-
 // Load test statistics endpoint
 app.get('/test-stats', (req, res) => {
     const stats = intelligentClickEngine.getStats();
@@ -1631,26 +1786,6 @@ app.post('/test-quickstart', async (req, res) => {
     }
 });
 
-// Enhanced system status endpoint
-app.get('/test-system-status', (req, res) => {
-    const crashStatus = crashPrevention.getStatus();
-    const intelligence = intelligentMonitor.getIntelligenceStats();
-    const memUsage = process.memoryUsage();
-    
-    res.json({
-        crashPrevention: crashStatus,
-        intelligence: intelligence,
-        memory: {
-            used: Math.round(memUsage.heapUsed / 1024 / 1024),
-            total: Math.round(memUsage.heapTotal / 1024 / 1024),
-            external: Math.round(memUsage.external / 1024 / 1024),
-            rss: Math.round(memUsage.rss / 1024 / 1024)
-        },
-        uptime: Math.round(process.uptime()),
-        timestamp: Date.now()
-    });
-});
-
 // Health check with load test info
 app.get('/test-health', (req, res) => {
     const stats = intelligentClickEngine.getStats();
@@ -1669,67 +1804,6 @@ app.get('/test-health', (req, res) => {
         memory: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`,
         uptime: `${Math.round(process.uptime())}s`
     });
-});
-
-// Heatmap endpoint
-app.get('/heatmap', async (req, res) => {
-    const channelId = req.query.channel;
-    const data = intelligentClickEngine.getHeatmapData(channelId);
-    const state = intelligentGameState.getState();
-    
-    res.json({
-        running: state.running,
-        ...data,
-        version: state.version,
-        timestamp: Date.now()
-    });
-});
-
-// Control endpoints
-app.post('/start', async (req, res) => {
-    console.log(`🧠 START command on ${INSTANCE_ID}`);
-    intelligentClickEngine.clearAll();
-    const version = await intelligentGameState.start();
-    
-    res.json({
-        success: true,
-        status: 'started',
-        version,
-        tier: intelligentMonitor.currentTier,
-        instanceId: INSTANCE_ID
-    });
-});
-
-app.post('/stop', async (req, res) => {
-    console.log(`🧠 STOP command on ${INSTANCE_ID}`);
-    const version = await intelligentGameState.stop();
-    intelligentClickEngine.clearAll();
-    
-    res.json({
-        success: true,
-        status: 'stopped',
-        version,
-        instanceId: INSTANCE_ID
-    });
-});
-
-app.post('/reset', async (req, res) => {
-    console.log(`🧠 RESET command on ${INSTANCE_ID}`);
-    intelligentClickEngine.clearAll();
-    const version = await intelligentGameState.reset();
-    
-    res.json({
-        success: true,
-        status: 'reset',
-        version,
-        instanceId: INSTANCE_ID
-    });
-});
-
-// Intelligence stats endpoint
-app.get('/intelligence', (req, res) => {
-    const stats = intelligentClickEngine.getStats();
-    res.json(stats);
 });
 
 // ========== WEBSOCKET ==========
@@ -1822,8 +1896,6 @@ httpServer.listen(PORT, '0.0.0.0', () => {
     console.log('  • Smart batching and caching');
     console.log('  • Adaptive performance tiers');
     console.log('  • Gorgeous visual preservation');
-    console.log('  • Crash prevention system');
-    console.log('  • Load testing endpoints');
     console.log(`🧠 Starting at ${intelligentMonitor.currentTier} tier with ${Math.round(intelligentMonitor.confidence * 100)}% confidence`);
 });
 

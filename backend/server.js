@@ -1,5 +1,5 @@
-// backend/ultra-server.js - Extreme performance backend for 50k+ RPS
-// Stripped down, optimized for raw speed over sophistication
+// backend/autoscale-server.js - Autoscale-compatible with shared state
+// Maintains performance while ensuring consistency across instances
 
 import 'dotenv/config';
 import express from 'express';
@@ -7,224 +7,423 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import { createClient } from 'redis';
 
 const PORT = process.env.PORT || 8080;
 const SECRET = Buffer.from(process.env.TWITCH_SECRET || '', 'base64');
-const INSTANCE_ID = process.env.RENDER_SERVICE_ID || `ultra_${Date.now()}`;
+const INSTANCE_ID = process.env.RENDER_SERVICE_ID || `auto_${Date.now()}`;
 
-console.log(`🚀 ULTRA HIGH PERFORMANCE ClickMap Server - Instance: ${INSTANCE_ID}`);
+console.log(`🔄 AUTOSCALE-COMPATIBLE ClickMap Server - Instance: ${INSTANCE_ID}`);
 
-// ========== ULTRA PERFORMANCE CONFIGURATION ==========
-const ULTRA_CONFIG = {
-    // Extreme load shedding
-    MAX_RPS_PER_INSTANCE: 10000,      // Hard limit per instance
-    EMERGENCY_MODE_THRESHOLD: 5000,   // Start dropping requests
-    CIRCUIT_BREAKER_THRESHOLD: 15000, // Stop accepting requests
+// ========== AUTOSCALE CONFIGURATION ==========
+const AUTOSCALE_CONFIG = {
+    // Performance limits (per instance)
+    MAX_RPS_PER_INSTANCE: 8000,       // Lower than ultra for stability
+    EMERGENCY_MODE_THRESHOLD: 4000,   // Start load shedding earlier
+    CIRCUIT_BREAKER_THRESHOLD: 12000, // Circuit breaker threshold
     
-    // Ultra-fast processing
-    BATCH_SIZE: 200,                  // Large batches for efficiency
-    BATCH_TIMEOUT: 50,                // 50ms max batch wait
-    MIN_CLUSTER_SIZE: 5,              // Only significant clusters
-    MAX_CLUSTERS: 20,                 // Hard limit on complexity
+    // Shared state configuration
+    REDIS_BATCH_SIZE: 100,             // Batch Redis operations
+    REDIS_BATCH_TIMEOUT: 100,          // 100ms Redis batch timeout
+    LOCAL_CACHE_TTL: 2000,             // 2s local cache before Redis sync
+    CLUSTER_SYNC_INTERVAL: 1000,       // Sync clusters every 1s
     
-    // Memory management
-    MAX_MEMORY_MB: 200,               // 200MB memory limit
-    CLEANUP_FREQUENCY: 2000,          // Clean every 2 seconds
-    DATA_TTL: 30000,                  // 30 second data TTL
+    // Data management
+    GLOBAL_DATA_TTL: 45000,            // 45s global TTL (longer than ultra)
+    CLEANUP_FREQUENCY: 3000,           // Clean every 3s
+    MAX_CLUSTERS_PER_CHANNEL: 25,      // Limit clusters for consistency
     
-    // Broadcasting optimization
-    BROADCAST_INTERVAL: 200,          // 5 FPS updates (200ms)
-    MAX_WEBSOCKET_CLIENTS: 1000,      // Limit WebSocket connections
-    
-    // Circuit breaker
-    ERROR_THRESHOLD: 100,             // Errors before circuit break
-    RECOVERY_TIME: 10000,             // 10s circuit breaker recovery
+    // Broadcasting
+    BROADCAST_INTERVAL: 500,           // 2 FPS (slower for consistency)
+    PUBSUB_CHANNEL: 'clickmap_clusters',
+    INSTANCE_HEARTBEAT: 10000,         // 10s heartbeat
 };
 
-// ========== ULTRA-FAST DATA STRUCTURES ==========
-class UltraFastDataStore {
+// ========== REDIS SETUP WITH ERROR HANDLING ==========
+let redis = null;
+let redisPub = null;
+let redisSub = null;
+let redisConnected = false;
+
+async function setupRedis() {
+    if (!process.env.REDIS_URL) {
+        console.warn('⚠️ No REDIS_URL - running in single-instance mode');
+        return false;
+    }
+    
+    try {
+        // Main Redis client
+        redis = createClient({
+            url: process.env.REDIS_URL,
+            socket: {
+                connectTimeout: 2000,
+                lazyConnect: true,
+                reconnectStrategy: (retries) => {
+                    if (retries > 5) return null;
+                    return Math.min(retries * 200, 2000);
+                }
+            },
+            // Optimized for high throughput
+            commandsQueueMaxLength: 2000,
+        });
+        
+        // Pub/Sub clients (separate connections)
+        redisPub = createClient({ url: process.env.REDIS_URL });
+        redisSub = createClient({ url: process.env.REDIS_URL });
+        
+        // Error handlers
+        redis.on('error', (err) => {
+            console.error('Redis error:', err.message);
+            redisConnected = false;
+        });
+        
+        redis.on('connect', () => {
+            console.log('✅ Redis connected');
+            redisConnected = true;
+        });
+        
+        // Connect all clients
+        await Promise.all([
+            redis.connect(),
+            redisPub.connect(), 
+            redisSub.connect()
+        ]);
+        
+        // Setup pub/sub for cluster synchronization
+        await redisSub.subscribe(AUTOSCALE_CONFIG.PUBSUB_CHANNEL, (message) => {
+            try {
+                const data = JSON.parse(message);
+                if (data.instanceId !== INSTANCE_ID) {
+                    sharedState.handleRemoteClusterUpdate(data);
+                }
+            } catch (error) {
+                console.error('PubSub message error:', error);
+            }
+        });
+        
+        console.log('✅ Redis pub/sub setup complete');
+        return true;
+        
+    } catch (error) {
+        console.error('❌ Redis setup failed:', error.message);
+        console.log('🔄 Falling back to single-instance mode');
+        redisConnected = false;
+        return false;
+    }
+}
+
+// ========== SHARED STATE MANAGER ==========
+class AutoscaleSharedState {
     constructor() {
-        // Use Maps for O(1) access, minimal memory allocation
-        this.channelData = new Map();
+        // Local state for performance
+        this.localChannelData = new Map();
+        this.localClusters = new Map();
+        
+        // Redis batching for efficiency
+        this.redisBatch = [];
+        this.batchTimer = null;
+        
+        // Performance tracking
         this.requestCount = 0;
         this.lastReset = Date.now();
-        this.memoryUsage = 0;
-        this.circuitBreakerOpen = false;
-        this.circuitBreakerOpenTime = 0;
-        this.errorCount = 0;
+        this.redisOperations = 0;
+        this.cacheHits = 0;
         
-        this.startUltraOptimizations();
-        console.log('⚡ Ultra-fast data store initialized');
+        // Instance management
+        this.instanceStartTime = Date.now();
+        this.lastHeartbeat = Date.now();
+        
+        this.startAutoscaleOptimizations();
+        console.log('🔄 Autoscale shared state manager initialized');
     }
     
-    startUltraOptimizations() {
-        // Ultra-aggressive cleanup every 2 seconds
+    startAutoscaleOptimizations() {
+        // Batch Redis operations for efficiency
         setInterval(() => {
-            this.ultraCleanup();
-        }, ULTRA_CONFIG.CLEANUP_FREQUENCY);
+            this.flushRedisBatch();
+        }, AUTOSCALE_CONFIG.REDIS_BATCH_TIMEOUT);
         
-        // Request count reset
+        // Sync clusters across instances
         setInterval(() => {
-            const now = Date.now();
-            const elapsed = now - this.lastReset;
-            const rps = Math.round((this.requestCount * 1000) / elapsed);
-            
-            console.log(`⚡ ULTRA: ${rps} RPS, ${this.channelData.size} channels, ${this.memoryUsage}MB`);
-            
-            // Emergency mode detection
-            if (rps > ULTRA_CONFIG.EMERGENCY_MODE_THRESHOLD) {
-                console.warn(`🚨 EMERGENCY MODE: ${rps} RPS > ${ULTRA_CONFIG.EMERGENCY_MODE_THRESHOLD}`);
-            }
-            
-            // Circuit breaker
-            if (rps > ULTRA_CONFIG.CIRCUIT_BREAKER_THRESHOLD || this.errorCount > ULTRA_CONFIG.ERROR_THRESHOLD) {
-                this.circuitBreakerOpen = true;
-                this.circuitBreakerOpenTime = now;
-                console.error(`🚨 CIRCUIT BREAKER OPEN: ${rps} RPS, ${this.errorCount} errors`);
-            }
-            
-            // Circuit breaker recovery
-            if (this.circuitBreakerOpen && (now - this.circuitBreakerOpenTime) > ULTRA_CONFIG.RECOVERY_TIME) {
-                this.circuitBreakerOpen = false;
-                this.errorCount = 0;
-                console.log('✅ Circuit breaker recovered');
-            }
-            
-            this.requestCount = 0;
-            this.lastReset = now;
-        }, 1000);
+            this.syncClustersToRedis();
+        }, AUTOSCALE_CONFIG.CLUSTER_SYNC_INTERVAL);
+        
+        // Cleanup old data
+        setInterval(() => {
+            this.performCleanup();
+        }, AUTOSCALE_CONFIG.CLEANUP_FREQUENCY);
+        
+        // Instance heartbeat
+        setInterval(() => {
+            this.sendHeartbeat();
+        }, AUTOSCALE_CONFIG.INSTANCE_HEARTBEAT);
+        
+        // Performance reporting
+        setInterval(() => {
+            this.logPerformance();
+        }, 10000);
     }
     
-    ultraCleanup() {
-        const now = Date.now();
-        const cutoff = now - ULTRA_CONFIG.DATA_TTL;
-        let cleaned = 0;
+    async sendHeartbeat() {
+        if (!redisConnected) return;
         
-        // Aggressive cleanup of old data
-        for (const [channelId, data] of this.channelData.entries()) {
-            if (data.lastUpdate < cutoff) {
-                this.channelData.delete(channelId);
-                cleaned++;
-                continue;
-            }
+        try {
+            const heartbeat = {
+                instanceId: INSTANCE_ID,
+                timestamp: Date.now(),
+                requestCount: this.requestCount,
+                channels: this.localChannelData.size,
+                uptime: Date.now() - this.instanceStartTime
+            };
             
-            // Clean old clicks within channels
-            const beforeSize = data.clicks.length;
-            data.clicks = data.clicks.filter(click => click.timestamp > cutoff);
-            cleaned += (beforeSize - data.clicks.length);
-        }
-        
-        // Memory usage estimation (rough)
-        this.memoryUsage = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
-        
-        // Force cleanup if memory too high
-        if (this.memoryUsage > ULTRA_CONFIG.MAX_MEMORY_MB) {
-            const oldestChannels = Array.from(this.channelData.entries())
-                .sort((a, b) => a[1].lastUpdate - b[1].lastUpdate)
-                .slice(0, Math.floor(this.channelData.size * 0.3));
-                
-            for (const [channelId] of oldestChannels) {
-                this.channelData.delete(channelId);
-                cleaned++;
-            }
+            await redis.setEx(`heartbeat:${INSTANCE_ID}`, 30, JSON.stringify(heartbeat));
+            this.lastHeartbeat = Date.now();
             
-            if (global.gc) global.gc();
-            console.log(`🧹 Emergency cleanup: ${cleaned} items, ${this.memoryUsage}MB`);
-        }
-        
-        if (cleaned > 0) {
-            console.log(`🧹 Ultra cleanup: ${cleaned} items removed`);
+        } catch (error) {
+            console.error('Heartbeat error:', error);
         }
     }
     
-    shouldAcceptRequest() {
-        // Circuit breaker check
-        if (this.circuitBreakerOpen) {
-            return false;
-        }
-        
-        // Memory check
-        if (this.memoryUsage > ULTRA_CONFIG.MAX_MEMORY_MB) {
-            return Math.random() < 0.1; // Accept only 10% of requests
-        }
-        
-        // Rate limiting
-        const elapsed = Date.now() - this.lastReset;
-        const currentRps = (this.requestCount * 1000) / Math.max(elapsed, 1);
-        
-        if (currentRps > ULTRA_CONFIG.MAX_RPS_PER_INSTANCE) {
-            return Math.random() < 0.2; // Accept only 20% of requests
-        }
-        
-        if (currentRps > ULTRA_CONFIG.EMERGENCY_MODE_THRESHOLD) {
-            return Math.random() < 0.5; // Accept only 50% of requests
-        }
-        
-        return true;
-    }
-    
-    addClick(channelId, userId, x, y) {
-        // Ultra-fast click processing
+    async addClick(channelId, userId, x, y) {
         this.requestCount++;
         
-        if (!this.shouldAcceptRequest()) {
-            return { accepted: false, reason: 'load_shedding' };
+        // Always store locally first for performance
+        if (!this.localChannelData.has(channelId)) {
+            this.localChannelData.set(channelId, {
+                userPositions: new Map(),
+                lastUpdate: Date.now(),
+                totalClicks: 0
+            });
+        }
+        
+        const localData = this.localChannelData.get(channelId);
+        localData.userPositions.set(userId, { x, y, timestamp: Date.now() });
+        localData.totalClicks++;
+        localData.lastUpdate = Date.now();
+        
+        // Batch for Redis sync if connected
+        if (redisConnected) {
+            this.addToRedisBatch('click', { channelId, userId, x, y, timestamp: Date.now() });
+        }
+        
+        return { accepted: true, cached: !redisConnected };
+    }
+    
+    addToRedisBatch(operation, data) {
+        this.redisBatch.push({ operation, data, timestamp: Date.now() });
+        
+        // Flush if batch is full
+        if (this.redisBatch.length >= AUTOSCALE_CONFIG.REDIS_BATCH_SIZE) {
+            this.flushRedisBatch();
+        }
+    }
+    
+    async flushRedisBatch() {
+        if (this.redisBatch.length === 0 || !redisConnected) return;
+        
+        const batch = this.redisBatch.splice(0, AUTOSCALE_CONFIG.REDIS_BATCH_SIZE);
+        
+        try {
+            const pipeline = redis.multi();
+            
+            for (const item of batch) {
+                if (item.operation === 'click') {
+                    const key = `clicks:${item.data.channelId}:${item.data.userId}`;
+                    pipeline.hSet(key, {
+                        x: item.data.x.toString(),
+                        y: item.data.y.toString(),
+                        timestamp: item.data.timestamp.toString()
+                    });
+                    pipeline.expire(key, Math.floor(AUTOSCALE_CONFIG.GLOBAL_DATA_TTL / 1000));
+                }
+            }
+            
+            await pipeline.exec();
+            this.redisOperations += batch.length;
+            
+        } catch (error) {
+            console.error('Redis batch flush error:', error);
+            // Add failed operations back to batch for retry
+            this.redisBatch.unshift(...batch);
+        }
+    }
+    
+    async syncClustersToRedis() {
+        if (!redisConnected || this.localClusters.size === 0) return;
+        
+        try {
+            for (const [channelId, clusters] of this.localClusters.entries()) {
+                const clusterData = {
+                    clusters: clusters,
+                    instanceId: INSTANCE_ID,
+                    timestamp: Date.now(),
+                    totalUsers: this.localChannelData.get(channelId)?.userPositions.size || 0
+                };
+                
+                await redis.setEx(
+                    `clusters:${channelId}:${INSTANCE_ID}`,
+                    Math.floor(AUTOSCALE_CONFIG.GLOBAL_DATA_TTL / 1000),
+                    JSON.stringify(clusterData)
+                );
+            }
+            
+            // Broadcast to other instances
+            if (redisPub) {
+                await redisPub.publish(AUTOSCALE_CONFIG.PUBSUB_CHANNEL, JSON.stringify({
+                    instanceId: INSTANCE_ID,
+                    action: 'cluster_update',
+                    channels: Array.from(this.localClusters.keys()),
+                    timestamp: Date.now()
+                }));
+            }
+            
+        } catch (error) {
+            console.error('Cluster sync error:', error);
+        }
+    }
+    
+    handleRemoteClusterUpdate(data) {
+        // Handle updates from other instances
+        console.log(`📡 Remote update from ${data.instanceId}: ${data.channels?.length || 0} channels`);
+        
+        // Trigger a refresh of merged data for affected channels
+        if (data.channels) {
+            for (const channelId of data.channels) {
+                this.invalidateLocalCache(channelId);
+            }
+        }
+    }
+    
+    invalidateLocalCache(channelId) {
+        // Mark that we need to fetch fresh data from Redis for this channel
+        if (this.localClusters.has(channelId)) {
+            const clusters = this.localClusters.get(channelId);
+            clusters._needsRefresh = true;
+        }
+    }
+    
+    async generateGlobalClusters(channelId) {
+        // First generate local clusters
+        const localClusters = this.generateLocalClusters(channelId);
+        
+        if (!redisConnected) {
+            return localClusters;
         }
         
         try {
-            if (!this.channelData.has(channelId)) {
-                this.channelData.set(channelId, {
-                    clicks: [],
-                    userPositions: new Map(),
-                    lastUpdate: Date.now(),
-                    clusters: []
-                });
+            // Get data from all instances
+            const pattern = `clusters:${channelId}:*`;
+            const keys = await redis.keys(pattern);
+            
+            const allInstanceData = [];
+            const pipeline = redis.multi();
+            
+            for (const key of keys) {
+                pipeline.get(key);
             }
             
-            const data = this.channelData.get(channelId);
+            const results = await pipeline.exec();
             
-            // Store only latest position per user (memory efficient)
-            data.userPositions.set(userId, { x, y, timestamp: Date.now() });
-            data.lastUpdate = Date.now();
+            // Merge data from all instances
+            const globalUserPositions = new Map();
+            let totalUsers = 0;
             
-            // Add to clicks for batching
-            data.clicks.push({ userId, x, y, timestamp: Date.now() });
+            // Add local data
+            const localData = this.localChannelData.get(channelId);
+            if (localData) {
+                for (const [userId, pos] of localData.userPositions.entries()) {
+                    globalUserPositions.set(`${INSTANCE_ID}:${userId}`, pos);
+                }
+                totalUsers += localData.userPositions.size;
+            }
             
-            return { accepted: true, reason: 'success' };
+            // Add remote data
+            for (const result of results) {
+                if (result[1]) { // Check if command succeeded
+                    try {
+                        const instanceData = JSON.parse(result[1]);
+                        if (instanceData.instanceId !== INSTANCE_ID) {
+                            // This is from another instance - we need to fetch its click data
+                            const clickPattern = `clicks:${channelId}:*`;
+                            const clickKeys = await redis.keys(clickPattern);
+                            
+                            // Sample some keys to avoid overwhelming Redis
+                            const sampleSize = Math.min(500, clickKeys.length);
+                            const sampledKeys = clickKeys.slice(0, sampleSize);
+                            
+                            const clickPipeline = redis.multi();
+                            for (const clickKey of sampledKeys) {
+                                clickPipeline.hGetAll(clickKey);
+                            }
+                            
+                            const clickResults = await clickPipeline.exec();
+                            
+                            for (const clickResult of clickResults) {
+                                if (clickResult[1] && clickResult[1].x && clickResult[1].y) {
+                                    const uniqueKey = `${instanceData.instanceId}:${Date.now()}:${Math.random()}`;
+                                    globalUserPositions.set(uniqueKey, {
+                                        x: parseFloat(clickResult[1].x),
+                                        y: parseFloat(clickResult[1].y),
+                                        timestamp: parseInt(clickResult[1].timestamp)
+                                    });
+                                }
+                            }
+                        }
+                    } catch (parseError) {
+                        console.error('Parse error for instance data:', parseError);
+                    }
+                }
+            }
+            
+            // Generate clusters from merged data
+            const globalClusters = this.generateClustersFromPositions(
+                Array.from(globalUserPositions.values()), 
+                channelId
+            );
+            
+            return globalClusters;
             
         } catch (error) {
-            this.errorCount++;
-            console.error('Add click error:', error);
-            return { accepted: false, reason: 'error' };
+            console.error('Global cluster generation error:', error);
+            return localClusters;
         }
     }
     
-    generateUltraFastClusters(channelId) {
-        const data = this.channelData.get(channelId);
-        if (!data || data.userPositions.size < ULTRA_CONFIG.MIN_CLUSTER_SIZE) {
-            return [];
-        }
+    generateLocalClusters(channelId) {
+        const data = this.localChannelData.get(channelId);
+        if (!data || data.userPositions.size === 0) return [];
         
-        // Convert to array for processing (fast)
         const positions = Array.from(data.userPositions.values());
+        return this.generateClustersFromPositions(positions, channelId);
+    }
+    
+    generateClustersFromPositions(positions, channelId) {
+        if (positions.length < 3) return [];
+        
         const totalUsers = positions.length;
         
-        if (totalUsers === 0) return [];
-        
-        // Ultra-simple grid-based clustering (extremely fast)
-        const gridSize = 20; // 20x20 grid
+        // Ultra-simple grid-based clustering (optimized for autoscale)
+        const gridSize = 15; // Slightly smaller grid for better clustering
         const grid = new Map();
         
-        // Assign positions to grid cells
-        for (const pos of positions) {
+        // Filter recent positions only
+        const cutoff = Date.now() - AUTOSCALE_CONFIG.GLOBAL_DATA_TTL;
+        const recentPositions = positions.filter(pos => 
+            (pos.timestamp || Date.now()) > cutoff
+        );
+        
+        if (recentPositions.length === 0) return [];
+        
+        // Assign to grid
+        for (const pos of recentPositions) {
             const gridX = Math.floor(pos.x * gridSize);
             const gridY = Math.floor(pos.y * gridSize);
             const key = `${gridX}_${gridY}`;
             
             if (!grid.has(key)) {
-                grid.set(key, { 
-                    x: pos.x, 
-                    y: pos.y, 
+                grid.set(key, {
+                    x: pos.x,
+                    y: pos.y,
                     count: 1,
                     sumX: pos.x,
                     sumY: pos.y
@@ -234,66 +433,133 @@ class UltraFastDataStore {
                 cell.count++;
                 cell.sumX += pos.x;
                 cell.sumY += pos.y;
-                cell.x = cell.sumX / cell.count; // Average position
+                cell.x = cell.sumX / cell.count;
                 cell.y = cell.sumY / cell.count;
             }
         }
         
-        // Convert to clusters and filter significant ones
+        // Convert to clusters
         const clusters = Array.from(grid.values())
-            .filter(cell => cell.count >= ULTRA_CONFIG.MIN_CLUSTER_SIZE)
-            .map(cell => ({
+            .filter(cell => cell.count >= 2) // Lower threshold for autoscale
+            .map((cell, index) => ({
                 x: cell.x,
                 y: cell.y,
                 count: cell.count,
                 percentage: Math.round((cell.count / totalUsers) * 100),
-                visualSize: Math.min(150, 40 + cell.count * 2),
-                id: `grid_${cell.x.toFixed(2)}_${cell.y.toFixed(2)}`
+                visualSize: Math.min(140, 35 + cell.count * 2),
+                id: `auto_${channelId}_${index}_${Date.now()}`,
+                instanceContribution: this.localChannelData.get(channelId)?.userPositions.size || 0
             }))
             .sort((a, b) => b.count - a.count)
-            .slice(0, ULTRA_CONFIG.MAX_CLUSTERS);
+            .slice(0, AUTOSCALE_CONFIG.MAX_CLUSTERS_PER_CHANNEL);
         
-        // Mark the top cluster
+        // Mark top cluster
         if (clusters.length > 0) {
             clusters[0].isTop = true;
         }
         
+        // Cache locally
+        this.localClusters.set(channelId, clusters);
+        
         return clusters;
     }
     
-    getHeatmapData(channelId) {
-        if (!this.channelData.has(channelId)) {
-            return {
-                clusters: [],
-                totalClicks: 0,
-                uniqueUsers: 0,
-                mode: 'ULTRA_PERFORMANCE',
-                instanceId: INSTANCE_ID,
-                timestamp: Date.now()
-            };
-        }
-        
-        const data = this.channelData.get(channelId);
-        const clusters = this.generateUltraFastClusters(channelId);
+    async getHeatmapData(channelId) {
+        const clusters = await this.generateGlobalClusters(channelId);
+        const localData = this.localChannelData.get(channelId);
         
         return {
             clusters: clusters,
-            totalClicks: data.clicks.length,
-            uniqueUsers: data.userPositions.size,
-            mode: 'ULTRA_PERFORMANCE',
+            totalClicks: localData?.totalClicks || 0,
+            uniqueUsers: localData?.userPositions.size || 0,
+            mode: redisConnected ? 'AUTOSCALE_SHARED' : 'AUTOSCALE_LOCAL',
             instanceId: INSTANCE_ID,
             timestamp: Date.now(),
-            memoryUsage: this.memoryUsage,
-            rps: Math.round((this.requestCount * 1000) / Math.max(Date.now() - this.lastReset, 1))
+            instanceCount: await this.getActiveInstanceCount(),
+            globalUsers: await this.getGlobalUserCount(channelId)
         };
     }
     
-    clearAll() {
-        this.channelData.clear();
+    async getActiveInstanceCount() {
+        if (!redisConnected) return 1;
+        
+        try {
+            const keys = await redis.keys('heartbeat:*');
+            return keys.length;
+        } catch (error) {
+            return 1;
+        }
+    }
+    
+    async getGlobalUserCount(channelId) {
+        if (!redisConnected) {
+            return this.localChannelData.get(channelId)?.userPositions.size || 0;
+        }
+        
+        try {
+            const keys = await redis.keys(`clicks:${channelId}:*`);
+            return keys.length;
+        } catch (error) {
+            return this.localChannelData.get(channelId)?.userPositions.size || 0;
+        }
+    }
+    
+    performCleanup() {
+        const now = Date.now();
+        const cutoff = now - AUTOSCALE_CONFIG.GLOBAL_DATA_TTL;
+        let cleaned = 0;
+        
+        // Clean local data
+        for (const [channelId, data] of this.localChannelData.entries()) {
+            const beforeSize = data.userPositions.size;
+            
+            for (const [userId, pos] of data.userPositions.entries()) {
+                if (pos.timestamp < cutoff) {
+                    data.userPositions.delete(userId);
+                    cleaned++;
+                }
+            }
+            
+            // Remove empty channels
+            if (data.userPositions.size === 0) {
+                this.localChannelData.delete(channelId);
+                this.localClusters.delete(channelId);
+            }
+        }
+        
+        if (cleaned > 0) {
+            console.log(`🧹 Cleaned ${cleaned} old entries from local cache`);
+        }
+    }
+    
+    logPerformance() {
+        const elapsed = Date.now() - this.lastReset;
+        const currentRps = Math.round((this.requestCount * 1000) / elapsed);
+        
+        console.log(`🔄 AUTOSCALE Performance - Instance: ${INSTANCE_ID}`);
+        console.log(`   RPS: ${currentRps}, Channels: ${this.localChannelData.size}, Redis Ops: ${this.redisOperations}`);
+        console.log(`   Redis Connected: ${redisConnected}, Cache Hits: ${this.cacheHits}`);
+        
+        // Reset counters
         this.requestCount = 0;
-        this.errorCount = 0;
-        if (global.gc) global.gc();
-        console.log('🧹 Ultra store cleared');
+        this.redisOperations = 0;
+        this.cacheHits = 0;
+        this.lastReset = Date.now();
+    }
+    
+    clearAll() {
+        this.localChannelData.clear();
+        this.localClusters.clear();
+        this.redisBatch = [];
+        
+        // Clear Redis data for this instance
+        if (redisConnected) {
+            redis.del(`heartbeat:${INSTANCE_ID}`).catch(err => {
+                console.error('Error clearing heartbeat:', err);
+            });
+        }
+        
+        console.log('🧹 Autoscale state cleared');
     }
     
     getStats() {
@@ -301,151 +567,50 @@ class UltraFastDataStore {
         const currentRps = Math.round((this.requestCount * 1000) / Math.max(elapsed, 1));
         
         return {
-            channels: this.channelData.size,
-            memoryUsage: this.memoryUsage,
-            currentRps: currentRps,
-            requestCount: this.requestCount,
-            circuitBreakerOpen: this.circuitBreakerOpen,
-            errorCount: this.errorCount,
-            instanceId: INSTANCE_ID
-        };
-    }
-}
-
-// ========== ULTRA-FAST BATCHING PROCESSOR ==========
-class UltraFastBatcher {
-    constructor(dataStore) {
-        this.dataStore = dataStore;
-        this.batchQueue = [];
-        this.isProcessing = false;
-        this.processed = 0;
-        
-        this.startBatchProcessor();
-        console.log('⚡ Ultra-fast batcher initialized');
-    }
-    
-    startBatchProcessor() {
-        // Process batches as fast as possible
-        const processBatch = () => {
-            if (this.batchQueue.length > 0 && !this.isProcessing) {
-                this.processBatch();
-            }
-            
-            // Use setTimeout for better performance than setInterval
-            setTimeout(processBatch, 1);
-        };
-        
-        processBatch();
-    }
-    
-    addToBatch(channelId, userId, x, y) {
-        this.batchQueue.push({ channelId, userId, x, y, timestamp: Date.now() });
-        
-        // Process immediately if batch is large enough
-        if (this.batchQueue.length >= ULTRA_CONFIG.BATCH_SIZE) {
-            this.processBatch();
-        }
-    }
-    
-    processBatch() {
-        if (this.isProcessing || this.batchQueue.length === 0) return;
-        
-        this.isProcessing = true;
-        const batch = this.batchQueue.splice(0, ULTRA_CONFIG.BATCH_SIZE);
-        
-        // Ultra-fast batch processing
-        for (const item of batch) {
-            const result = this.dataStore.addClick(item.channelId, item.userId, item.x, item.y);
-            if (result.accepted) this.processed++;
-        }
-        
-        this.isProcessing = false;
-    }
-    
-    getStats() {
-        return {
-            queueSize: this.batchQueue.length,
-            processed: this.processed,
-            isProcessing: this.isProcessing
-        };
-    }
-}
-
-// ========== SIMPLE GAME STATE ==========
-class SimpleGameState {
-    constructor() {
-        this.running = false;
-        this.version = 0;
-        this.startTime = 0;
-    }
-    
-    isRunning() { return this.running; }
-    
-    start() {
-        this.running = true;
-        this.version = Date.now();
-        this.startTime = Date.now();
-        console.log('🚀 Ultra game started');
-        return this.version;
-    }
-    
-    stop() {
-        this.running = false;
-        this.version = Date.now();
-        console.log('⏹️ Ultra game stopped');
-        return this.version;
-    }
-    
-    reset() {
-        this.version = Date.now();
-        console.log('🔄 Ultra game reset');
-        return this.version;
-    }
-    
-    getState() {
-        return {
-            running: this.running,
-            version: this.version,
             instanceId: INSTANCE_ID,
-            startTime: this.startTime
+            redisConnected: redisConnected,
+            currentRps: currentRps,
+            localChannels: this.localChannelData.size,
+            localClusters: this.localClusters.size,
+            redisBatchSize: this.redisBatch.length,
+            redisOperations: this.redisOperations,
+            cacheHits: this.cacheHits,
+            uptime: Date.now() - this.instanceStartTime,
+            memoryUsage: Math.round(process.memoryUsage().heapUsed / 1024 / 1024)
         };
     }
 }
 
-// Initialize ultra-fast components
-const dataStore = new UltraFastDataStore();
-const batcher = new UltraFastBatcher(dataStore);
-const gameState = new SimpleGameState();
+// ========== INITIALIZE SYSTEM ==========
+const sharedState = new AutoscaleSharedState();
+let gameState = { running: false, version: 0 };
 
-// ========== EXPRESS APP WITH EXTREME OPTIMIZATION ==========
+// Setup Redis
+setupRedis();
+
+// ========== EXPRESS APP ==========
 const app = express();
 
-// Ultra-fast middleware
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json({ limit: '1kb' })); // Tiny limit for speed
+app.use(express.json({ limit: '1kb' }));
 
-// JWT cache for ultra performance
+// JWT verification (same as ultra version)
 const jwtCache = new Map();
-const JWT_CACHE_SIZE = 10000;
-const JWT_CACHE_TTL = 300000; // 5 minutes
-
-function verifyJWTUltraFast(token) {
-    // Check cache first
+function verifyJWTFast(token) {
     const cached = jwtCache.get(token);
-    if (cached && Date.now() - cached.timestamp < JWT_CACHE_TTL) {
+    if (cached && Date.now() - cached.timestamp < 300000) {
         return cached.payload;
     }
     
     try {
         const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
         
-        // Cache result (with size limit)
-        if (jwtCache.size >= JWT_CACHE_SIZE) {
+        if (jwtCache.size >= 5000) {
             const oldestKey = jwtCache.keys().next().value;
             jwtCache.delete(oldestKey);
         }
@@ -457,174 +622,117 @@ function verifyJWTUltraFast(token) {
     }
 }
 
-// ========== ULTRA-FAST ENDPOINTS ==========
+// ========== ENDPOINTS ==========
 
-// Health check - minimal response
 app.get('/health', (req, res) => {
-    const stats = dataStore.getStats();
+    const stats = sharedState.getStats();
     res.json({
-        status: 'ultra',
+        status: 'autoscale-ready',
         ...stats,
+        gameRunning: gameState.running,
         timestamp: Date.now()
     });
 });
 
-// Ultra-fast click endpoint
-app.post('/click', (req, res) => {
-    // Immediate load shedding
-    if (!dataStore.shouldAcceptRequest()) {
-        return res.status(503).json({ 
-            success: false, 
-            error: 'Server overloaded',
-            retry: false 
-        });
-    }
-    
-    if (!gameState.isRunning()) {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'Game not running' 
-        });
+app.post('/click', async (req, res) => {
+    if (!gameState.running) {
+        return res.status(400).json({ success: false, error: 'Game not running' });
     }
     
     const token = (req.headers.authorization || '').replace('Bearer ', '');
     if (!token) {
-        return res.status(401).json({ 
-            success: false, 
-            error: 'No token' 
-        });
+        return res.status(401).json({ success: false, error: 'No token' });
     }
     
-    const payload = verifyJWTUltraFast(token);
+    const payload = verifyJWTFast(token);
     if (!payload) {
-        return res.status(401).json({ 
-            success: false, 
-            error: 'Invalid token' 
-        });
+        return res.status(401).json({ success: false, error: 'Invalid token' });
     }
     
     const { x, y } = req.body;
-    if (typeof x !== 'number' || typeof y !== 'number' || 
-        x < 0 || x > 1 || y < 0 || y > 1) {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'Invalid coordinates' 
-        });
+    if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || x > 1 || y < 0 || y > 1) {
+        return res.status(400).json({ success: false, error: 'Invalid coordinates' });
     }
     
-    // Add to batch instead of processing immediately
-    batcher.addToBatch(
+    const result = await sharedState.addClick(
         payload.channel_id,
         payload.user_id || payload.opaque_user_id,
         x, y
     );
     
-    // Always return success immediately (fire and forget for speed)
-    res.json({ success: true, mode: 'ULTRA' });
-});
-
-// Simplified heatmap endpoint
-app.get('/heatmap', (req, res) => {
-    const channelId = req.query.channel || 'default';
-    const data = dataStore.getHeatmapData(channelId);
-    const state = gameState.getState();
-    
-    res.json({
-        running: state.running,
-        ...data,
-        version: state.version
+    res.json({ 
+        success: true, 
+        mode: 'AUTOSCALE',
+        instanceId: INSTANCE_ID,
+        cached: result.cached
     });
 });
 
-// Control endpoints
+app.get('/heatmap', async (req, res) => {
+    const channelId = req.query.channel || 'default';
+    const data = await sharedState.getHeatmapData(channelId);
+    
+    res.json({
+        running: gameState.running,
+        ...data,
+        version: gameState.version
+    });
+});
+
 app.post('/start', (req, res) => {
-    dataStore.clearAll();
-    const version = gameState.start();
-    res.json({ success: true, version, mode: 'ULTRA' });
+    sharedState.clearAll();
+    gameState = { running: true, version: Date.now() };
+    console.log('🚀 Autoscale game started');
+    res.json({ success: true, version: gameState.version, mode: 'AUTOSCALE' });
 });
 
 app.post('/stop', (req, res) => {
-    const version = gameState.stop();
-    res.json({ success: true, version, mode: 'ULTRA' });
+    gameState = { running: false, version: Date.now() };
+    console.log('⏹️ Autoscale game stopped');
+    res.json({ success: true, version: gameState.version, mode: 'AUTOSCALE' });
 });
 
 app.post('/reset', (req, res) => {
-    dataStore.clearAll();
-    const version = gameState.reset();
-    res.json({ success: true, version, mode: 'ULTRA' });
+    sharedState.clearAll();
+    gameState.version = Date.now();
+    console.log('🔄 Autoscale game reset');
+    res.json({ success: true, version: gameState.version, mode: 'AUTOSCALE' });
 });
 
-// Ultra stats endpoint
-app.get('/ultra-stats', (req, res) => {
-    const dataStats = dataStore.getStats();
-    const batchStats = batcher.getStats();
-    const gameStats = gameState.getState();
-    
-    res.json({
-        dataStore: dataStats,
-        batcher: batchStats,
-        gameState: gameStats,
-        jwtCacheSize: jwtCache.size,
-        timestamp: Date.now()
-    });
-});
-
-// ========== ULTRA-FAST WEBSOCKET WITH THROTTLING ==========
+// ========== WEBSOCKET WITH CONSISTENT DATA ==========
 const httpServer = createServer(app);
-const wss = new WebSocketServer({ 
-    server: httpServer, 
-    path: '/ws',
-    perMessageDeflate: false, // Disable compression for speed
-    maxPayload: 1024 * 16     // 16KB max message
-});
+const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 const wsClients = new Map();
 
 let lastBroadcast = 0;
-let broadcastCount = 0;
 
-function ultraFastBroadcast() {
+async function consistentBroadcast() {
     const now = Date.now();
     
-    // Throttle broadcasts to reduce load
-    if (now - lastBroadcast < ULTRA_CONFIG.BROADCAST_INTERVAL) {
-        setTimeout(ultraFastBroadcast, ULTRA_CONFIG.BROADCAST_INTERVAL);
+    if (now - lastBroadcast < AUTOSCALE_CONFIG.BROADCAST_INTERVAL) {
+        setTimeout(consistentBroadcast, AUTOSCALE_CONFIG.BROADCAST_INTERVAL);
         return;
     }
     
     lastBroadcast = now;
-    broadcastCount++;
-    
-    let totalClients = 0;
     
     for (const [channelId, clients] of wsClients.entries()) {
         if (clients.size === 0) continue;
         
-        // Limit clients per channel
-        if (clients.size > ULTRA_CONFIG.MAX_WEBSOCKET_CLIENTS) {
-            const clientArray = Array.from(clients);
-            const toRemove = clientArray.slice(ULTRA_CONFIG.MAX_WEBSOCKET_CLIENTS);
-            toRemove.forEach(ws => {
-                ws.close(1008, 'Too many clients');
-                clients.delete(ws);
-            });
-        }
+        // Get GLOBAL data (merged from all instances)
+        const data = await sharedState.getHeatmapData(channelId);
         
-        totalClients += clients.size;
-        
-        const data = dataStore.getHeatmapData(channelId);
-        const state = gameState.getState();
-        
-        // Ultra-minimal message
         const message = JSON.stringify({
-            running: state.running,
+            running: gameState.running,
             clusters: data.clusters,
             totalClicks: data.totalClicks,
-            uniqueUsers: data.uniqueUsers,
-            version: state.version,
-            timestamp: now
+            uniqueUsers: data.globalUsers, // Global user count
+            version: gameState.version,
+            timestamp: now,
+            mode: data.mode,
+            instanceCount: data.instanceCount
         });
         
-        // Broadcast to all clients
         clients.forEach(ws => {
             if (ws.readyState === WebSocket.OPEN) {
                 try { 
@@ -632,36 +740,17 @@ function ultraFastBroadcast() {
                 } catch {
                     clients.delete(ws);
                 }
-            } else {
-                clients.delete(ws);
             }
         });
     }
     
-    // Log performance every 100 broadcasts
-    if (broadcastCount % 100 === 0) {
-        console.log(`📡 Broadcast #${broadcastCount}: ${totalClients} clients, ${wsClients.size} channels`);
-    }
-    
-    setTimeout(ultraFastBroadcast, ULTRA_CONFIG.BROADCAST_INTERVAL);
+    setTimeout(consistentBroadcast, AUTOSCALE_CONFIG.BROADCAST_INTERVAL);
 }
 
-ultraFastBroadcast();
+consistentBroadcast();
 
-// WebSocket connection handling
 wss.on('connection', (ws, req) => {
     const channelId = req.url?.replace('/ws/', '').split('?')[0] || 'global';
-    
-    // Limit total WebSocket connections
-    let totalConnections = 0;
-    for (const clients of wsClients.values()) {
-        totalConnections += clients.size;
-    }
-    
-    if (totalConnections >= ULTRA_CONFIG.MAX_WEBSOCKET_CLIENTS) {
-        ws.close(1008, 'Server overloaded');
-        return;
-    }
     
     if (!wsClients.has(channelId)) {
         wsClients.set(channelId, new Set());
@@ -681,23 +770,31 @@ wss.on('connection', (ws, req) => {
     ws.on('error', () => {});
 });
 
-// ========== START ULTRA SERVER ==========
+// ========== START SERVER ==========
 httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 ULTRA HIGH PERFORMANCE ClickMap Server');
-    console.log(`⚡ Instance: ${INSTANCE_ID}`);
-    console.log(`🔥 Port: ${PORT}`);
-    console.log('⚡ ULTRA Performance Features:');
-    console.log(`  • ${ULTRA_CONFIG.MAX_RPS_PER_INSTANCE} RPS capacity per instance`);
-    console.log(`  • ${ULTRA_CONFIG.EMERGENCY_MODE_THRESHOLD} RPS emergency mode threshold`);
-    console.log(`  • ${ULTRA_CONFIG.CIRCUIT_BREAKER_THRESHOLD} RPS circuit breaker`);
-    console.log(`  • ${ULTRA_CONFIG.BATCH_SIZE} batch size processing`);
-    console.log(`  • ${ULTRA_CONFIG.MAX_CLUSTERS} max clusters for performance`);
-    console.log(`  • ${ULTRA_CONFIG.BROADCAST_INTERVAL}ms broadcast interval`);
-    console.log('🚨 Ready for EXTREME LOAD');
+    console.log('🔄 AUTOSCALE-COMPATIBLE ClickMap Server');
+    console.log(`🆔 Instance: ${INSTANCE_ID}`);
+    console.log(`⚡ Port: ${PORT}`);
+    console.log(`🔗 Redis: ${redisConnected ? 'Connected' : 'Disconnected (Local Mode)'}`);
+    console.log('🔄 Autoscale Features:');
+    console.log('  • Shared state across instances via Redis');
+    console.log('  • Consistent cluster data for all users');
+    console.log('  • Automatic instance discovery and sync');
+    console.log('  • Graceful fallback to local mode');
+    console.log('🎯 Ready for horizontal autoscaling');
 });
 
 process.on('SIGTERM', () => {
-    console.log(`🚀 Shutting down ultra instance ${INSTANCE_ID}...`);
+    console.log(`🔄 Shutting down autoscale instance ${INSTANCE_ID}...`);
+    
+    // Cleanup
+    if (redisConnected && redis) {
+        redis.del(`heartbeat:${INSTANCE_ID}`).catch(() => {});
+        redis.disconnect();
+    }
+    if (redisPub) redisPub.disconnect();
+    if (redisSub) redisSub.disconnect();
+    
     httpServer.close(() => process.exit(0));
 });
 

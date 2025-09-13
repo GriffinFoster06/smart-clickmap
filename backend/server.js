@@ -1138,7 +1138,7 @@ app.get('/heatmap', async (req, res) => {
     }
 });
 
-// DEBUG ENDPOINT - Add this for debugging data state
+// DEBUG ENDPOINT - Enhanced to see current state better
 app.get('/debug/state', async (req, res) => {
     try {
         const allChannels = await clickEngine.getAllChannelClicks();
@@ -1146,24 +1146,30 @@ app.get('/debug/state', async (req, res) => {
         const running = await gameState.isRunning();
         
         const channelData = {};
+        let totalClicksAcrossAllChannels = 0;
+        
         allChannels.forEach((clicks, channelId) => {
+            totalClicksAcrossAllChannels += clicks.size;
             channelData[channelId] = {
                 clickCount: clicks.size,
-                clicks: Array.from(clicks.entries()).map(([userId, click]) => ({
-                    userId,
+                clicks: Array.from(clicks.entries()).slice(0, 5).map(([userId, click]) => ({
+                    userId: userId.substring(0, 8) + '...',
                     x: click.x,
                     y: click.y,
                     timestamp: click.timestamp
-                }))
+                })) // Only show first 5 for brevity
             };
         });
         
         res.json({
             running: running,
             totalChannels: allChannels.size,
+            totalClicksAcrossAllChannels: totalClicksAcrossAllChannels,
             channelData: channelData,
             performance: stats,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            redisConnected: redis.isReady,
+            message: totalClicksAcrossAllChannels === 0 ? 'NO CLICKS IN MEMORY' : `${totalClicksAcrossAllChannels} clicks found`
         });
         
     } catch (error) {
@@ -1171,6 +1177,55 @@ app.get('/debug/state', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to get debug state'
+        });
+    }
+});
+
+// NEW: Force reset endpoint for testing
+app.post('/debug/force-reset', async (req, res) => {
+    try {
+        log('🔧 DEBUG: Force reset called');
+        
+        // Brute force clear everything
+        clickEngine.allChannelClicks.clear();
+        clickEngine.clickBuffer.clear();
+        
+        // Also clear Redis
+        if (redis.isReady) {
+            const clickKeys = await redis.keys('clicks:*');
+            if (clickKeys.length > 0) {
+                await redis.del(clickKeys);
+                log(`🔧 DEBUG: Deleted ${clickKeys.length} Redis keys`);
+            }
+        }
+        
+        const broadcastData = {
+            running: await gameState.isRunning(),
+            clusters: [],
+            totalClicks: 0,
+            uniqueUsers: 0,
+            coverage: 0,
+            action: 'reset',
+            channelId: 'all',
+            timestamp: Date.now(),
+            allDataCleared: true,
+            frozen: false,
+            unfrozen: true
+        };
+        
+        broadcastManager.forceImmediateBroadcast('all', broadcastData);
+        
+        res.json({
+            success: true,
+            message: 'Force reset completed',
+            clearedData: true
+        });
+        
+    } catch (error) {
+        logError('❌ Debug force reset error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to force reset'
         });
     }
 });

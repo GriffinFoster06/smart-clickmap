@@ -606,7 +606,7 @@
 
                 const data = await response.json();
                 
-                console.log(`📊 Initial status: running=${data?.running}, clusters=${data?.clusters?.length || 0}`);
+                console.log(`📊 Initial status: running=${data?.running}, clusters=${data?.clusters?.length || 0}, frozen=${data?.frozen}`);
                 
                 if (data?.running === true) {
                     console.log('🎮 Game is active - starting optimized polling');
@@ -616,6 +616,12 @@
                     console.log('💤 Game is not running - will check periodically');
                     this.isGameRunning = false;
                     this.scheduleStatusCheck();
+                    
+                    // If we have existing clusters but game is not running, they might be frozen
+                    if (data?.clusters?.length > 0) {
+                        console.log('🧊 Found frozen clusters from stopped session');
+                        data.frozen = true; // Mark as frozen for display
+                    }
                 }
                 
                 this.updateVisualization(data, 'initial');
@@ -733,6 +739,7 @@
             const isHardCutoff = data?.hardCutoff === true;
             const action = data?.action;
             const frozen = data?.frozen === true;
+            const unfrozen = data?.unfrozen === true; // NEW: Signal to clear frozen state
             const dataPreserved = data?.dataPreserved === true;
             const allDataCleared = data?.allDataCleared === true;
             
@@ -740,13 +747,21 @@
             
             // Handle immediate state changes from start/stop/reset
             if (isHardCutoff || action) {
-                console.log(`🔥 STATE CHANGE: ${action} - running=${gameRunning}, frozen=${frozen}, preserved=${dataPreserved}`);
+                console.log(`🔥 STATE CHANGE: ${action} - running=${gameRunning}, frozen=${frozen}, unfrozen=${unfrozen}, preserved=${dataPreserved}`);
                 
                 if (action === 'start') {
                     this.isGameRunning = true;
-                    console.log('🚀 Game started - overlay activated, data preserved');
-                    // Update with current data (preserved clusters if any)
-                    this.updateVisualization(data, 'start');
+                    console.log('🚀 Game started - overlay activated, unfrozen, data preserved');
+                    
+                    // UNFREEZE: Clear any frozen state and activate visualization
+                    const unfrozenData = {
+                        ...data,
+                        running: true,
+                        frozen: false, // Explicitly unfreeze
+                        unfrozen: true,
+                        clusters: clusters // Show current clusters (preserved or empty)
+                    };
+                    this.updateVisualization(unfrozenData, 'start_unfreeze');
                     
                 } else if (action === 'stop') {
                     this.isGameRunning = false;
@@ -759,6 +774,7 @@
                         ...data,
                         running: false,
                         frozen: true,
+                        unfrozen: false,
                         clusters: clusters // Keep existing clusters
                     };
                     this.updateVisualization(frozenData, 'stop_freeze');
@@ -767,16 +783,32 @@
                     return;
                     
                 } else if (action === 'reset') {
-                    console.log('🗑️ Data reset - clearing ALL visualization');
-                    // RESET: Clear everything completely
-                    this.updateVisualization({ 
+                    console.log('🗑️ Data reset - clearing ALL visualization and unfreezing');
+                    
+                    // RESET: Clear everything completely AND unfreeze
+                    const clearedData = {
                         running: gameRunning, 
                         clusters: [], 
                         totalClicks: 0,
                         uniqueUsers: 0,
-                        coverage: 0
-                    }, 'reset');
+                        coverage: 0,
+                        frozen: false, // Explicitly unfreeze
+                        unfrozen: true, // Signal unfreezing
+                        allDataCleared: true
+                    };
+                    this.updateVisualization(clearedData, 'reset_unfreeze');
                 }
+            }
+            
+            // Handle unfrozen signal even without action (for regular polling)
+            if (unfrozen && !action) {
+                console.log('🔓 Received unfreeze signal - clearing frozen state');
+                const unfrozenData = {
+                    ...data,
+                    frozen: false,
+                    unfrozen: true
+                };
+                this.updateVisualization(unfrozenData, 'unfreeze_signal');
             }
             
             // Detect regular game state changes (without action signals)
@@ -805,13 +837,16 @@
             // Handle reset clearing all data
             if (allDataCleared) {
                 console.log('🗑️ All data cleared - updating with empty state');
-                this.updateVisualization({ 
+                const clearedData = {
                     running: gameRunning, 
                     clusters: [], 
                     totalClicks: 0,
                     uniqueUsers: 0,
-                    coverage: 0
-                }, 'all_cleared');
+                    coverage: 0,
+                    frozen: false, // Clear frozen when clearing data
+                    unfrozen: true
+                };
+                this.updateVisualization(clearedData, 'all_cleared');
                 return;
             }
             
@@ -843,6 +878,7 @@
             
             const clusters = Array.isArray(data) ? data : (data?.clusters || []);
             const frozen = data?.frozen === true;
+            const unfrozen = data?.unfrozen === true;
             const dataPreserved = data?.dataPreserved === true;
             const allDataCleared = data?.allDataCleared === true;
             
@@ -850,8 +886,8 @@
             this.lastUpdate = Date.now();
             
             // Enhanced logging for state changes
-            if (source.includes('start') || source.includes('stop') || source.includes('reset') || source.includes('freeze')) {
-                console.log(`🎨 ${source.toUpperCase()}: ${clusters.length} clusters, frozen=${frozen}, preserved=${dataPreserved}, cleared=${allDataCleared}`);
+            if (source.includes('start') || source.includes('stop') || source.includes('reset') || source.includes('freeze') || source.includes('unfreeze')) {
+                console.log(`🎨 ${source.toUpperCase()}: ${clusters.length} clusters, frozen=${frozen}, unfrozen=${unfrozen}, preserved=${dataPreserved}, cleared=${allDataCleared}`);
             } else if (clusters.length > 0 || this.updateCount % 5 === 1) {
                 console.log(`🎨 Update #${this.updateCount} (${source}): ${clusters.length} clusters`);
             }
@@ -859,9 +895,12 @@
             // Update renderer with sophisticated clusters
             this.renderer.updateClusters(clusters);
             
-            // Update CSS classes for styling (but no frozen indicator)
-            document.body.classList.toggle('clickmap-active', data?.running !== false);
-            document.body.classList.toggle('clickmap-has-data', clusters.length > 0);
+            // Update CSS classes for styling - no frozen visual styling
+            const isActive = data?.running !== false; // Just check if running
+            const hasData = clusters.length > 0;
+            
+            document.body.classList.toggle('clickmap-active', isActive);
+            document.body.classList.toggle('clickmap-has-data', hasData);
             
             // Store last known good state
             this.lastKnownState = data;
@@ -882,7 +921,10 @@
                 backend: 'Ultra High-Performance with Sampling',
                 fps: this.renderer ? this.renderer.getFPS() : 0,
                 pollInterval: POLL_INTERVAL,
-                statusCheckInterval: STATUS_CHECK_INTERVAL
+                statusCheckInterval: STATUS_CHECK_INTERVAL,
+                isActive: document.body.classList.contains('clickmap-active'),
+                hasData: document.body.classList.contains('clickmap-has-data'),
+                lastKnownState: this.lastKnownState
             };
         }
 

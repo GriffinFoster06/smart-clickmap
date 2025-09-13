@@ -1,5 +1,5 @@
-// backend/server.js - REAL-TIME PRIORITY: Always current, never playing catch-up
-// Proper stop/start/reset with immediate cleanup
+// backend/server.js - FIXED CONNECTIVITY with real-time priority
+// Ensures WebSocket and HTTP connections work properly
 
 import 'dotenv/config';
 import express from 'express';
@@ -14,7 +14,7 @@ const PORT = process.env.PORT || 8080;
 const SECRET = Buffer.from(process.env.TWITCH_SECRET || '', 'base64');
 const INSTANCE_ID = process.env.RENDER_SERVICE_ID || `local_${Date.now()}`;
 
-// ========== REAL-TIME CONFIGURATION ==========
+// ========== CONFIGURATION ==========
 const CONFIG = {
     // Time windows
     MAX_CLICK_AGE_MS: 5000,        // Ignore clicks older than 5 seconds
@@ -22,75 +22,61 @@ const CONFIG = {
     BROADCAST_INTERVAL: 5000,      // Broadcast every 5 seconds
     
     // Load management
-    MAX_CLICKS_PER_SECOND: 10000,  // Hard limit
     SAMPLING_RATES: {
         LOW: 1,       // < 100/s: Accept all
-        MEDIUM: 5,    // 100-1000/s: 1 in 5
-        HIGH: 20,     // 1000-5000/s: 1 in 20
+        MEDIUM: 3,    // 100-1000/s: 1 in 3
+        HIGH: 10,     // 1000-5000/s: 1 in 10
         EXTREME: 100  // > 5000/s: 1 in 100
     },
     
     // Memory management
-    MAX_POINTS_PER_CHANNEL: 5000,  // Hard limit per channel
-    CLEANUP_INTERVAL: 2000,         // Clean old data every 2 seconds
+    MAX_POINTS_PER_CHANNEL: 5000,
+    CLEANUP_INTERVAL: 2000,
     
-    // Grid settings for high load
+    // Grid settings
     GRID_SIZE: 30,
-    GRID_THRESHOLD: 1000, // Use grid above 1000 clicks/s
-    
-    // State management
-    HARD_STOP_ENABLED: true,        // Immediate stop, no processing
-    CLEAR_ON_START: true,           // Clear all data on start
-    CLEAR_ON_RESET: true            // Clear all data on reset
+    GRID_THRESHOLD: 1000
 };
 
-// ========== GAME STATE MANAGER ==========
-class GameStateManager {
-    constructor() {
-        this.isRunning = false;
-        this.version = Date.now();
-        this.lastStateChange = Date.now();
-    }
-    
-    start() {
-        console.log('🚀 GAME START - Clearing all old data');
-        this.isRunning = true;
-        this.version = Date.now();
-        this.lastStateChange = Date.now();
-        return this.version;
-    }
-    
-    stop() {
-        console.log('🛑 GAME STOP - Halting all processing');
-        this.isRunning = false;
-        this.version = Date.now();
-        this.lastStateChange = Date.now();
-        return this.version;
-    }
-    
-    reset() {
-        console.log('🗑️ GAME RESET - Clearing everything');
-        this.version = Date.now();
-        this.lastStateChange = Date.now();
-        return this.version;
-    }
-    
-    getState() {
-        return {
-            running: this.isRunning,
-            version: this.version,
-            lastChange: this.lastStateChange
-        };
-    }
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const DEBUG_ENABLED = process.env.DEBUG === 'true' || !IS_PRODUCTION;
+
+function log(message, level = 'info') {
+    if (level === 'debug' && !DEBUG_ENABLED) return;
+    console.log(`[${new Date().toISOString()}] ${message}`);
 }
 
-// ========== REAL-TIME CLICK ENGINE ==========
-class RealTimeClickEngine {
-    constructor(gameState) {
-        this.gameState = gameState;
-        
-        // Current data only (no history)
-        this.currentClicks = new Map(); // channelId -> Map(userId -> click)
+function logError(message, error = null) {
+    console.error(`[${new Date().toISOString()}] ${message}`, error || '');
+}
+
+// ========== GAME STATE ==========
+const gameState = {
+    running: true,
+    version: Date.now(),
+    lastStateChange: Date.now(),
+    
+    setRunning(value) {
+        this.running = value;
+        this.version = Date.now();
+        this.lastStateChange = Date.now();
+        log(`Game state: ${value ? 'RUNNING' : 'STOPPED'} (v${this.version})`);
+        return this.version;
+    },
+    
+    reset() {
+        this.version = Date.now();
+        this.lastStateChange = Date.now();
+        log(`Game RESET (v${this.version})`);
+        return this.version;
+    }
+};
+
+// ========== CLICK ENGINE ==========
+class ClickEngine {
+    constructor() {
+        // Data storage
+        this.currentClicks = new Map(); // channelId -> Map of clicks
         this.gridAggregators = new Map(); // channelId -> GridAggregator
         
         // Performance tracking
@@ -100,18 +86,17 @@ class RealTimeClickEngine {
         this.currentLoad = 'LOW';
         this.samplingRate = 1;
         
-        // JWT cache (small, fast)
+        // JWT cache
         this.jwtCache = new Map();
-        this.maxJWTCache = 1000;
+        this.maxJWTCache = 5000;
         
-        // Start cleanup task
+        // Start tasks
         this.startCleanupTask();
         this.startMetricsTask();
         
-        console.log('⚡ Real-time engine initialized');
+        log('✅ Click engine initialized');
     }
     
-    // Fast JWT verification
     verifyJWTFast(token) {
         const cached = this.jwtCache.get(token);
         if (cached && cached.exp > Date.now() / 1000) {
@@ -121,7 +106,6 @@ class RealTimeClickEngine {
         try {
             const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
             
-            // Simple LRU
             if (this.jwtCache.size >= this.maxJWTCache) {
                 const firstKey = this.jwtCache.keys().next().value;
                 this.jwtCache.delete(firstKey);
@@ -134,31 +118,21 @@ class RealTimeClickEngine {
         }
     }
     
-    // Main click handler - REAL-TIME PRIORITY
     addClick(channelId, userId, x, y) {
-        // IMMEDIATE REJECTION if game not running
-        if (!this.gameState.isRunning) {
+        if (!gameState.running) {
             this.totalDropped++;
             return false;
         }
         
-        const now = Date.now();
         this.totalReceived++;
         
-        // DROP OLD CLICKS IMMEDIATELY (no catch-up)
-        const clickAge = now - this.gameState.lastStateChange;
-        if (clickAge > CONFIG.MAX_CLICK_AGE_MS) {
-            this.totalDropped++;
-            return false; // Click is too old, drop it
-        }
-        
-        // Sampling based on current load
+        // Sampling
         if (this.samplingRate > 1 && Math.random() > (1 / this.samplingRate)) {
             this.totalDropped++;
             return false;
         }
         
-        // HIGH LOAD: Use grid (very fast)
+        // High load - use grid
         if (this.currentLoad === 'HIGH' || this.currentLoad === 'EXTREME') {
             if (!this.gridAggregators.has(channelId)) {
                 this.gridAggregators.set(channelId, new GridAggregator());
@@ -167,35 +141,33 @@ class RealTimeClickEngine {
             return true;
         }
         
-        // NORMAL LOAD: Store individual clicks
+        // Normal load - store clicks
         if (!this.currentClicks.has(channelId)) {
             this.currentClicks.set(channelId, new Map());
         }
         
         const channelClicks = this.currentClicks.get(channelId);
         
-        // Enforce max points limit (drop oldest)
+        // Limit size
         if (channelClicks.size >= CONFIG.MAX_POINTS_PER_CHANNEL) {
-            // Remove 20% oldest entries
             const toRemove = Math.floor(channelClicks.size * 0.2);
             const keys = Array.from(channelClicks.keys()).slice(0, toRemove);
             keys.forEach(key => channelClicks.delete(key));
         }
         
-        // Store click with timestamp
-        channelClicks.set(`${userId}_${Date.now()}_${Math.random()}`, {
-            x, y, 
-            timestamp: now,
+        const clickId = `${userId}_${Date.now()}_${Math.random()}`;
+        channelClicks.set(clickId, {
+            x, y,
+            timestamp: Date.now(),
             userId
         });
         
         return true;
     }
     
-    // Get current heatmap data
     getHeatmapData(channelId) {
-        // Return empty if game not running
-        if (!this.gameState.isRunning) {
+        // Empty if not running
+        if (!gameState.running) {
             return {
                 clusters: [],
                 totalClicks: 0,
@@ -204,14 +176,54 @@ class RealTimeClickEngine {
             };
         }
         
-        // Grid mode for high load
+        // Get all channels if no specific channel
+        if (!channelId) {
+            const allPoints = [];
+            
+            // Collect from all channels
+            for (const [_, channelClicks] of this.currentClicks) {
+                allPoints.push(...Array.from(channelClicks.values()));
+            }
+            
+            // Include grid data if any
+            for (const [_, grid] of this.gridAggregators) {
+                const gridPoints = grid.getHeatmap();
+                gridPoints.forEach(cell => {
+                    for (let i = 0; i < Math.min(cell.count, 10); i++) {
+                        allPoints.push({
+                            x: cell.x + (Math.random() - 0.5) * 0.02,
+                            y: cell.y + (Math.random() - 0.5) * 0.02
+                        });
+                    }
+                });
+            }
+            
+            if (allPoints.length === 0) {
+                return {
+                    clusters: [],
+                    totalClicks: 0,
+                    uniqueUsers: 0,
+                    mode: this.currentLoad
+                };
+            }
+            
+            const clusters = this.fastClustering(allPoints);
+            return {
+                clusters,
+                totalClicks: allPoints.length,
+                uniqueUsers: Math.floor(allPoints.length * 0.8),
+                mode: this.currentLoad
+            };
+        }
+        
+        // Grid mode for specific channel
         if (this.gridAggregators.has(channelId)) {
             const grid = this.gridAggregators.get(channelId);
             const clusters = this.gridToClusters(grid.getHeatmap());
             return {
                 clusters,
                 totalClicks: grid.total,
-                uniqueUsers: Math.floor(grid.total * 0.7), // Estimate
+                uniqueUsers: Math.floor(grid.total * 0.7),
                 mode: 'GRID'
             };
         }
@@ -227,7 +239,6 @@ class RealTimeClickEngine {
             };
         }
         
-        // Convert to points
         const points = Array.from(channelClicks.values());
         const clusters = this.fastClustering(points);
         const uniqueUsers = new Set(points.map(p => p.userId)).size;
@@ -240,12 +251,12 @@ class RealTimeClickEngine {
         };
     }
     
-    // Fast clustering for real-time
     fastClustering(points) {
+        if (points.length === 0) return [];
+        
         const gridSize = 20;
         const grid = {};
         
-        // Grid aggregation
         points.forEach(p => {
             const key = `${Math.floor(p.x * gridSize)}_${Math.floor(p.y * gridSize)}`;
             if (!grid[key]) {
@@ -256,7 +267,6 @@ class RealTimeClickEngine {
             grid[key].count++;
         });
         
-        // Convert to clusters
         const total = points.length;
         const clusters = Object.values(grid)
             .map(cell => ({
@@ -267,9 +277,8 @@ class RealTimeClickEngine {
             }))
             .filter(c => c.percentage >= 3)
             .sort((a, b) => b.percentage - a.percentage)
-            .slice(0, 15); // Max 15 clusters
+            .slice(0, 15);
         
-        // Add visual properties
         return clusters.map((c, i) => ({
             ...c,
             visualSize: Math.min(180, 40 + Math.sqrt(c.percentage) * 40),
@@ -281,7 +290,6 @@ class RealTimeClickEngine {
         }));
     }
     
-    // Grid to clusters conversion
     gridToClusters(gridData) {
         const total = gridData.reduce((sum, cell) => sum + cell.count, 0);
         if (total === 0) return [];
@@ -307,36 +315,27 @@ class RealTimeClickEngine {
             }));
     }
     
-    // IMMEDIATE CLEAR - no delay, no processing
     clearAll() {
-        console.log('🧹 CLEARING ALL DATA IMMEDIATELY');
+        log('🧹 Clearing all click data');
         this.currentClicks.clear();
         this.gridAggregators.clear();
-        this.jwtCache.clear();
         this.totalReceived = 0;
         this.totalDropped = 0;
-        
-        // Force garbage collection if available
-        if (global.gc) {
-            global.gc();
-        }
     }
     
     clearChannel(channelId) {
-        console.log(`🧹 Clearing channel ${channelId}`);
+        log(`🧹 Clearing channel ${channelId}`);
         this.currentClicks.delete(channelId);
         this.gridAggregators.delete(channelId);
     }
     
-    // Cleanup old data regularly
     startCleanupTask() {
         setInterval(() => {
-            if (!this.gameState.isRunning) return;
+            if (!gameState.running) return;
             
             const now = Date.now();
             const cutoff = now - CONFIG.CURRENT_WINDOW_MS;
             
-            // Clean old clicks from all channels
             for (const [channelId, clicks] of this.currentClicks.entries()) {
                 for (const [key, click] of clicks.entries()) {
                     if (click.timestamp < cutoff) {
@@ -344,26 +343,21 @@ class RealTimeClickEngine {
                     }
                 }
                 
-                // Remove empty channels
                 if (clicks.size === 0) {
                     this.currentClicks.delete(channelId);
                 }
             }
             
-            // Clear grids if not in high load
             if (this.currentLoad !== 'HIGH' && this.currentLoad !== 'EXTREME') {
                 this.gridAggregators.clear();
             }
-            
         }, CONFIG.CLEANUP_INTERVAL);
     }
     
-    // Track metrics
     startMetricsTask() {
         setInterval(() => {
             const cps = this.totalReceived;
             
-            // Determine load level
             if (cps < 100) {
                 this.currentLoad = 'LOW';
                 this.samplingRate = CONFIG.SAMPLING_RATES.LOW;
@@ -378,29 +372,16 @@ class RealTimeClickEngine {
                 this.samplingRate = CONFIG.SAMPLING_RATES.EXTREME;
             }
             
-            // Log if active
             if (cps > 0) {
                 const dropRate = this.totalDropped > 0 ? 
                     ((this.totalDropped / (this.totalDropped + cps)) * 100).toFixed(1) : 0;
-                console.log(`📊 ${this.currentLoad}: ${cps}/s (${dropRate}% dropped, 1:${this.samplingRate})`);
+                log(`📊 ${this.currentLoad}: ${cps}/s (${dropRate}% dropped, 1:${this.samplingRate})`);
             }
             
             this.clicksPerSecond = cps;
             this.totalReceived = 0;
             this.totalDropped = 0;
         }, 1000);
-    }
-    
-    getStatus() {
-        return {
-            load: this.currentLoad,
-            clicksPerSecond: this.clicksPerSecond,
-            samplingRate: this.samplingRate,
-            channels: this.currentClicks.size,
-            gridChannels: this.gridAggregators.size,
-            totalPoints: Array.from(this.currentClicks.values())
-                .reduce((sum, channel) => sum + channel.size, 0)
-        };
     }
 }
 
@@ -451,81 +432,82 @@ const redis = createClient({
     socket: {
         connectTimeout: 1000,
         lazyConnect: true,
-        reconnectStrategy: () => null // Don't retry
+        reconnectStrategy: () => null
     }
 });
 
-redis.on('error', () => {}); // Ignore Redis errors
-redis.connect().catch(() => console.log('📴 Redis unavailable - memory only mode'));
+redis.on('error', () => {});
+redis.connect().catch(() => log('📴 Redis unavailable - memory only mode'));
 
 // ========== INITIALIZE ==========
-const gameState = new GameStateManager();
-const clickEngine = new RealTimeClickEngine(gameState);
+const clickEngine = new ClickEngine();
 
 // ========== EXPRESS APP ==========
 const app = express();
 
+// CORS - Allow everything for extension
+// In backend/server.js, update the CORS configuration:
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: [
+        'Content-Type', 
+        'Authorization',
+        'X-Channel-ID',
+        'X-Test-Mode',
+        'X-User-ID'
+    ]
 }));
 
 app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// Request tracking
-let requestsPerSecond = 0;
-setInterval(() => { requestsPerSecond = 0; }, 1000);
+// Logging middleware
+app.use((req, res, next) => {
+    log(`${req.method} ${req.path}`, 'debug');
+    next();
+});
 
 // ========== ENDPOINTS ==========
 
 // HEALTH
 app.get('/health', (req, res) => {
-    const status = clickEngine.getStatus();
-    const state = gameState.getState();
-    
     res.json({
         status: 'ok',
-        ...state,
-        ...status,
+        running: gameState.running,
+        version: gameState.version,
         timestamp: Date.now(),
-        instanceId: INSTANCE_ID
+        instanceId: INSTANCE_ID,
+        load: clickEngine.currentLoad,
+        clicksPerSecond: clickEngine.clicksPerSecond,
+        websocket: {
+            clients: wss ? wss.clients.size : 0
+        }
     });
 });
 
-// CLICK - Real-time processing
+// CLICK
 app.post('/click', (req, res) => {
-    requestsPerSecond++;
-    
-    // Rate limit
-    if (requestsPerSecond > CONFIG.MAX_CLICKS_PER_SECOND) {
-        return res.status(429).json({ error: 'Rate limit' });
+    if (!gameState.running) {
+        return res.status(400).json({ success: false, error: 'Not running' });
     }
     
-    // Quick rejection if not running
-    if (!gameState.isRunning) {
-        return res.status(400).json({ error: 'Not running' });
-    }
-    
-    // Token verification
     const token = (req.headers.authorization || '').replace('Bearer ', '');
     if (!token) {
-        return res.status(401).json({ error: 'No token' });
+        return res.status(401).json({ success: false, error: 'No token' });
     }
     
     const payload = clickEngine.verifyJWTFast(token);
     if (!payload) {
-        return res.status(401).json({ error: 'Invalid token' });
+        return res.status(401).json({ success: false, error: 'Invalid token' });
     }
     
-    // Validate coordinates
     const { x, y } = req.body;
     if (typeof x !== 'number' || typeof y !== 'number' ||
         x < 0 || x > 1 || y < 0 || y > 1) {
-        return res.status(400).json({ error: 'Invalid coordinates' });
+        return res.status(400).json({ success: false, error: 'Invalid coordinates' });
     }
     
-    // Process click
     const accepted = clickEngine.addClick(
         payload.channel_id,
         payload.user_id || payload.opaque_user_id,
@@ -534,7 +516,8 @@ app.post('/click', (req, res) => {
     
     res.json({ 
         success: true,
-        accepted
+        accepted,
+        status: accepted ? 'recorded' : 'sampled'
     });
 });
 
@@ -544,41 +527,30 @@ app.get('/heatmap', (req, res) => {
     const threshold = parseInt(req.query.threshold) || 3;
     
     const data = clickEngine.getHeatmapData(channelId);
-    const state = gameState.getState();
     
     res.json({
-        running: state.running,
-        clusters: data.clusters,
-        totalClicks: data.totalClicks,
-        uniqueUsers: data.uniqueUsers,
+        running: gameState.running,
+        clusters: data.clusters || [],
+        totalClicks: data.totalClicks || 0,
+        uniqueUsers: data.uniqueUsers || 0,
+        coverage: Math.min(100, (data.clusters?.length || 0) * 10),
         mode: data.mode,
         threshold,
-        version: state.version,
-        timestamp: Date.now()
+        version: gameState.version,
+        timestamp: Date.now(),
+        instanceId: INSTANCE_ID
     });
 });
 
-// START - Clear everything and start fresh
-app.post('/start', async (req, res) => {
-    console.log('▶️ START COMMAND RECEIVED');
+// START
+app.post('/start', (req, res) => {
+    log('▶️ START command');
     
-    // Clear EVERYTHING first
-    if (CONFIG.CLEAR_ON_START) {
-        clickEngine.clearAll();
-        
-        // Clear Redis if available
-        if (redis.isReady) {
-            try {
-                await redis.flushDb();
-            } catch {}
-        }
-    }
+    clickEngine.clearAll();
+    const version = gameState.setRunning(true);
     
-    // Start game
-    const version = gameState.start();
-    
-    // Broadcast immediate update
-    broadcastUpdate('all', {
+    // Broadcast to all WebSocket clients
+    broadcastToAll({
         running: true,
         clusters: [],
         totalClicks: 0,
@@ -596,23 +568,20 @@ app.post('/start', async (req, res) => {
     });
 });
 
-// STOP - Immediate halt
-app.post('/stop', async (req, res) => {
-    console.log('⏹️ STOP COMMAND RECEIVED');
+// STOP
+app.post('/stop', (req, res) => {
+    log('⏹️ STOP command');
     
-    // Stop game immediately
-    const version = gameState.stop();
+    const version = gameState.setRunning(false);
     
-    // Get final state before clearing
+    // Get final state
     const finalData = clickEngine.getHeatmapData();
     
-    // Clear all processing
-    if (CONFIG.HARD_STOP_ENABLED) {
-        clickEngine.clearAll();
-    }
+    // Clear engine
+    clickEngine.clearAll();
     
-    // Broadcast final state then clear
-    broadcastUpdate('all', {
+    // Broadcast stop
+    broadcastToAll({
         running: false,
         clusters: finalData.clusters,
         totalClicks: finalData.totalClicks,
@@ -622,9 +591,9 @@ app.post('/stop', async (req, res) => {
         timestamp: Date.now()
     });
     
-    // Send empty state after short delay
+    // Send clear after delay
     setTimeout(() => {
-        broadcastUpdate('all', {
+        broadcastToAll({
             running: false,
             clusters: [],
             totalClicks: 0,
@@ -643,34 +612,23 @@ app.post('/stop', async (req, res) => {
     });
 });
 
-// RESET - Clear everything
-app.post('/reset', async (req, res) => {
-    console.log('🗑️ RESET COMMAND RECEIVED');
+// RESET
+app.post('/reset', (req, res) => {
+    log('🗑️ RESET command');
     
     const channelId = req.headers['x-channel-id'] || req.body.channelId;
     
-    // Clear data
-    if (CONFIG.CLEAR_ON_RESET) {
-        if (channelId) {
-            clickEngine.clearChannel(channelId);
-        } else {
-            clickEngine.clearAll();
-            
-            // Clear Redis if available
-            if (redis.isReady) {
-                try {
-                    await redis.flushDb();
-                } catch {}
-            }
-        }
+    if (channelId) {
+        clickEngine.clearChannel(channelId);
+    } else {
+        clickEngine.clearAll();
     }
     
     const version = gameState.reset();
-    const state = gameState.getState();
     
-    // Broadcast empty state
-    broadcastUpdate(channelId || 'all', {
-        running: state.running,
+    // Broadcast reset
+    broadcastToAll({
+        running: gameState.running,
         clusters: [],
         totalClicks: 0,
         uniqueUsers: 0,
@@ -691,68 +649,76 @@ const httpServer = createServer(app);
 const wss = new WebSocketServer({
     server: httpServer,
     path: '/ws',
-    perMessageDeflate: false
+    perMessageDeflate: false,
+    clientTracking: true
 });
 
 const wsClients = new Map(); // channelId -> Set<ws>
 
 // Broadcast helper
-function broadcastUpdate(channelId, data) {
+function broadcastToAll(data) {
     const message = JSON.stringify(data);
     
-    if (channelId === 'all') {
-        // Broadcast to all channels
-        for (const clients of wsClients.values()) {
-            clients.forEach(ws => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    try { ws.send(message); } catch {}
-                }
-            });
+    wss.clients.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) {
+            try {
+                ws.send(message);
+            } catch (error) {
+                logError('Broadcast error:', error);
+            }
         }
-    } else {
-        // Broadcast to specific channel
-        const clients = wsClients.get(channelId);
-        if (clients) {
-            clients.forEach(ws => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    try { ws.send(message); } catch {}
-                }
-            });
-        }
-    }
+    });
 }
 
-// Periodic broadcast (only if running)
-setInterval(() => {
-    if (!gameState.isRunning) return;
+function broadcastToChannel(channelId, data) {
+    const clients = wsClients.get(channelId);
+    if (!clients) return;
     
+    const message = JSON.stringify(data);
+    
+    clients.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) {
+            try {
+                ws.send(message);
+            } catch (error) {
+                logError('Channel broadcast error:', error);
+            }
+        }
+    });
+}
+
+// Periodic broadcast
+setInterval(() => {
+    if (!gameState.running) return;
+    
+    // Broadcast to all channels
     for (const [channelId, clients] of wsClients.entries()) {
         if (clients.size === 0) continue;
         
         const data = clickEngine.getHeatmapData(channelId);
-        const state = gameState.getState();
         
-        const message = JSON.stringify({
-            running: state.running,
+        broadcastToChannel(channelId, {
+            running: gameState.running,
             clusters: data.clusters,
             totalClicks: data.totalClicks,
             uniqueUsers: data.uniqueUsers,
             mode: data.mode,
-            version: state.version,
+            version: gameState.version,
             timestamp: Date.now()
-        });
-        
-        clients.forEach(ws => {
-            if (ws.readyState === WebSocket.OPEN) {
-                try { ws.send(message); } catch {}
-            }
         });
     }
 }, CONFIG.BROADCAST_INTERVAL);
 
-// WebSocket connections
+// WebSocket connection handler
 wss.on('connection', (ws, req) => {
-    const channelId = req.url?.replace('/ws/', '').split('?')[0] || 'global';
+    const url = req.url || '';
+    log(`WebSocket connection: ${url}`, 'debug');
+    
+    // Extract channel from URL: /ws/CHANNEL_ID
+    const channelMatch = url.match(/^\/ws\/(.+?)(?:\?|$)/);
+    const channelId = channelMatch ? channelMatch[1] : 'global';
+    
+    log(`WebSocket client connected to channel: ${channelId}`);
     
     // Add to channel
     if (!wsClients.has(channelId)) {
@@ -760,19 +726,27 @@ wss.on('connection', (ws, req) => {
     }
     wsClients.get(channelId).add(ws);
     
-    // Send current state
+    // Send initial state
     const data = clickEngine.getHeatmapData(channelId);
-    const state = gameState.getState();
-    
     ws.send(JSON.stringify({
-        running: state.running,
+        running: gameState.running,
         clusters: data.clusters,
         totalClicks: data.totalClicks,
         uniqueUsers: data.uniqueUsers,
         mode: data.mode,
-        version: state.version,
+        version: gameState.version,
         timestamp: Date.now()
     }));
+    
+    // Handle messages
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            if (data.type === 'ping') {
+                ws.send(JSON.stringify({ type: 'pong' }));
+            }
+        } catch {}
+    });
     
     // Cleanup on close
     ws.on('close', () => {
@@ -783,30 +757,35 @@ wss.on('connection', (ws, req) => {
                 wsClients.delete(channelId);
             }
         }
+        log(`WebSocket disconnected from channel: ${channelId}`);
     });
     
-    ws.on('error', () => {});
+    ws.on('error', (error) => {
+        logError(`WebSocket error for ${channelId}:`, error);
+    });
+});
+
+wss.on('error', (error) => {
+    logError('WebSocket server error:', error);
 });
 
 // ========== START SERVER ==========
 httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log('⚡ REAL-TIME ClickMap Server v9.0.0');
-    console.log(`📡 Port: ${PORT}`);
-    console.log('🎯 Features:');
-    console.log('  • Never plays catch-up (drops old clicks)');
-    console.log('  • Immediate stop/start/reset');
-    console.log('  • Current data only (10s window)');
-    console.log('  • Auto-cleanup every 2s');
-    console.log('  • Hard stops enabled');
-    console.log(`🔄 Broadcast: ${CONFIG.BROADCAST_INTERVAL}ms`);
-    console.log(`⏱️ Max click age: ${CONFIG.MAX_CLICK_AGE_MS}ms`);
+    log('⚡ ClickMap Server v10.0.0 - FIXED CONNECTIVITY');
+    log(`📡 Port: ${PORT}`);
+    log(`🔗 WebSocket: ws://localhost:${PORT}/ws/CHANNEL_ID`);
+    log(`🔗 HTTP: http://localhost:${PORT}`);
+    log('✅ CORS: Enabled for all origins');
+    log(`🔄 Broadcast interval: ${CONFIG.BROADCAST_INTERVAL}ms`);
+    log(`📊 WebSocket clients: ${wss.clients.size}`);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('Shutting down...');
-    gameState.stop();
+    log('Shutting down...');
+    gameState.setRunning(false);
     clickEngine.clearAll();
+    wss.close();
     httpServer.close(() => {
         process.exit(0);
     });

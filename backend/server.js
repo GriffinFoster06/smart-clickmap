@@ -1,5 +1,5 @@
-// backend/server.js - BALANCED: Sophisticated clustering at low load, grid at high load
-// Preserves visual quality while preventing crashes at any scale
+// backend/server.js - REAL-TIME PRIORITY: Always current, never playing catch-up
+// Proper stop/start/reset with immediate cleanup
 
 import 'dotenv/config';
 import express from 'express';
@@ -14,155 +14,104 @@ const PORT = process.env.PORT || 8080;
 const SECRET = Buffer.from(process.env.TWITCH_SECRET || '', 'base64');
 const INSTANCE_ID = process.env.RENDER_SERVICE_ID || `local_${Date.now()}`;
 
-// ========== BALANCED PERFORMANCE SETTINGS ==========
-const PERFORMANCE_CONFIG = {
-    // Load thresholds
-    LOW_LOAD_THRESHOLD: 100,      // < 100/s: Full sophistication
-    MEDIUM_LOAD_THRESHOLD: 1000,   // 100-1000/s: Simplified clustering
-    HIGH_LOAD_THRESHOLD: 10000,    // 1000-10000/s: Grid mode
-    EXTREME_LOAD_THRESHOLD: 100000, // > 10000/s: Emergency mode
+// ========== REAL-TIME CONFIGURATION ==========
+const CONFIG = {
+    // Time windows
+    MAX_CLICK_AGE_MS: 5000,        // Ignore clicks older than 5 seconds
+    CURRENT_WINDOW_MS: 10000,      // Only keep last 10 seconds of data
+    BROADCAST_INTERVAL: 5000,      // Broadcast every 5 seconds
     
-    // Sampling rates by load
-    SAMPLING: {
-        LOW: 1,       // Accept all clicks
-        MEDIUM: 3,    // 1 in 3
-        HIGH: 10,     // 1 in 10
-        EXTREME: 100, // 1 in 100
-        EMERGENCY: 1000 // 1 in 1000
+    // Load management
+    MAX_CLICKS_PER_SECOND: 10000,  // Hard limit
+    SAMPLING_RATES: {
+        LOW: 1,       // < 100/s: Accept all
+        MEDIUM: 5,    // 100-1000/s: 1 in 5
+        HIGH: 20,     // 1000-5000/s: 1 in 20
+        EXTREME: 100  // > 5000/s: 1 in 100
     },
     
-    // Clustering complexity by load
-    MAX_CLUSTERS: {
-        LOW: 20,      // Full sophistication
-        MEDIUM: 15,   // Moderate
-        HIGH: 10,     // Simplified
-        GRID: 20      // Grid cells
-    },
-    
-    // Memory protection
-    MAX_POINTS_IN_MEMORY: 50000,
-    MAX_MEMORY_MB: 400,
-    
-    // I/O protection
-    REDIS_BATCH_INTERVAL: 10000, // 10 seconds
-    REDIS_BATCH_SIZE: 500,
+    // Memory management
+    MAX_POINTS_PER_CHANNEL: 5000,  // Hard limit per channel
+    CLEANUP_INTERVAL: 2000,         // Clean old data every 2 seconds
     
     // Grid settings for high load
-    GRID_SIZE: 30, // 30x30 = 900 cells max
+    GRID_SIZE: 30,
+    GRID_THRESHOLD: 1000, // Use grid above 1000 clicks/s
     
-    // Broadcast settings
-    BROADCAST_INTERVAL: 5000 // Keep 5 second updates
+    // State management
+    HARD_STOP_ENABLED: true,        // Immediate stop, no processing
+    CLEAR_ON_START: true,           // Clear all data on start
+    CLEAR_ON_RESET: true            // Clear all data on reset
 };
 
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
-
-// ========== LOAD MONITOR WITH CIRCUIT BREAKER ==========
-class LoadMonitor {
+// ========== GAME STATE MANAGER ==========
+class GameStateManager {
     constructor() {
-        this.clicksInSecond = 0;
-        this.totalClicks = 0;
-        this.droppedClicks = 0;
-        this.currentLoad = 'LOW';
-        this.samplingRate = PERFORMANCE_CONFIG.SAMPLING.LOW;
-        
-        // Reset counter every second
-        setInterval(() => {
-            const cps = this.clicksInSecond;
-            
-            // Determine load level
-            if (cps < PERFORMANCE_CONFIG.LOW_LOAD_THRESHOLD) {
-                this.currentLoad = 'LOW';
-                this.samplingRate = PERFORMANCE_CONFIG.SAMPLING.LOW;
-            } else if (cps < PERFORMANCE_CONFIG.MEDIUM_LOAD_THRESHOLD) {
-                this.currentLoad = 'MEDIUM';
-                this.samplingRate = PERFORMANCE_CONFIG.SAMPLING.MEDIUM;
-            } else if (cps < PERFORMANCE_CONFIG.HIGH_LOAD_THRESHOLD) {
-                this.currentLoad = 'HIGH';
-                this.samplingRate = PERFORMANCE_CONFIG.SAMPLING.HIGH;
-            } else if (cps < PERFORMANCE_CONFIG.EXTREME_LOAD_THRESHOLD) {
-                this.currentLoad = 'EXTREME';
-                this.samplingRate = PERFORMANCE_CONFIG.SAMPLING.EXTREME;
-            } else {
-                this.currentLoad = 'EMERGENCY';
-                this.samplingRate = PERFORMANCE_CONFIG.SAMPLING.EMERGENCY;
-            }
-            
-            // Log status changes
-            if (cps > 0) {
-                const dropRate = this.droppedClicks > 0 ? 
-                    ((this.droppedClicks / (this.droppedClicks + cps)) * 100).toFixed(1) : 0;
-                console.log(`📊 Load: ${this.currentLoad} (${cps}/s, ${dropRate}% dropped, 1:${this.samplingRate} sampling)`);
-            }
-            
-            this.clicksInSecond = 0;
-            this.droppedClicks = 0;
-        }, 1000);
+        this.isRunning = false;
+        this.version = Date.now();
+        this.lastStateChange = Date.now();
     }
     
-    recordClick() {
-        this.clicksInSecond++;
-        this.totalClicks++;
+    start() {
+        console.log('🚀 GAME START - Clearing all old data');
+        this.isRunning = true;
+        this.version = Date.now();
+        this.lastStateChange = Date.now();
+        return this.version;
     }
     
-    shouldAcceptClick() {
-        this.recordClick();
-        
-        // Emergency circuit breaker
-        if (this.clicksInSecond > PERFORMANCE_CONFIG.EXTREME_LOAD_THRESHOLD * 2) {
-            this.droppedClicks++;
-            return false;
-        }
-        
-        // Sampling based on current load
-        if (this.samplingRate > 1) {
-            const shouldSample = Math.random() < (1 / this.samplingRate);
-            if (!shouldSample) {
-                this.droppedClicks++;
-                return false;
-            }
-        }
-        
-        return true;
+    stop() {
+        console.log('🛑 GAME STOP - Halting all processing');
+        this.isRunning = false;
+        this.version = Date.now();
+        this.lastStateChange = Date.now();
+        return this.version;
     }
     
-    getLoadLevel() {
-        return this.currentLoad;
+    reset() {
+        console.log('🗑️ GAME RESET - Clearing everything');
+        this.version = Date.now();
+        this.lastStateChange = Date.now();
+        return this.version;
     }
     
-    getClicksPerSecond() {
-        return this.clicksInSecond;
+    getState() {
+        return {
+            running: this.isRunning,
+            version: this.version,
+            lastChange: this.lastStateChange
+        };
     }
 }
 
-// ========== ADAPTIVE CLICK ENGINE ==========
-class AdaptiveClickEngine {
-    constructor() {
-        this.loadMonitor = new LoadMonitor();
+// ========== REAL-TIME CLICK ENGINE ==========
+class RealTimeClickEngine {
+    constructor(gameState) {
+        this.gameState = gameState;
         
-        // Memory-bounded storage
-        this.clickPoints = new Map(); // channelId -> points array
-        this.maxPointsPerChannel = 10000;
-        
-        // Grid aggregator for high load
+        // Current data only (no history)
+        this.currentClicks = new Map(); // channelId -> Map(userId -> click)
         this.gridAggregators = new Map(); // channelId -> GridAggregator
         
-        // JWT cache
+        // Performance tracking
+        this.clicksPerSecond = 0;
+        this.totalReceived = 0;
+        this.totalDropped = 0;
+        this.currentLoad = 'LOW';
+        this.samplingRate = 1;
+        
+        // JWT cache (small, fast)
         this.jwtCache = new Map();
-        this.maxJWTCache = 5000;
+        this.maxJWTCache = 1000;
         
-        // Redis write buffer
-        this.redisBuffer = [];
-        this.lastRedisFlush = Date.now();
+        // Start cleanup task
+        this.startCleanupTask();
+        this.startMetricsTask();
         
-        // State
-        this.isRunning = true;
-        
-        // Start background tasks
-        this.startBackgroundTasks();
-        
-        console.log('🚀 Adaptive click engine initialized');
+        console.log('⚡ Real-time engine initialized');
     }
     
+    // Fast JWT verification
     verifyJWTFast(token) {
         const cached = this.jwtCache.get(token);
         if (cached && cached.exp > Date.now() / 1000) {
@@ -172,7 +121,7 @@ class AdaptiveClickEngine {
         try {
             const payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
             
-            // LRU cache eviction
+            // Simple LRU
             if (this.jwtCache.size >= this.maxJWTCache) {
                 const firstKey = this.jwtCache.keys().next().value;
                 this.jwtCache.delete(firstKey);
@@ -185,16 +134,32 @@ class AdaptiveClickEngine {
         }
     }
     
-    addClick(channelId, userId, x, y, timestamp) {
-        // Check if we should accept this click
-        if (!this.loadMonitor.shouldAcceptClick()) {
+    // Main click handler - REAL-TIME PRIORITY
+    addClick(channelId, userId, x, y) {
+        // IMMEDIATE REJECTION if game not running
+        if (!this.gameState.isRunning) {
+            this.totalDropped++;
             return false;
         }
         
-        const loadLevel = this.loadMonitor.getLoadLevel();
+        const now = Date.now();
+        this.totalReceived++;
         
-        // HIGH/EXTREME load: Use grid aggregation
-        if (loadLevel === 'HIGH' || loadLevel === 'EXTREME' || loadLevel === 'EMERGENCY') {
+        // DROP OLD CLICKS IMMEDIATELY (no catch-up)
+        const clickAge = now - this.gameState.lastStateChange;
+        if (clickAge > CONFIG.MAX_CLICK_AGE_MS) {
+            this.totalDropped++;
+            return false; // Click is too old, drop it
+        }
+        
+        // Sampling based on current load
+        if (this.samplingRate > 1 && Math.random() > (1 / this.samplingRate)) {
+            this.totalDropped++;
+            return false;
+        }
+        
+        // HIGH LOAD: Use grid (very fast)
+        if (this.currentLoad === 'HIGH' || this.currentLoad === 'EXTREME') {
             if (!this.gridAggregators.has(channelId)) {
                 this.gridAggregators.set(channelId, new GridAggregator());
             }
@@ -202,92 +167,82 @@ class AdaptiveClickEngine {
             return true;
         }
         
-        // LOW/MEDIUM load: Store individual points for sophisticated clustering
-        if (!this.clickPoints.has(channelId)) {
-            this.clickPoints.set(channelId, []);
+        // NORMAL LOAD: Store individual clicks
+        if (!this.currentClicks.has(channelId)) {
+            this.currentClicks.set(channelId, new Map());
         }
         
-        const points = this.clickPoints.get(channelId);
+        const channelClicks = this.currentClicks.get(channelId);
         
-        // Memory protection
-        if (points.length >= this.maxPointsPerChannel) {
-            points.shift(); // Remove oldest
+        // Enforce max points limit (drop oldest)
+        if (channelClicks.size >= CONFIG.MAX_POINTS_PER_CHANNEL) {
+            // Remove 20% oldest entries
+            const toRemove = Math.floor(channelClicks.size * 0.2);
+            const keys = Array.from(channelClicks.keys()).slice(0, toRemove);
+            keys.forEach(key => channelClicks.delete(key));
         }
         
-        points.push({ x, y, userId, timestamp });
-        
-        // Buffer for Redis (but don't block)
-        if (this.redisBuffer.length < PERFORMANCE_CONFIG.REDIS_BATCH_SIZE) {
-            this.redisBuffer.push({ channelId, userId, x, y, timestamp });
-        }
+        // Store click with timestamp
+        channelClicks.set(`${userId}_${Date.now()}_${Math.random()}`, {
+            x, y, 
+            timestamp: now,
+            userId
+        });
         
         return true;
     }
     
-    async getHeatmapData(channelId, threshold = 3) {
-        const loadLevel = this.loadMonitor.getLoadLevel();
-        
-        // Grid mode for high load
-        if ((loadLevel === 'HIGH' || loadLevel === 'EXTREME' || loadLevel === 'EMERGENCY') && 
-            this.gridAggregators.has(channelId)) {
-            const grid = this.gridAggregators.get(channelId);
-            return this.gridToClusters(grid.getHeatmap(), threshold);
-        }
-        
-        // Get points for channel
-        const points = this.clickPoints.get(channelId) || [];
-        if (points.length === 0) {
+    // Get current heatmap data
+    getHeatmapData(channelId) {
+        // Return empty if game not running
+        if (!this.gameState.isRunning) {
             return {
                 clusters: [],
                 totalClicks: 0,
                 uniqueUsers: 0,
-                mode: loadLevel
+                mode: 'STOPPED'
             };
         }
         
-        // Choose clustering algorithm based on load
-        let clusters;
-        if (loadLevel === 'LOW' && points.length < 1000) {
-            // Full sophisticated clustering at low load
-            clusters = this.sophisticatedClustering(points, threshold);
-        } else {
-            // Simplified clustering at medium load
-            clusters = this.simplifiedClustering(points, threshold);
+        // Grid mode for high load
+        if (this.gridAggregators.has(channelId)) {
+            const grid = this.gridAggregators.get(channelId);
+            const clusters = this.gridToClusters(grid.getHeatmap());
+            return {
+                clusters,
+                totalClicks: grid.total,
+                uniqueUsers: Math.floor(grid.total * 0.7), // Estimate
+                mode: 'GRID'
+            };
         }
         
-        // Get unique users
+        // Normal mode
+        const channelClicks = this.currentClicks.get(channelId);
+        if (!channelClicks || channelClicks.size === 0) {
+            return {
+                clusters: [],
+                totalClicks: 0,
+                uniqueUsers: 0,
+                mode: this.currentLoad
+            };
+        }
+        
+        // Convert to points
+        const points = Array.from(channelClicks.values());
+        const clusters = this.fastClustering(points);
         const uniqueUsers = new Set(points.map(p => p.userId)).size;
         
         return {
             clusters,
             totalClicks: points.length,
             uniqueUsers,
-            mode: loadLevel,
-            threshold
+            mode: this.currentLoad
         };
     }
     
-    // SOPHISTICATED CLUSTERING (preserved from original) - used at low load
-    sophisticatedClustering(points, threshold) {
-        if (points.length === 0) return [];
-        
-        // Use original sophisticated algorithm
-        const clusters = processClicksIntoVisualClusters(
-            points.map(p => ({ x: p.x, y: p.y })), 
-            threshold
-        );
-        
-        // Limit clusters based on load
-        const maxClusters = this.loadMonitor.getLoadLevel() === 'LOW' ? 
-            PERFORMANCE_CONFIG.MAX_CLUSTERS.LOW : 
-            PERFORMANCE_CONFIG.MAX_CLUSTERS.MEDIUM;
-            
-        return clusters.slice(0, maxClusters);
-    }
-    
-    // SIMPLIFIED CLUSTERING - used at medium load
-    simplifiedClustering(points, threshold) {
-        const gridSize = 25;
+    // Fast clustering for real-time
+    fastClustering(points) {
+        const gridSize = 20;
         const grid = {};
         
         // Grid aggregation
@@ -302,33 +257,34 @@ class AdaptiveClickEngine {
         });
         
         // Convert to clusters
+        const total = points.length;
         const clusters = Object.values(grid)
             .map(cell => ({
                 x: cell.sumX / cell.count,
                 y: cell.sumY / cell.count,
                 count: cell.count,
-                percentage: Math.round((cell.count / points.length) * 100)
+                percentage: Math.round((cell.count / total) * 100)
             }))
-            .filter(c => c.percentage >= threshold)
+            .filter(c => c.percentage >= 3)
             .sort((a, b) => b.percentage - a.percentage)
-            .slice(0, PERFORMANCE_CONFIG.MAX_CLUSTERS.MEDIUM);
+            .slice(0, 15); // Max 15 clusters
         
-        // Calculate visual sizes
+        // Add visual properties
         return clusters.map((c, i) => ({
             ...c,
-            visualSize: this.calculateVisualSize(c.percentage),
+            visualSize: Math.min(180, 40 + Math.sqrt(c.percentage) * 40),
             id: `cluster_${i}`,
             isTop: i === 0,
-            // Simplified shape analysis
             shapeType: c.percentage > 20 ? 'polygon' : 'circle',
             complexity: Math.min(0.5, c.percentage / 100),
-            preferredSides: c.percentage > 20 ? 8 : 6
+            preferredSides: 8
         }));
     }
     
-    // GRID TO CLUSTERS - used at high load
-    gridToClusters(gridData, threshold) {
+    // Grid to clusters conversion
+    gridToClusters(gridData) {
         const total = gridData.reduce((sum, cell) => sum + cell.count, 0);
+        if (total === 0) return [];
         
         return gridData
             .map(cell => ({
@@ -337,122 +293,120 @@ class AdaptiveClickEngine {
                 count: cell.count,
                 percentage: Math.round((cell.count / total) * 100)
             }))
-            .filter(c => c.percentage >= threshold)
+            .filter(c => c.percentage >= 3)
             .sort((a, b) => b.percentage - a.percentage)
-            .slice(0, PERFORMANCE_CONFIG.MAX_CLUSTERS.HIGH)
+            .slice(0, 10)
             .map((c, i) => ({
                 ...c,
-                visualSize: this.calculateVisualSize(c.percentage),
+                visualSize: Math.min(180, 40 + Math.sqrt(c.percentage) * 40),
                 id: `grid_${i}`,
                 isTop: i === 0,
-                // Basic properties for grid mode
                 shapeType: 'circle',
                 complexity: 0,
                 preferredSides: 6
             }));
     }
     
-    calculateVisualSize(percentage) {
-        const MIN_SIZE = 45;
-        const MAX_SIZE = 180;
+    // IMMEDIATE CLEAR - no delay, no processing
+    clearAll() {
+        console.log('🧹 CLEARING ALL DATA IMMEDIATELY');
+        this.currentClicks.clear();
+        this.gridAggregators.clear();
+        this.jwtCache.clear();
+        this.totalReceived = 0;
+        this.totalDropped = 0;
         
-        if (percentage >= 25) {
-            const scale = (percentage - 25) / 75;
-            return Math.round(MIN_SIZE + scale * (MAX_SIZE - MIN_SIZE));
-        } else {
-            const scale = percentage / 25;
-            return Math.round(25 + scale * (MIN_SIZE - 25));
-        }
-    }
-    
-    // Background tasks
-    startBackgroundTasks() {
-        // Flush to Redis periodically
-        setInterval(() => {
-            if (this.redisBuffer.length > 0) {
-                this.flushToRedis();
-            }
-        }, PERFORMANCE_CONFIG.REDIS_BATCH_INTERVAL);
-        
-        // Memory monitoring
-        setInterval(() => {
-            const usage = process.memoryUsage();
-            const heapMB = usage.heapUsed / 1024 / 1024;
-            
-            if (heapMB > PERFORMANCE_CONFIG.MAX_MEMORY_MB) {
-                console.log(`⚠️ Memory pressure: ${heapMB.toFixed(1)}MB - clearing old data`);
-                this.clearOldData();
-            }
-        }, 30000);
-        
-        // Clear grids periodically
-        setInterval(() => {
-            if (this.loadMonitor.getLoadLevel() !== 'HIGH' && 
-                this.loadMonitor.getLoadLevel() !== 'EXTREME') {
-                this.gridAggregators.clear();
-            }
-        }, 60000);
-    }
-    
-    async flushToRedis() {
-        if (!redis.isReady) return;
-        
-        const toFlush = this.redisBuffer.splice(0, PERFORMANCE_CONFIG.REDIS_BATCH_SIZE);
-        
-        try {
-            const pipeline = redis.pipeline();
-            const key = `clicks:batch:${Date.now()}`;
-            pipeline.set(key, JSON.stringify(toFlush), 'EX', 300); // 5 min TTL
-            await pipeline.exec();
-        } catch (error) {
-            // Silent fail to prevent crashes
-            console.log('Redis write skipped:', error.message);
-        }
-    }
-    
-    clearOldData() {
-        // Clear half of the data when memory pressure
-        for (const [channelId, points] of this.clickPoints.entries()) {
-            const halfLength = Math.floor(points.length / 2);
-            this.clickPoints.set(channelId, points.slice(halfLength));
-        }
-        
-        // Clear JWT cache
-        if (this.jwtCache.size > 2500) {
-            const keys = Array.from(this.jwtCache.keys());
-            keys.slice(0, 2500).forEach(key => this.jwtCache.delete(key));
+        // Force garbage collection if available
+        if (global.gc) {
+            global.gc();
         }
     }
     
     clearChannel(channelId) {
-        this.clickPoints.delete(channelId);
+        console.log(`🧹 Clearing channel ${channelId}`);
+        this.currentClicks.delete(channelId);
         this.gridAggregators.delete(channelId);
     }
     
-    clearAll() {
-        this.clickPoints.clear();
-        this.gridAggregators.clear();
-        this.redisBuffer = [];
+    // Cleanup old data regularly
+    startCleanupTask() {
+        setInterval(() => {
+            if (!this.gameState.isRunning) return;
+            
+            const now = Date.now();
+            const cutoff = now - CONFIG.CURRENT_WINDOW_MS;
+            
+            // Clean old clicks from all channels
+            for (const [channelId, clicks] of this.currentClicks.entries()) {
+                for (const [key, click] of clicks.entries()) {
+                    if (click.timestamp < cutoff) {
+                        clicks.delete(key);
+                    }
+                }
+                
+                // Remove empty channels
+                if (clicks.size === 0) {
+                    this.currentClicks.delete(channelId);
+                }
+            }
+            
+            // Clear grids if not in high load
+            if (this.currentLoad !== 'HIGH' && this.currentLoad !== 'EXTREME') {
+                this.gridAggregators.clear();
+            }
+            
+        }, CONFIG.CLEANUP_INTERVAL);
+    }
+    
+    // Track metrics
+    startMetricsTask() {
+        setInterval(() => {
+            const cps = this.totalReceived;
+            
+            // Determine load level
+            if (cps < 100) {
+                this.currentLoad = 'LOW';
+                this.samplingRate = CONFIG.SAMPLING_RATES.LOW;
+            } else if (cps < 1000) {
+                this.currentLoad = 'MEDIUM';
+                this.samplingRate = CONFIG.SAMPLING_RATES.MEDIUM;
+            } else if (cps < 5000) {
+                this.currentLoad = 'HIGH';
+                this.samplingRate = CONFIG.SAMPLING_RATES.HIGH;
+            } else {
+                this.currentLoad = 'EXTREME';
+                this.samplingRate = CONFIG.SAMPLING_RATES.EXTREME;
+            }
+            
+            // Log if active
+            if (cps > 0) {
+                const dropRate = this.totalDropped > 0 ? 
+                    ((this.totalDropped / (this.totalDropped + cps)) * 100).toFixed(1) : 0;
+                console.log(`📊 ${this.currentLoad}: ${cps}/s (${dropRate}% dropped, 1:${this.samplingRate})`);
+            }
+            
+            this.clicksPerSecond = cps;
+            this.totalReceived = 0;
+            this.totalDropped = 0;
+        }, 1000);
     }
     
     getStatus() {
         return {
-            load: this.loadMonitor.getLoadLevel(),
-            clicksPerSecond: this.loadMonitor.getClicksPerSecond(),
-            totalClicks: this.loadMonitor.totalClicks,
-            mode: this.loadMonitor.getLoadLevel() === 'HIGH' ? 'GRID' : 'CLUSTERING',
-            channels: this.clickPoints.size,
+            load: this.currentLoad,
+            clicksPerSecond: this.clicksPerSecond,
+            samplingRate: this.samplingRate,
+            channels: this.currentClicks.size,
             gridChannels: this.gridAggregators.size,
-            redisBuffer: this.redisBuffer.length,
-            jwtCache: this.jwtCache.size,
-            memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB'
+            totalPoints: Array.from(this.currentClicks.values())
+                .reduce((sum, channel) => sum + channel.size, 0)
         };
     }
 }
 
-// ========== GRID AGGREGATOR FOR HIGH LOAD ==========
+// ========== GRID AGGREGATOR ==========
 class GridAggregator {
-    constructor(gridSize = PERFORMANCE_CONFIG.GRID_SIZE) {
+    constructor(gridSize = CONFIG.GRID_SIZE) {
         this.gridSize = gridSize;
         this.grid = new Float32Array(gridSize * gridSize);
         this.total = 0;
@@ -491,343 +445,69 @@ class GridAggregator {
     }
 }
 
-// ========== PRESERVE ORIGINAL SOPHISTICATED CLUSTERING ==========
-// Keep all the original clustering functions for low-load scenarios
-function processClicksIntoVisualClusters(points, threshold) {
-    if (points.length === 0) return [];
-
-    const rawClusters = performSimpleDistanceClustering(points);
-    const enrichedClusters = rawClusters.map((cluster, index) => {
-        const metrics = calculateBasicClusterMetrics(cluster, points.length);
-        return {
-            id: index,
-            ...metrics,
-            points: cluster
-        };
-    });
-
-    const visuallyMergedClusters = performVisualMerging(enrichedClusters);
-    const normalizedClusters = normalizePercentages(visuallyMergedClusters, points.length);
-    const filteredClusters = normalizedClusters.filter(c => c.percentage >= threshold);
-
-    const finalClusters = filteredClusters.map((cluster, index) => {
-        const shapeAnalysis = analyzeClusterShape(cluster.points, cluster.x, cluster.y);
-        const visualSize = calculateIntelligentVisualSize(cluster, filteredClusters);
-        
-        return {
-            ...cluster,
-            ...shapeAnalysis,
-            visualSize,
-            isTop: false
-        };
-    });
-
-    finalClusters.sort((a, b) => b.percentage - a.percentage);
-    if (finalClusters.length > 0) {
-        finalClusters[0].isTop = true;
-    }
-
-    return finalClusters;
-}
-
-// Include all original clustering helper functions
-function performSimpleDistanceClustering(points) {
-    if (points.length === 0) return [];
-    
-    const clusters = [];
-    const assigned = new Set();
-    const mergeDistance = calculateMergeDistance(points);
-    
-    for (let i = 0; i < points.length; i++) {
-        if (assigned.has(i)) continue;
-        
-        const cluster = [points[i]];
-        assigned.add(i);
-        
-        for (let j = i + 1; j < points.length; j++) {
-            if (assigned.has(j)) continue;
-            
-            const distance = euclideanDistance(points[i], points[j]);
-            if (distance <= mergeDistance) {
-                cluster.push(points[j]);
-                assigned.add(j);
-            }
-        }
-        
-        clusters.push(cluster);
-    }
-    
-    return clusters;
-}
-
-function calculateMergeDistance(points) {
-    if (points.length < 2) return 0.08;
-    
-    const distances = [];
-    const sampleSize = Math.min(points.length, 100); // Limit for performance
-    
-    for (let i = 0; i < sampleSize; i++) {
-        for (let j = i + 1; j < sampleSize; j++) {
-            distances.push(euclideanDistance(points[i], points[j]));
-        }
-    }
-    
-    distances.sort((a, b) => a - b);
-    
-    if (points.length <= 3) {
-        return Math.max(0.03, Math.min(0.12, distances[Math.floor(distances.length * 0.5)] * 0.5));
-    } else if (points.length <= 20) {
-        return Math.max(0.02, Math.min(0.08, distances[Math.floor(distances.length * 0.15)] * 0.7));
-    } else {
-        return Math.max(0.015, Math.min(0.05, distances[Math.floor(distances.length * 0.1)] * 0.6));
-    }
-}
-
-function performVisualMerging(clusters) {
-    if (clusters.length <= 1) return clusters;
-    
-    const merged = [...clusters];
-    let changed = true;
-    let iterations = 0;
-    
-    while (changed && iterations < 5) { // Limit iterations for performance
-        changed = false;
-        iterations++;
-        
-        for (let i = 0; i < merged.length; i++) {
-            for (let j = i + 1; j < merged.length; j++) {
-                if (shouldMergeClusters(merged[i], merged[j])) {
-                    merged[i] = mergeTwoClusters(merged[i], merged[j]);
-                    merged.splice(j, 1);
-                    changed = true;
-                    break;
-                }
-            }
-            if (changed) break;
-        }
-    }
-    
-    return merged;
-}
-
-function shouldMergeClusters(cluster1, cluster2) {
-    const distance = euclideanDistance(cluster1, cluster2);
-    const size1 = cluster1.radius || 0.05;
-    const size2 = cluster2.radius || 0.05;
-    return distance < (size1 + size2) * 0.5;
-}
-
-function mergeTwoClusters(cluster1, cluster2) {
-    const allPoints = [...cluster1.points, ...cluster2.points];
-    const totalCount = cluster1.count + cluster2.count;
-    
-    const weight1 = cluster1.count / totalCount;
-    const weight2 = cluster2.count / totalCount;
-    
-    return {
-        ...calculateBasicClusterMetrics(allPoints, totalCount),
-        x: cluster1.x * weight1 + cluster2.x * weight2,
-        y: cluster1.y * weight1 + cluster2.y * weight2,
-        points: allPoints,
-        id: cluster1.id
-    };
-}
-
-function calculateBasicClusterMetrics(clusterPoints, totalPoints) {
-    const count = clusterPoints.length;
-    const percentage = Math.round((count / totalPoints) * 100);
-
-    const centroidX = clusterPoints.reduce((sum, p) => sum + p.x, 0) / count;
-    const centroidY = clusterPoints.reduce((sum, p) => sum + p.y, 0) / count;
-
-    const distances = clusterPoints.map(p => 
-        Math.sqrt(Math.pow(p.x - centroidX, 2) + Math.pow(p.y - centroidY, 2))
-    );
-    
-    const maxDistance = Math.max(...distances);
-    const avgDistance = distances.reduce((sum, d) => sum + d, 0) / distances.length;
-
-    return {
-        x: centroidX,
-        y: centroidY,
-        count,
-        percentage,
-        radius: maxDistance,
-        spread: avgDistance,
-        density: count / (Math.PI * Math.pow(maxDistance || 0.001, 2))
-    };
-}
-
-function analyzeClusterShape(points, centroidX, centroidY) {
-    if (points.length === 1) {
-        return {
-            shapeType: 'circle',
-            circularity: 1.0,
-            eccentricity: 0,
-            irregularity: 0,
-            preferredSides: 8,
-            complexity: 0
-        };
-    }
-
-    const distances = points.map(p => 
-        Math.sqrt(Math.pow(p.x - centroidX, 2) + Math.pow(p.y - centroidY, 2))
-    );
-    
-    const maxDistance = Math.max(...distances);
-    const minDistance = Math.min(...distances);
-    const avgDistance = distances.reduce((sum, d) => sum + d, 0) / distances.length;
-    
-    const circularity = minDistance / maxDistance;
-    const irregularity = Math.sqrt(
-        distances.reduce((sum, d) => sum + Math.pow(d - avgDistance, 2), 0) / distances.length
-    ) / avgDistance;
-    
-    const complexity = Math.min(1, irregularity * 2 + (1 - circularity) * 0.5);
-    const preferredSides = Math.max(6, Math.min(12, Math.round(6 + complexity * 6)));
-    
-    return {
-        shapeType: complexity > 0.4 ? 'polygon' : 'circle',
-        circularity,
-        eccentricity: 1 - circularity,
-        irregularity,
-        preferredSides,
-        complexity
-    };
-}
-
-function calculateIntelligentVisualSize(cluster, allClusters) {
-    const percentage = cluster.percentage || 0;
-    const density = cluster.density || 1;
-    const spread = cluster.spread || 0.05;
-
-    const MIN_SIZE = 45;
-    const MAX_SIZE = 180;
-    
-    let baseSize;
-    if (percentage >= 25) {
-        const scale = (percentage - 25) / 75;
-        baseSize = MIN_SIZE + scale * (MAX_SIZE - MIN_SIZE);
-    } else {
-        const scale = percentage / 25;
-        baseSize = 25 + scale * (MIN_SIZE - 25);
-    }
-
-    const densityAdjustment = Math.max(0.8, Math.min(1.3, Math.pow(density, 0.15)));
-    const spreadAdjustment = Math.min(10, spread * 100);
-
-    return Math.round(baseSize * densityAdjustment + spreadAdjustment);
-}
-
-function normalizePercentages(clusters, totalPoints) {
-    if (clusters.length === 0) return clusters;
-    
-    const normalized = clusters.map(cluster => ({
-        ...cluster,
-        percentage: Math.round((cluster.count / totalPoints) * 100)
-    }));
-    
-    const currentTotal = normalized.reduce((sum, c) => sum + c.percentage, 0);
-    const difference = 100 - currentTotal;
-    
-    if (Math.abs(difference) >= 2 && normalized.length > 0) {
-        normalized[0].percentage += difference;
-    }
-    
-    return normalized;
-}
-
-function euclideanDistance(p1, p2) {
-    return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
-}
-
-// ========== REDIS SETUP ==========
+// ========== REDIS (OPTIONAL) ==========
 const redis = createClient({
     url: process.env.REDIS_URL,
     socket: {
-        connectTimeout: 2000,
+        connectTimeout: 1000,
         lazyConnect: true,
-        reconnectStrategy: (retries) => {
-            if (retries > 3) return null;
-            return Math.min(retries * 100, 1000);
-        }
+        reconnectStrategy: () => null // Don't retry
     }
 });
 
-redis.on('error', (err) => console.log('Redis error:', err.message));
-
-async function connectRedis() {
-    try {
-        await redis.connect();
-        console.log('✅ Redis connected');
-    } catch (error) {
-        console.log('⚠️ Redis unavailable - continuing without persistence');
-    }
-}
-
-connectRedis();
+redis.on('error', () => {}); // Ignore Redis errors
+redis.connect().catch(() => console.log('📴 Redis unavailable - memory only mode'));
 
 // ========== INITIALIZE ==========
-const clickEngine = new AdaptiveClickEngine();
-const gameState = {
-    running: true,
-    
-    async setRunning(value) {
-        this.running = value;
-        if (redis.isReady) {
-            await redis.set('game:running', value.toString()).catch(() => {});
-        }
-    },
-    
-    async isRunning() {
-        return this.running;
-    }
-};
+const gameState = new GameStateManager();
+const clickEngine = new RealTimeClickEngine(gameState);
 
 // ========== EXPRESS APP ==========
 const app = express();
 
 app.use(cors({
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-    credentials: false
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json({ limit: '10kb' }));
 
-// Rate limiting middleware for click endpoint
-let requestCount = 0;
-setInterval(() => { requestCount = 0; }, 1000);
+// Request tracking
+let requestsPerSecond = 0;
+setInterval(() => { requestsPerSecond = 0; }, 1000);
 
-const rateLimit = (req, res, next) => {
-    requestCount++;
-    if (requestCount > 10000) {
-        return res.status(429).json({ error: 'Rate limit exceeded' });
-    }
-    next();
-};
+// ========== ENDPOINTS ==========
 
-// HEALTH endpoint
+// HEALTH
 app.get('/health', (req, res) => {
     const status = clickEngine.getStatus();
+    const state = gameState.getState();
+    
     res.json({
         status: 'ok',
-        running: gameState.running,
+        ...state,
+        ...status,
         timestamp: Date.now(),
-        version: '8.0.0-balanced',
-        instanceId: INSTANCE_ID,
-        performance: status
+        instanceId: INSTANCE_ID
     });
 });
 
-// CLICK endpoint with protection
-app.post('/click', rateLimit, async (req, res) => {
-    // Quick validation
-    if (!gameState.running) {
+// CLICK - Real-time processing
+app.post('/click', (req, res) => {
+    requestsPerSecond++;
+    
+    // Rate limit
+    if (requestsPerSecond > CONFIG.MAX_CLICKS_PER_SECOND) {
+        return res.status(429).json({ error: 'Rate limit' });
+    }
+    
+    // Quick rejection if not running
+    if (!gameState.isRunning) {
         return res.status(400).json({ error: 'Not running' });
     }
     
+    // Token verification
     const token = (req.headers.authorization || '').replace('Bearer ', '');
     if (!token) {
         return res.status(401).json({ error: 'No token' });
@@ -838,73 +518,172 @@ app.post('/click', rateLimit, async (req, res) => {
         return res.status(401).json({ error: 'Invalid token' });
     }
     
+    // Validate coordinates
     const { x, y } = req.body;
     if (typeof x !== 'number' || typeof y !== 'number' ||
         x < 0 || x > 1 || y < 0 || y > 1) {
         return res.status(400).json({ error: 'Invalid coordinates' });
     }
     
+    // Process click
     const accepted = clickEngine.addClick(
         payload.channel_id,
         payload.user_id || payload.opaque_user_id,
-        x, y,
-        Date.now()
+        x, y
     );
     
     res.json({ 
         success: true,
-        accepted,
-        status: accepted ? 'recorded' : 'sampled'
+        accepted
     });
 });
 
-// HEATMAP endpoint
-app.get('/heatmap', async (req, res) => {
+// HEATMAP
+app.get('/heatmap', (req, res) => {
     const channelId = req.query.channel;
     const threshold = parseInt(req.query.threshold) || 3;
     
-    try {
-        const data = await clickEngine.getHeatmapData(channelId, threshold);
-        
-        res.json({
-            running: gameState.running,
-            clusters: data.clusters,
-            totalClicks: data.totalClicks,
-            uniqueUsers: data.uniqueUsers,
-            coverage: Math.min(100, data.clusters.length * 10),
-            threshold,
-            mode: data.mode,
-            lastUpdate: Date.now(),
-            instanceId: INSTANCE_ID
-        });
-    } catch (error) {
-        console.error('Heatmap error:', error);
-        res.status(500).json({ error: 'Failed to get heatmap' });
-    }
-});
-
-// Control endpoints
-app.post('/start', async (req, res) => {
-    await gameState.setRunning(true);
-    clickEngine.clearAll();
-    res.json({ success: true, status: 'started', running: true });
-});
-
-app.post('/stop', async (req, res) => {
-    await gameState.setRunning(false);
-    res.json({ success: true, status: 'stopped', running: false });
-});
-
-app.post('/reset', (req, res) => {
-    const channelId = req.headers['x-channel-id'] || req.body.channelId;
+    const data = clickEngine.getHeatmapData(channelId);
+    const state = gameState.getState();
     
-    if (channelId) {
-        clickEngine.clearChannel(channelId);
-    } else {
+    res.json({
+        running: state.running,
+        clusters: data.clusters,
+        totalClicks: data.totalClicks,
+        uniqueUsers: data.uniqueUsers,
+        mode: data.mode,
+        threshold,
+        version: state.version,
+        timestamp: Date.now()
+    });
+});
+
+// START - Clear everything and start fresh
+app.post('/start', async (req, res) => {
+    console.log('▶️ START COMMAND RECEIVED');
+    
+    // Clear EVERYTHING first
+    if (CONFIG.CLEAR_ON_START) {
+        clickEngine.clearAll();
+        
+        // Clear Redis if available
+        if (redis.isReady) {
+            try {
+                await redis.flushDb();
+            } catch {}
+        }
+    }
+    
+    // Start game
+    const version = gameState.start();
+    
+    // Broadcast immediate update
+    broadcastUpdate('all', {
+        running: true,
+        clusters: [],
+        totalClicks: 0,
+        uniqueUsers: 0,
+        action: 'start',
+        version,
+        timestamp: Date.now()
+    });
+    
+    res.json({ 
+        success: true, 
+        status: 'started',
+        running: true,
+        version
+    });
+});
+
+// STOP - Immediate halt
+app.post('/stop', async (req, res) => {
+    console.log('⏹️ STOP COMMAND RECEIVED');
+    
+    // Stop game immediately
+    const version = gameState.stop();
+    
+    // Get final state before clearing
+    const finalData = clickEngine.getHeatmapData();
+    
+    // Clear all processing
+    if (CONFIG.HARD_STOP_ENABLED) {
         clickEngine.clearAll();
     }
     
-    res.json({ success: true, status: 'reset' });
+    // Broadcast final state then clear
+    broadcastUpdate('all', {
+        running: false,
+        clusters: finalData.clusters,
+        totalClicks: finalData.totalClicks,
+        uniqueUsers: finalData.uniqueUsers,
+        action: 'stop',
+        version,
+        timestamp: Date.now()
+    });
+    
+    // Send empty state after short delay
+    setTimeout(() => {
+        broadcastUpdate('all', {
+            running: false,
+            clusters: [],
+            totalClicks: 0,
+            uniqueUsers: 0,
+            action: 'stop_clear',
+            version,
+            timestamp: Date.now()
+        });
+    }, 1000);
+    
+    res.json({ 
+        success: true, 
+        status: 'stopped',
+        running: false,
+        version
+    });
+});
+
+// RESET - Clear everything
+app.post('/reset', async (req, res) => {
+    console.log('🗑️ RESET COMMAND RECEIVED');
+    
+    const channelId = req.headers['x-channel-id'] || req.body.channelId;
+    
+    // Clear data
+    if (CONFIG.CLEAR_ON_RESET) {
+        if (channelId) {
+            clickEngine.clearChannel(channelId);
+        } else {
+            clickEngine.clearAll();
+            
+            // Clear Redis if available
+            if (redis.isReady) {
+                try {
+                    await redis.flushDb();
+                } catch {}
+            }
+        }
+    }
+    
+    const version = gameState.reset();
+    const state = gameState.getState();
+    
+    // Broadcast empty state
+    broadcastUpdate(channelId || 'all', {
+        running: state.running,
+        clusters: [],
+        totalClicks: 0,
+        uniqueUsers: 0,
+        action: 'reset',
+        version,
+        timestamp: Date.now()
+    });
+    
+    res.json({ 
+        success: true, 
+        status: 'reset',
+        version
+    });
 });
 
 // ========== WEBSOCKET ==========
@@ -912,109 +691,123 @@ const httpServer = createServer(app);
 const wss = new WebSocketServer({
     server: httpServer,
     path: '/ws',
-    perMessageDeflate: false,
-    maxPayload: 128 * 1024
+    perMessageDeflate: false
 });
 
-const connectedClients = new Map();
+const wsClients = new Map(); // channelId -> Set<ws>
 
-// Broadcast with throttling
-class BroadcastManager {
-    constructor() {
-        this.lastBroadcast = new Map();
-    }
+// Broadcast helper
+function broadcastUpdate(channelId, data) {
+    const message = JSON.stringify(data);
     
-    async broadcast() {
-        const now = Date.now();
-        
-        for (const [channelId, clients] of connectedClients.entries()) {
-            const last = this.lastBroadcast.get(channelId) || 0;
-            
-            if (now - last < PERFORMANCE_CONFIG.BROADCAST_INTERVAL) continue;
-            
-            this.lastBroadcast.set(channelId, now);
-            
-            const data = await clickEngine.getHeatmapData(channelId);
-            const message = JSON.stringify({
-                running: gameState.running,
-                clusters: data.clusters,
-                totalClicks: data.totalClicks,
-                uniqueUsers: data.uniqueUsers,
-                mode: data.mode,
-                timestamp: now
-            });
-            
+    if (channelId === 'all') {
+        // Broadcast to all channels
+        for (const clients of wsClients.values()) {
             clients.forEach(ws => {
                 if (ws.readyState === WebSocket.OPEN) {
-                    try {
-                        ws.send(message);
-                    } catch {
-                        clients.delete(ws);
-                    }
+                    try { ws.send(message); } catch {}
+                }
+            });
+        }
+    } else {
+        // Broadcast to specific channel
+        const clients = wsClients.get(channelId);
+        if (clients) {
+            clients.forEach(ws => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    try { ws.send(message); } catch {}
                 }
             });
         }
     }
 }
 
-const broadcaster = new BroadcastManager();
-
-// Periodic broadcast
+// Periodic broadcast (only if running)
 setInterval(() => {
-    broadcaster.broadcast();
-}, PERFORMANCE_CONFIG.BROADCAST_INTERVAL);
+    if (!gameState.isRunning) return;
+    
+    for (const [channelId, clients] of wsClients.entries()) {
+        if (clients.size === 0) continue;
+        
+        const data = clickEngine.getHeatmapData(channelId);
+        const state = gameState.getState();
+        
+        const message = JSON.stringify({
+            running: state.running,
+            clusters: data.clusters,
+            totalClicks: data.totalClicks,
+            uniqueUsers: data.uniqueUsers,
+            mode: data.mode,
+            version: state.version,
+            timestamp: Date.now()
+        });
+        
+        clients.forEach(ws => {
+            if (ws.readyState === WebSocket.OPEN) {
+                try { ws.send(message); } catch {}
+            }
+        });
+    }
+}, CONFIG.BROADCAST_INTERVAL);
 
+// WebSocket connections
 wss.on('connection', (ws, req) => {
     const channelId = req.url?.replace('/ws/', '').split('?')[0] || 'global';
     
-    if (!connectedClients.has(channelId)) {
-        connectedClients.set(channelId, new Set());
+    // Add to channel
+    if (!wsClients.has(channelId)) {
+        wsClients.set(channelId, new Set());
     }
-    connectedClients.get(channelId).add(ws);
+    wsClients.get(channelId).add(ws);
     
+    // Send current state
+    const data = clickEngine.getHeatmapData(channelId);
+    const state = gameState.getState();
+    
+    ws.send(JSON.stringify({
+        running: state.running,
+        clusters: data.clusters,
+        totalClicks: data.totalClicks,
+        uniqueUsers: data.uniqueUsers,
+        mode: data.mode,
+        version: state.version,
+        timestamp: Date.now()
+    }));
+    
+    // Cleanup on close
     ws.on('close', () => {
-        const clients = connectedClients.get(channelId);
+        const clients = wsClients.get(channelId);
         if (clients) {
             clients.delete(ws);
             if (clients.size === 0) {
-                connectedClients.delete(channelId);
+                wsClients.delete(channelId);
             }
         }
     });
     
     ws.on('error', () => {});
-    
-    // Send initial data
-    clickEngine.getHeatmapData(channelId).then(data => {
-        ws.send(JSON.stringify({
-            running: gameState.running,
-            clusters: data.clusters,
-            totalClicks: data.totalClicks,
-            uniqueUsers: data.uniqueUsers,
-            mode: data.mode,
-            timestamp: Date.now()
-        }));
-    });
 });
 
 // ========== START SERVER ==========
 httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 ClickMap Server v8.0.0 BALANCED');
+    console.log('⚡ REAL-TIME ClickMap Server v9.0.0');
     console.log(`📡 Port: ${PORT}`);
-    console.log('⚖️ Performance Mode:');
-    console.log('  < 100/s: Full sophisticated clustering');
-    console.log('  100-1000/s: Simplified clustering');
-    console.log('  1000-10000/s: Grid aggregation');
-    console.log('  > 10000/s: Emergency mode');
-    console.log(`🔄 Broadcast: Every ${PERFORMANCE_CONFIG.BROADCAST_INTERVAL}ms`);
-    console.log(`💾 Max Memory: ${PERFORMANCE_CONFIG.MAX_MEMORY_MB}MB`);
+    console.log('🎯 Features:');
+    console.log('  • Never plays catch-up (drops old clicks)');
+    console.log('  • Immediate stop/start/reset');
+    console.log('  • Current data only (10s window)');
+    console.log('  • Auto-cleanup every 2s');
+    console.log('  • Hard stops enabled');
+    console.log(`🔄 Broadcast: ${CONFIG.BROADCAST_INTERVAL}ms`);
+    console.log(`⏱️ Max click age: ${CONFIG.MAX_CLICK_AGE_MS}ms`);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
     console.log('Shutting down...');
+    gameState.stop();
+    clickEngine.clearAll();
     httpServer.close(() => {
-        redis.quit();
         process.exit(0);
     });
 });

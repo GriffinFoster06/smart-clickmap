@@ -310,6 +310,314 @@ class PredictivePerformanceMonitor {
     }
 }
 
+// Add this BEFORE your existing IntelligentClickEngine class in backend/server.js
+
+// ========== CRASH PREVENTION SYSTEM ==========
+class CrashPrevention {
+    constructor() {
+        this.memoryThresholds = {
+            warning: 0.75,    // 75% memory usage
+            critical: 0.85,   // 85% memory usage
+            emergency: 0.95   // 95% memory usage
+        };
+        
+        this.loadThresholds = {
+            moderate: 5000,   // 5k CPS
+            high: 10000,      // 10k CPS
+            extreme: 20000,   // 20k CPS
+            maximum: 50000    // 50k CPS absolute limit
+        };
+        
+        this.emergencyMode = false;
+        this.lastGC = 0;
+        this.requestQueue = [];
+        this.maxQueueSize = 10000;
+        
+        this.startMonitoring();
+    }
+    
+    startMonitoring() {
+        // Memory monitoring every 2 seconds
+        setInterval(() => {
+            this.checkMemoryPressure();
+        }, 2000);
+        
+        // Load monitoring every second
+        setInterval(() => {
+            this.processQueue();
+        }, 1000);
+        
+        // Emergency cleanup every 30 seconds
+        setInterval(() => {
+            this.emergencyCleanup();
+        }, 30000);
+        
+        console.log('🛡️ Crash prevention system initialized');
+    }
+    
+    checkMemoryPressure() {
+        const memUsage = process.memoryUsage();
+        const memoryRatio = memUsage.heapUsed / memUsage.heapTotal;
+        
+        if (memoryRatio > this.memoryThresholds.emergency) {
+            console.log('🚨 EMERGENCY MEMORY PRESSURE - Activating extreme measures');
+            this.emergencyMode = true;
+            this.forceGarbageCollection();
+            this.clearNonEssentialData();
+        } else if (memoryRatio > this.memoryThresholds.critical) {
+            console.log('⚠️ Critical memory pressure - Aggressive cleanup');
+            this.emergencyMode = true;
+            this.forceGarbageCollection();
+        } else if (memoryRatio > this.memoryThresholds.warning) {
+            console.log('⚠️ Memory pressure detected - Preventive cleanup');
+            this.emergencyMode = false;
+            this.preventiveCleanup();
+        } else {
+            this.emergencyMode = false;
+        }
+    }
+    
+    forceGarbageCollection() {
+        const now = Date.now();
+        if (now - this.lastGC > 5000) { // Don't GC more than once per 5 seconds
+            this.lastGC = now;
+            if (global.gc) {
+                global.gc();
+                console.log('🧹 Forced garbage collection');
+            }
+        }
+    }
+    
+    preventiveCleanup() {
+        // Clear old data from click engine
+        if (intelligentClickEngine) {
+            intelligentClickEngine.predictiveCleanup();
+        }
+    }
+    
+    clearNonEssentialData() {
+        // Emergency data clearing
+        if (intelligentClickEngine) {
+            console.log('🚨 Emergency: Clearing non-essential data');
+            
+            // Clear old clusters
+            const cutoff = Date.now() - 60000; // Keep only last 60 seconds
+            for (const [channelId, data] of intelligentClickEngine.channelData.entries()) {
+                if (data.lastUpdate < cutoff) {
+                    intelligentClickEngine.channelData.delete(channelId);
+                }
+            }
+            
+            // Clear caches
+            intelligentClickEngine.jwtCache.clear(0.7); // Clear 70%
+            intelligentClickEngine.clusterCache.clear(0.8); // Clear 80%
+        }
+    }
+    
+    emergencyCleanup() {
+        if (this.emergencyMode) {
+            console.log('🧹 Emergency cleanup cycle');
+            this.clearNonEssentialData();
+            this.forceGarbageCollection();
+        }
+    }
+    
+    shouldAcceptRequest(currentCPS) {
+        // Rate limiting based on current load
+        if (this.emergencyMode) {
+            return currentCPS < this.loadThresholds.moderate; // Only accept 5k CPS in emergency
+        }
+        
+        if (currentCPS > this.loadThresholds.maximum) {
+            console.log(`🚨 LOAD LIMIT EXCEEDED: ${currentCPS} CPS > ${this.loadThresholds.maximum} CPS`);
+            return false;
+        }
+        
+        return true;
+    }
+    
+    addToQueue(request) {
+        if (this.requestQueue.length >= this.maxQueueSize) {
+            // Remove oldest requests
+            this.requestQueue = this.requestQueue.slice(-Math.floor(this.maxQueueSize * 0.8));
+        }
+        
+        this.requestQueue.push({
+            ...request,
+            timestamp: Date.now()
+        });
+    }
+    
+    processQueue() {
+        if (this.requestQueue.length === 0) return;
+        
+        const batchSize = this.emergencyMode ? 50 : 200;
+        const batch = this.requestQueue.splice(0, batchSize);
+        
+        batch.forEach(request => {
+            try {
+                intelligentClickEngine.addClick(
+                    request.channelId,
+                    request.userId,
+                    request.x,
+                    request.y
+                );
+            } catch (error) {
+                console.error('Queue processing error:', error);
+            }
+        });
+        
+        if (batch.length > 0) {
+            console.log(`🔄 Processed ${batch.length} queued requests (${this.requestQueue.length} remaining)`);
+        }
+    }
+    
+    getStatus() {
+        const memUsage = process.memoryUsage();
+        return {
+            emergencyMode: this.emergencyMode,
+            memoryUsage: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100),
+            queueSize: this.requestQueue.length,
+            maxQueueSize: this.maxQueueSize,
+            lastGC: this.lastGC
+        };
+    }
+}
+
+// Initialize crash prevention
+const crashPrevention = new CrashPrevention();
+
+// ========== ENHANCED INTELLIGENT MONITOR WITH CRASH PREVENTION ==========
+// Modify your PredictivePerformanceMonitor class to include this method:
+
+// Add this method to your existing PredictivePerformanceMonitor class:
+PredictivePerformanceMonitor.prototype.recordClickWithLoadCheck = function() {
+    const currentCPS = this.getCurrentCPS();
+    
+    // Check if we should accept this click
+    if (!crashPrevention.shouldAcceptRequest(currentCPS)) {
+        return false; // Reject the click due to load
+    }
+    
+    this.recordClick();
+    return true;
+};
+
+// ========== ENHANCED TEST ENDPOINTS WITH CRASH PREVENTION ==========
+// Replace your test-click endpoint with this crash-protected version:
+
+app.post('/test-click', async (req, res) => {
+    const startTime = Date.now();
+    
+    try {
+        if (!await intelligentGameState.isRunning()) {
+            return res.status(400).json({ 
+                error: 'Game not running - start session first',
+                hint: 'Use POST /start to begin session'
+            });
+        }
+        
+        // Check system status
+        const crashStatus = crashPrevention.getStatus();
+        const currentCPS = intelligentMonitor.getCurrentCPS();
+        
+        // Emergency load shedding
+        if (crashStatus.emergencyMode && Math.random() > 0.3) {
+            return res.status(503).json({ 
+                error: 'System overloaded - request dropped',
+                emergencyMode: true,
+                currentCPS: currentCPS,
+                retryAfter: 1
+            });
+        }
+        
+        // Validate input
+        const { x = Math.random(), y = Math.random(), channelId = 'load-test-channel', userId } = req.body;
+        
+        if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || x > 1 || y < 0 || y > 1) {
+            return res.status(400).json({ error: 'Invalid coordinates (must be 0-1 range)' });
+        }
+        
+        const testUserId = userId || `load-test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        let accepted = false;
+        
+        // Try to process immediately if load is manageable
+        if (currentCPS < 15000 && !crashStatus.emergencyMode) {
+            accepted = intelligentMonitor.recordClickWithLoadCheck();
+            if (accepted) {
+                intelligentClickEngine.addClick(channelId, testUserId, x, y);
+            }
+        } else {
+            // Queue for later processing if overloaded
+            crashPrevention.addToQueue({
+                channelId,
+                userId: testUserId,
+                x,
+                y
+            });
+            accepted = true; // Accept but queue
+        }
+        
+        const intelligence = intelligentMonitor.getIntelligenceStats();
+        const responseTime = Date.now() - startTime;
+        
+        // Log high-load situations
+        if (currentCPS > 10000) {
+            console.log(`🔥 HIGH LOAD: ${currentCPS} CPS, Tier: ${intelligence.currentTier}, Emergency: ${crashStatus.emergencyMode}`);
+        }
+        
+        res.json({
+            success: true,
+            accepted,
+            queued: currentCPS >= 15000,
+            tier: intelligence.currentTier,
+            predicted: intelligence.predictedCPS,
+            currentCPS: intelligence.currentCPS,
+            confidence: intelligence.confidence,
+            emergencyMode: crashStatus.emergencyMode,
+            queueSize: crashStatus.queueSize,
+            memoryUsage: crashStatus.memoryUsage,
+            instanceId: INSTANCE_ID,
+            testMode: true,
+            coordinates: { x, y },
+            userId: testUserId,
+            responseTime: responseTime
+        });
+        
+    } catch (error) {
+        console.error('Test click error:', error);
+        
+        // Don't crash on individual click errors
+        res.status(500).json({
+            success: false,
+            error: 'Click processing failed',
+            message: error.message,
+            emergencyMode: crashPrevention.emergencyMode
+        });
+    }
+});
+
+// Enhanced system status endpoint
+app.get('/test-system-status', (req, res) => {
+    const crashStatus = crashPrevention.getStatus();
+    const intelligence = intelligentMonitor.getIntelligenceStats();
+    const memUsage = process.memoryUsage();
+    
+    res.json({
+        crashPrevention: crashStatus,
+        intelligence: intelligence,
+        memory: {
+            used: Math.round(memUsage.heapUsed / 1024 / 1024),
+            total: Math.round(memUsage.heapTotal / 1024 / 1024),
+            external: Math.round(memUsage.external / 1024 / 1024),
+            rss: Math.round(memUsage.rss / 1024 / 1024)
+        },
+        uptime: Math.round(process.uptime()),
+        timestamp: Date.now()
+    });
+});
+
 // ========== INTELLIGENT CLICK ENGINE ==========
 class IntelligentClickEngine {
     constructor(performanceMonitor) {
@@ -986,6 +1294,9 @@ const intelligentMonitor = new PredictivePerformanceMonitor();
 const intelligentClickEngine = new IntelligentClickEngine(intelligentMonitor);
 
 // ========== REDIS SETUP ==========
+// Replace the Redis setup section in your backend/server.js with this:
+
+// ========== REDIS SETUP WITH PROPER ERROR HANDLING ==========
 const redis = createClient({
     url: process.env.REDIS_URL,
     socket: {
@@ -996,8 +1307,20 @@ const redis = createClient({
 });
 
 redis.on('error', (err) => console.log('Redis error:', err.message));
-redis.connect().catch(() => console.log('Redis unavailable - local fallback'));
 
+// Initialize Redis with proper fallback
+let redisReady = false;
+redis.connect()
+    .then(() => {
+        redisReady = true;
+        console.log('✅ Redis connected successfully');
+    })
+    .catch((err) => {
+        console.log('⚠️ Redis unavailable - using local fallback mode');
+        redisReady = false;
+    });
+
+// Modified IntelligentGameState class with proper Redis handling
 class IntelligentGameState {
     constructor(redis, instanceId) {
         this.redis = redis;
@@ -1008,14 +1331,14 @@ class IntelligentGameState {
     }
     
     async isRunning() {
-        if (this.redis.isReady) {
+        if (redisReady && this.redis.isReady) {
             try {
                 const state = await this.redis.get(this.key);
                 if (state) {
                     this.cachedState = JSON.parse(state);
                 }
             } catch (error) {
-                console.log('State check failed:', error.message);
+                console.log('Redis state check failed:', error.message);
             }
         }
         return this.cachedState.running;
@@ -1026,14 +1349,16 @@ class IntelligentGameState {
         const state = { running: true, version, startedBy: this.instanceId, startTime: Date.now() };
         this.cachedState = state;
         
-        if (this.redis.isReady) {
+        if (redisReady && this.redis.isReady) {
             try {
-                await this.redis.setex(this.key, 900, JSON.stringify(state));
+                await this.redis.setEx(this.key, 900, JSON.stringify(state));
                 await this.redis.publish(this.commandsChannel, JSON.stringify({ action: 'start', ...state }));
                 console.log(`🧠 Intelligent game started by ${this.instanceId}`);
             } catch (error) {
                 console.log('Redis start failed:', error.message);
             }
+        } else {
+            console.log(`🧠 Local game started by ${this.instanceId} (Redis unavailable)`);
         }
         return version;
     }
@@ -1043,21 +1368,23 @@ class IntelligentGameState {
         const state = { running: false, version, stoppedBy: this.instanceId, stopTime: Date.now() };
         this.cachedState = state;
         
-        if (this.redis.isReady) {
+        if (redisReady && this.redis.isReady) {
             try {
-                await this.redis.setex(this.key, 60, JSON.stringify(state));
+                await this.redis.setEx(this.key, 60, JSON.stringify(state));
                 await this.redis.publish(this.commandsChannel, JSON.stringify({ action: 'stop', ...state }));
                 console.log(`🧠 Intelligent game stopped by ${this.instanceId}`);
             } catch (error) {
                 console.log('Redis stop failed:', error.message);
             }
+        } else {
+            console.log(`🧠 Local game stopped by ${this.instanceId} (Redis unavailable)`);
         }
         return version;
     }
     
     async reset() {
         const version = Date.now();
-        if (this.redis.isReady) {
+        if (redisReady && this.redis.isReady) {
             try {
                 await this.redis.publish(this.commandsChannel, JSON.stringify({
                     action: 'reset', version, resetBy: this.instanceId, resetTime: Date.now()
@@ -1066,6 +1393,8 @@ class IntelligentGameState {
             } catch (error) {
                 console.log('Redis reset failed:', error.message);
             }
+        } else {
+            console.log(`🧠 Local reset by ${this.instanceId} (Redis unavailable)`);
         }
         return version;
     }
@@ -1210,97 +1539,180 @@ app.get('/intelligence', (req, res) => {
 // =============================================================================
 
 // Test click endpoint for high-performance load testing (bypasses Twitch auth)
-app.post('/test-click', async (req, res) => {
-    console.log(`🧪 Load test click received`);
-    
-    if (!await intelligentGameState.isRunning()) {
-        return res.status(400).json({ 
-            error: 'Game not running - start session first',
-            hint: 'Use POST /start to begin session'
-        });
-    }
-    
-    const { x = Math.random(), y = Math.random(), channelId = 'load-test-channel', userId } = req.body;
-    
-    // Validate coordinates
-    if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || x > 1 || y < 0 || y > 1) {
-        return res.status(400).json({ error: 'Invalid coordinates (must be 0-1 range)' });
-    }
-    
-    // Generate unique user ID for load testing
-    const testUserId = userId || `load-test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    
-    // Add the click using the intelligent engine
-    const accepted = intelligentClickEngine.addClick(
-        channelId,
-        testUserId,
-        x, y
-    );
-    
-    const intelligence = intelligentMonitor.getIntelligenceStats();
-    
-    res.json({
-        success: true,
-        accepted,
-        tier: intelligence.currentTier,
-        predicted: intelligence.predictedCPS,
-        confidence: intelligence.confidence,
-        instanceId: INSTANCE_ID,
-        testMode: true,
-        coordinates: { x, y },
-        userId: testUserId
-    });
-});
+// Replace your test-click endpoint in backend/server.js with this improved version:
 
-// Batch test clicks endpoint for ultra-high performance testing
-app.post('/test-batch-clicks', async (req, res) => {
-    console.log(`🧪 Batch test clicks received`);
+// Enhanced test click endpoint that properly feeds the overlay
+app.post('/test-click', async (req, res) => {
+    const startTime = Date.now();
     
-    if (!await intelligentGameState.isRunning()) {
-        return res.status(400).json({ 
-            error: 'Game not running - start session first'
-        });
-    }
-    
-    const { clicks = [], channelId = 'load-test-channel' } = req.body;
-    
-    if (!Array.isArray(clicks) || clicks.length === 0) {
-        return res.status(400).json({ error: 'No clicks provided' });
-    }
-    
-    if (clicks.length > 1000) {
-        return res.status(400).json({ error: 'Too many clicks in batch (max 1000)' });
-    }
-    
-    let processed = 0;
-    let accepted = 0;
-    
-    for (const click of clicks) {
-        const { x = Math.random(), y = Math.random(), userId } = click;
+    try {
+        if (!await intelligentGameState.isRunning()) {
+            return res.status(400).json({ 
+                error: 'Game not running - start session first',
+                hint: 'Use POST /start to begin session'
+            });
+        }
+        
+        const { x = Math.random(), y = Math.random(), channelId = 'load-test-channel', userId } = req.body;
         
         // Validate coordinates
-        if (typeof x === 'number' && typeof y === 'number' && x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-            const testUserId = userId || `batch-test-${Date.now()}-${processed}`;
-            const clickAccepted = intelligentClickEngine.addClick(channelId, testUserId, x, y);
-            if (clickAccepted) accepted++;
-            processed++;
+        if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || x > 1 || y < 0 || y > 1) {
+            return res.status(400).json({ error: 'Invalid coordinates (must be 0-1 range)' });
         }
+        
+        // Generate unique user ID for load testing
+        const testUserId = userId || `load-test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        // IMPORTANT: Add the click using the same path as real clicks
+        const accepted = intelligentClickEngine.addClick(channelId, testUserId, x, y);
+        
+        const intelligence = intelligentMonitor.getIntelligenceStats();
+        const responseTime = Date.now() - startTime;
+        
+        console.log(`🧪 Test click: (${x.toFixed(3)}, ${y.toFixed(3)}) -> Tier: ${intelligence.currentTier}, CPS: ${intelligence.currentCPS}`);
+        
+        res.json({
+            success: true,
+            accepted,
+            tier: intelligence.currentTier,
+            predicted: intelligence.predictedCPS,
+            currentCPS: intelligence.currentCPS,
+            confidence: intelligence.confidence,
+            instanceId: INSTANCE_ID,
+            testMode: true,
+            coordinates: { x, y },
+            userId: testUserId,
+            responseTime: responseTime
+        });
+        
+    } catch (error) {
+        console.error('Test click error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            message: error.message
+        });
     }
-    
-    const intelligence = intelligentMonitor.getIntelligenceStats();
-    
-    res.json({
-        success: true,
-        processed,
-        accepted,
-        tier: intelligence.currentTier,
-        predicted: intelligence.predictedCPS,
-        confidence: intelligence.confidence,
-        instanceId: INSTANCE_ID,
-        batchMode: true
-    });
 });
 
+// Enhanced batch clicks endpoint with better error handling
+app.post('/test-batch-clicks', async (req, res) => {
+    const startTime = Date.now();
+    
+    try {
+        if (!await intelligentGameState.isRunning()) {
+            return res.status(400).json({ 
+                error: 'Game not running - start session first'
+            });
+        }
+        
+        const { clicks = [], channelId = 'load-test-channel' } = req.body;
+        
+        if (!Array.isArray(clicks) || clicks.length === 0) {
+            return res.status(400).json({ error: 'No clicks provided' });
+        }
+        
+        // Limit batch size to prevent crashes
+        const maxBatchSize = 500; // Reduced from 1000
+        if (clicks.length > maxBatchSize) {
+            return res.status(400).json({ error: `Too many clicks in batch (max ${maxBatchSize})` });
+        }
+        
+        let processed = 0;
+        let accepted = 0;
+        
+        // Process clicks with error handling
+        for (const click of clicks) {
+            try {
+                const { x = Math.random(), y = Math.random(), userId } = click;
+                
+                // Validate coordinates
+                if (typeof x === 'number' && typeof y === 'number' && x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+                    const testUserId = userId || `batch-test-${Date.now()}-${processed}`;
+                    const clickAccepted = intelligentClickEngine.addClick(channelId, testUserId, x, y);
+                    if (clickAccepted) accepted++;
+                    processed++;
+                }
+            } catch (clickError) {
+                console.error('Error processing click:', clickError);
+                // Continue processing other clicks
+            }
+        }
+        
+        const intelligence = intelligentMonitor.getIntelligenceStats();
+        const responseTime = Date.now() - startTime;
+        
+        console.log(`🧪 Batch processed: ${processed} clicks -> Tier: ${intelligence.currentTier}, CPS: ${intelligence.currentCPS}`);
+        
+        res.json({
+            success: true,
+            processed,
+            accepted,
+            tier: intelligence.currentTier,
+            predicted: intelligence.predictedCPS,
+            currentCPS: intelligence.currentCPS,
+            confidence: intelligence.confidence,
+            instanceId: INSTANCE_ID,
+            batchMode: true,
+            responseTime: responseTime
+        });
+        
+    } catch (error) {
+        console.error('Batch click error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Batch processing failed',
+            message: error.message
+        });
+    }
+});
+
+// Add this endpoint to force WebSocket broadcast for testing
+app.post('/test-force-broadcast', async (req, res) => {
+    try {
+        const channelId = req.body.channelId || 'load-test-channel';
+        const data = intelligentClickEngine.getHeatmapData(channelId);
+        const state = intelligentGameState.getState();
+        
+        const message = JSON.stringify({
+            running: state.running,
+            ...data,
+            version: state.version,
+            timestamp: Date.now(),
+            forcedBroadcast: true
+        });
+        
+        // Force broadcast to WebSocket clients
+        const clients = wsClients.get(channelId);
+        if (clients && clients.size > 0) {
+            clients.forEach(ws => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    try { 
+                        ws.send(message); 
+                        console.log(`📡 Forced broadcast to ${clients.size} clients`);
+                    } catch (wsError) {
+                        console.error('WebSocket send error:', wsError);
+                    }
+                }
+            });
+        }
+        
+        res.json({
+            success: true,
+            channelId,
+            clientCount: clients ? clients.size : 0,
+            dataPoints: data.clusters ? data.clusters.length : 0,
+            message: 'Forced broadcast sent'
+        });
+        
+    } catch (error) {
+        console.error('Force broadcast error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
 // Load test statistics endpoint
 app.get('/test-stats', (req, res) => {
     const stats = intelligentClickEngine.getStats();

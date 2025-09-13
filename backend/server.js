@@ -1942,22 +1942,57 @@ app.get('/heatmap', async (req, res) => {
     }
 });
 
+// Updated /start endpoint in server.js
 app.post('/start', async (req, res) => {
     try {
         const channelId = req.headers['x-channel-id'] || req.body.channelId;
         const result = await gameState.setRunning(true);
         
-        // Clear cache on start
+        // CLEAR ALL CLICKS ON START (like reset does)
+        console.log('🗑️ Clearing all clicks on start...');
+        
+        // Clear in-memory data
+        clickEngine.allChannelClicks.clear();
+        clickEngine.clickBuffer.clear();
         heatmapCache.clear();
         
-        const broadcastData = await getCurrentHeatmapData(channelId || 'all');
-        broadcastData.running = true;
-        broadcastData.action = 'start';
-        broadcastData.version = result;
-        broadcastData.channelId = channelId || 'all';
-        broadcastData.timestamp = Date.now();
-        broadcastData.frozen = false;
-        broadcastData.unfrozen = true;
+        // Reset WebSocket connections across all instances
+        await wsManager.resetAll(channelId);
+        
+        // Clear Redis data
+        if (redis.isReady) {
+            try {
+                const clickKeys = await redis.keys('clicks:*');
+                if (clickKeys.length > 0) {
+                    const chunkSize = 1000;
+                    for (let i = 0; i < clickKeys.length; i += chunkSize) {
+                        const chunk = clickKeys.slice(i, i + chunkSize);
+                        await redis.del(chunk);
+                    }
+                }
+            } catch (redisError) {
+                logError('Redis clear on start error:', redisError);
+            }
+        }
+        
+        const broadcastData = {
+            running: true,
+            clusters: [],
+            totalClicks: 0,
+            uniqueUsers: 0,
+            coverage: 0,
+            action: 'start',
+            channelId: channelId || 'all',
+            timestamp: Date.now(),
+            allDataCleared: true, // Signal that data was cleared
+            frozen: false,
+            unfrozen: true,
+            startWithClear: true, // New flag to indicate start with clear
+            resetSignalId: Math.random().toString(36).substr(2, 9)
+        };
+        
+        // Add sticky reset signal for start
+        addStickyResetSignal(channelId, broadcastData);
         
         broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
         
@@ -1966,6 +2001,8 @@ app.post('/start', async (req, res) => {
             status: 'started',
             running: true,
             unfrozen: true,
+            allDataCleared: true, // Inform client that data was cleared
+            startWithClear: true,
             stateVersion: result,
             instanceId: INSTANCE_ID
         });

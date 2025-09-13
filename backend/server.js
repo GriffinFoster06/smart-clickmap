@@ -1341,20 +1341,41 @@ app.post('/stop', async (req, res) => {
     }
 });
 
+// Replace the existing /reset endpoint in server.js with this fixed version:
+
 app.post('/reset', async (req, res) => {
     log('🗑️ RESET endpoint called');
     
     try {
         const channelId = req.headers['x-channel-id'] || req.body.channelId;
         
-        // RESET: Clear EVERYTHING - processing queues AND stored click data
-        if (channelId) {
-            await gameState.clearChannelClicks(channelId);
-        } else {
-            await gameState.clearAllClicks();
+        // ENHANCED RESET: Use the same brute-force clearing as debug/force-reset
+        log('🔧 RESET: Brute force clearing all data structures');
+        
+        // Clear the ultra-performance engine directly (same as force-reset)
+        clickEngine.allChannelClicks.clear();
+        clickEngine.clickBuffer.clear();
+        
+        // Clear JWT cache to prevent stale data
+        clickEngine.jwtCache.clear();
+        
+        // Clear Redis with more thorough approach
+        if (redis.isReady) {
+            try {
+                const clickKeys = await redis.keys('clicks:*');
+                const gameKeys = await redis.keys('game:*');
+                const allKeys = [...clickKeys, ...gameKeys];
+                
+                if (allKeys.length > 0) {
+                    await redis.del(allKeys);
+                    log(`🔧 RESET: Deleted ${allKeys.length} Redis keys`);
+                }
+            } catch (redisError) {
+                logError('Redis reset error:', redisError);
+            }
         }
         
-        log(`✅ Data reset - ALL click data cleared`);
+        log(`✅ RESET: ALL data structures brutally cleared`);
         
         const running = await gameState.isRunning();
         
@@ -1367,13 +1388,27 @@ app.post('/reset', async (req, res) => {
             action: 'reset',
             channelId: channelId || 'all',
             timestamp: Date.now(),
-            allDataCleared: true, // Signal that all data was cleared
-            frozen: false, // EXPLICITLY clear frozen state
-            unfrozen: true // Signal that we're clearing frozen state
+            allDataCleared: true,
+            frozen: false,
+            unfrozen: true,
+            hardReset: true // NEW: Signal this is a hard reset
         };
         
-        // Immediate broadcast for reset
-        broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
+        // TRIPLE BROADCAST: Ensure overlay gets the message
+        log('🚀 RESET: Triple broadcasting to ensure delivery');
+        
+        // 1. Immediate broadcast
+        await broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
+        
+        // 2. Delayed broadcast (in case overlay polls between broadcasts)
+        setTimeout(async () => {
+            await broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
+        }, 1000);
+        
+        // 3. Final delayed broadcast
+        setTimeout(async () => {
+            await broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
+        }, 2000);
         
         res.json({
             success: true,
@@ -1381,7 +1416,9 @@ app.post('/reset', async (req, res) => {
             running: running,
             allDataCleared: true,
             unfrozen: true,
-            instanceId: INSTANCE_ID
+            hardReset: true,
+            instanceId: INSTANCE_ID,
+            message: 'Brute force reset completed with triple broadcast'
         });
         
     } catch (error) {
@@ -1389,6 +1426,41 @@ app.post('/reset', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to reset data'
+        });
+    }
+});
+
+// Also add this enhanced debug endpoint to verify clearing works:
+app.get('/debug/verify-reset', async (req, res) => {
+    try {
+        const allChannels = await clickEngine.getAllChannelClicks();
+        const totalClicks = Array.from(allChannels.values()).reduce((sum, channelClicks) => sum + channelClicks.size, 0);
+        const stats = clickEngine.getPerformanceStats();
+        
+        let redisKeys = [];
+        if (redis.isReady) {
+            redisKeys = await redis.keys('clicks:*');
+        }
+        
+        res.json({
+            success: true,
+            verification: {
+                inMemoryChannels: allChannels.size,
+                totalClicksInMemory: totalClicks,
+                redisClickKeys: redisKeys.length,
+                jwtCacheSize: stats.jwtCacheSize,
+                batchBufferSize: stats.batchBufferSize,
+                isEmpty: allChannels.size === 0 && totalClicks === 0 && redisKeys.length === 0,
+                message: allChannels.size === 0 && totalClicks === 0 ? 'RESET SUCCESSFUL - All data cleared' : 'RESET INCOMPLETE - Data still exists'
+            },
+            detailedStats: stats
+        });
+        
+    } catch (error) {
+        logError('❌ Verify reset error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to verify reset'
         });
     }
 });

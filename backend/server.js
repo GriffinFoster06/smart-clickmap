@@ -23,6 +23,10 @@ const BATCH_TIMEOUT = 1000; // 1 second max batch time
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const DEBUG_ENABLED = process.env.DEBUG === 'true' || !IS_PRODUCTION;
 
+// STICKY RESET SYSTEM - Keep broadcasting reset signals for 15 seconds
+const stickyResetSignals = new Map(); // channelId -> { signal, expiry }
+const RESET_SIGNAL_DURATION = 15000; // 15 seconds
+
 function log(message, level = 'info') {
     if (level === 'debug' && !DEBUG_ENABLED) return;
     if (level === 'error' || level === 'warn' || !IS_PRODUCTION) {
@@ -32,6 +36,41 @@ function log(message, level = 'info') {
 
 function logError(message, error = null) {
     console.error(message, error || '');
+}
+
+// Enhanced reset signal manager
+function addStickyResetSignal(channelId, resetData) {
+    const key = channelId || 'all';
+    const expiry = Date.now() + RESET_SIGNAL_DURATION;
+    
+    stickyResetSignals.set(key, {
+        signal: resetData,
+        expiry: expiry
+    });
+    
+    log(`🔄 Added sticky reset signal for ${key} (expires in ${RESET_SIGNAL_DURATION}ms)`);
+    
+    // Auto-cleanup after expiry
+    setTimeout(() => {
+        stickyResetSignals.delete(key);
+        log(`🧹 Cleaned up sticky reset signal for ${key}`);
+    }, RESET_SIGNAL_DURATION);
+}
+
+function getStickyResetSignal(channelId) {
+    const key = channelId || 'all';
+    const signal = stickyResetSignals.get(key);
+    
+    if (signal && Date.now() < signal.expiry) {
+        return signal.signal;
+    }
+    
+    // Clean up expired signal
+    if (signal) {
+        stickyResetSignals.delete(key);
+    }
+    
+    return null;
 }
 
 // ========== ULTRA HIGH-PERFORMANCE CLICK ENGINE ==========
@@ -866,10 +905,22 @@ class BroadcastManager {
 
 const broadcastManager = new BroadcastManager();
 
-// ========== PRESERVE: Original heatmap generation with performance ==========
+// ========== PRESERVE: Original heatmap generation with performance and sticky reset ==========
 async function getCurrentHeatmapData(channelId, threshold = 3) {
     const running = await gameState.isRunning();
     const lastUpdate = Date.now();
+
+    // CHECK FOR STICKY RESET SIGNAL FIRST
+    const stickyReset = getStickyResetSignal(channelId);
+    if (stickyReset) {
+        log(`🔄 Serving sticky reset signal for ${channelId || 'all'}`);
+        return {
+            ...stickyReset,
+            lastUpdate: lastUpdate,
+            version: gameState._version,
+            stickyReset: true // Flag that this is a sticky signal
+        };
+    }
 
     if (!channelId || channelId === 'all') {
         let allPoints = [];
@@ -1169,6 +1220,7 @@ app.get('/debug/state', async (req, res) => {
             performance: stats,
             timestamp: Date.now(),
             redisConnected: redis.isReady,
+            stickyResetSignals: stickyResetSignals.size,
             message: totalClicksAcrossAllChannels === 0 ? 'NO CLICKS IN MEMORY' : `${totalClicksAcrossAllChannels} clicks found`
         });
         
@@ -1181,51 +1233,38 @@ app.get('/debug/state', async (req, res) => {
     }
 });
 
-// NEW: Force reset endpoint for testing
-app.post('/debug/force-reset', async (req, res) => {
+// Enhanced verification endpoint
+app.get('/debug/verify-reset', async (req, res) => {
     try {
-        log('🔧 DEBUG: Force reset called');
+        const allChannels = await clickEngine.getAllChannelClicks();
+        const totalClicks = Array.from(allChannels.values()).reduce((sum, channelClicks) => sum + channelClicks.size, 0);
+        const stats = clickEngine.getPerformanceStats();
         
-        // Brute force clear everything
-        clickEngine.allChannelClicks.clear();
-        clickEngine.clickBuffer.clear();
-        
-        // Also clear Redis
+        let redisKeys = [];
         if (redis.isReady) {
-            const clickKeys = await redis.keys('clicks:*');
-            if (clickKeys.length > 0) {
-                await redis.del(clickKeys);
-                log(`🔧 DEBUG: Deleted ${clickKeys.length} Redis keys`);
-            }
+            redisKeys = await redis.keys('clicks:*');
         }
-        
-        const broadcastData = {
-            running: await gameState.isRunning(),
-            clusters: [],
-            totalClicks: 0,
-            uniqueUsers: 0,
-            coverage: 0,
-            action: 'reset',
-            channelId: 'all',
-            timestamp: Date.now(),
-            allDataCleared: true,
-            frozen: false,
-            unfrozen: true
-        };
-        
-        broadcastManager.forceImmediateBroadcast('all', broadcastData);
         
         res.json({
             success: true,
-            message: 'Force reset completed',
-            clearedData: true
+            verification: {
+                inMemoryChannels: allChannels.size,
+                totalClicksInMemory: totalClicks,
+                redisClickKeys: redisKeys.length,
+                jwtCacheSize: stats.jwtCacheSize,
+                batchBufferSize: stats.batchBufferSize,
+                stickyResetSignals: stickyResetSignals.size,
+                isEmpty: allChannels.size === 0 && totalClicks === 0 && redisKeys.length === 0 && stickyResetSignals.size === 0,
+                message: allChannels.size === 0 && totalClicks === 0 ? 'RESET SUCCESSFUL - All data cleared' : 'RESET INCOMPLETE - Data still exists'
+            },
+            detailedStats: stats
         });
         
     } catch (error) {
-        logError('❌ Debug force reset error:', error);
+        logError('❌ Verify reset error:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to force reset'
+            error: 'Failed to verify reset'
         });
     }
 });
@@ -1341,8 +1380,7 @@ app.post('/stop', async (req, res) => {
     }
 });
 
-// Replace the existing /reset endpoint in server.js with this fixed version:
-
+// ENHANCED RESET with sticky signals and repeated broadcasts
 app.post('/reset', async (req, res) => {
     log('🗑️ RESET endpoint called');
     
@@ -1391,24 +1429,29 @@ app.post('/reset', async (req, res) => {
             allDataCleared: true,
             frozen: false,
             unfrozen: true,
-            hardReset: true // NEW: Signal this is a hard reset
+            hardReset: true,
+            resetSignalId: Math.random().toString(36).substr(2, 9) // Unique ID for tracking
         };
         
-        // TRIPLE BROADCAST: Ensure overlay gets the message
-        log('🚀 RESET: Triple broadcasting to ensure delivery');
+        // STICKY RESET: Add to sticky signals for 15 seconds
+        addStickyResetSignal(channelId, broadcastData);
         
-        // 1. Immediate broadcast
+        // IMMEDIATE BROADCAST: Send right now
         await broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
         
-        // 2. Delayed broadcast (in case overlay polls between broadcasts)
-        setTimeout(async () => {
-            await broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
-        }, 1000);
+        // REPEATED BROADCASTS: Send 5 more times over 10 seconds to catch polling
+        const broadcastTimes = [1000, 2000, 4000, 6000, 8000]; // 1s, 2s, 4s, 6s, 8s
         
-        // 3. Final delayed broadcast
-        setTimeout(async () => {
-            await broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
-        }, 2000);
+        broadcastTimes.forEach((delay, index) => {
+            setTimeout(async () => {
+                log(`🔄 RESET: Delayed broadcast #${index + 1} at ${delay}ms`);
+                await broadcastManager.forceImmediateBroadcast(channelId || 'all', {
+                    ...broadcastData,
+                    timestamp: Date.now(),
+                    broadcastNumber: index + 2 // 2, 3, 4, 5, 6
+                });
+            }, delay);
+        });
         
         res.json({
             success: true,
@@ -1418,7 +1461,8 @@ app.post('/reset', async (req, res) => {
             unfrozen: true,
             hardReset: true,
             instanceId: INSTANCE_ID,
-            message: 'Brute force reset completed with triple broadcast'
+            resetSignalId: broadcastData.resetSignalId,
+            message: 'Brute force reset with 15-second sticky signal'
         });
         
     } catch (error) {
@@ -1426,41 +1470,6 @@ app.post('/reset', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to reset data'
-        });
-    }
-});
-
-// Also add this enhanced debug endpoint to verify clearing works:
-app.get('/debug/verify-reset', async (req, res) => {
-    try {
-        const allChannels = await clickEngine.getAllChannelClicks();
-        const totalClicks = Array.from(allChannels.values()).reduce((sum, channelClicks) => sum + channelClicks.size, 0);
-        const stats = clickEngine.getPerformanceStats();
-        
-        let redisKeys = [];
-        if (redis.isReady) {
-            redisKeys = await redis.keys('clicks:*');
-        }
-        
-        res.json({
-            success: true,
-            verification: {
-                inMemoryChannels: allChannels.size,
-                totalClicksInMemory: totalClicks,
-                redisClickKeys: redisKeys.length,
-                jwtCacheSize: stats.jwtCacheSize,
-                batchBufferSize: stats.batchBufferSize,
-                isEmpty: allChannels.size === 0 && totalClicks === 0 && redisKeys.length === 0,
-                message: allChannels.size === 0 && totalClicks === 0 ? 'RESET SUCCESSFUL - All data cleared' : 'RESET INCOMPLETE - Data still exists'
-            },
-            detailedStats: stats
-        });
-        
-    } catch (error) {
-        logError('❌ Verify reset error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to verify reset'
         });
     }
 });
@@ -1685,6 +1694,7 @@ httpServer.listen(PORT, '0.0.0.0', async () => {
     log(`🎨 Sophisticated clustering: ENABLED`);
     log(`⚡ Performance: 1-in-${CLICK_SAMPLING_RATE} sampling, ${BROADCAST_INTERVAL}ms broadcasts`);
     log(`🔥 Batch size: ${BATCH_SIZE}, Timeout: ${BATCH_TIMEOUT}ms`);
+    log(`🔄 Sticky reset signals: ${RESET_SIGNAL_DURATION}ms duration`);
     
     try {
         const running = await gameState.isRunning();
@@ -1703,6 +1713,7 @@ httpServer.listen(PORT, '0.0.0.0', async () => {
         log(`   JWT cache: ${stats.jwtCacheSize} tokens`);
         log(`   Total channels: ${stats.totalChannels}`);
         log(`   Clicks in memory: ${stats.totalClicksInMemory}`);
+        log(`   Sticky reset system: ACTIVE`);
         log('🎊 Ultra high-performance server ready for millions of clicks/second!');
     }, 1000);
 });

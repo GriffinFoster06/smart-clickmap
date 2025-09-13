@@ -615,78 +615,92 @@
 
         // ========== UNIFIED MESSAGE HANDLING ==========
         
-        handleMessage(data, source) {
-            const clusters = Array.isArray(data) ? data : (data?.clusters || []);
-            const gameRunning = data?.running === true;
-            const action = data?.action;
-            const allDataCleared = data?.allDataCleared === true;
-            const hardReset = data?.hardReset === true;
-            const stickyReset = data?.stickyReset === true;
-            const resetSignalId = data?.resetSignalId;
-            
-            this.updateCount++;
-            this.messageStats.dataUpdates++;
-            
-            // RESET HANDLING
-            if (action === 'reset' || allDataCleared || hardReset || stickyReset) {
-                console.log(`🗑️ RESET via ${source}: ${action}, cleared=${allDataCleared}, hard=${hardReset}, sticky=${stickyReset}`);
-                
-                if (resetSignalId && this.lastProcessedResetId === resetSignalId) {
-                    return; // Duplicate reset
-                }
-                
-                if (resetSignalId) {
-                    this.lastProcessedResetId = resetSignalId;
-                    setTimeout(() => {
-                        if (this.lastProcessedResetId === resetSignalId) {
-                            this.lastProcessedResetId = null;
-                        }
-                    }, 30000);
-                }
-                
-                // Clear visualization
-                if (this.renderer) {
-                    this.renderer.updateClusters([]);
-                    if (this.renderer.springs) this.renderer.springs.clear();
-                    if (this.renderer.targets) this.renderer.targets.clear();
-                }
-                
-                // Clear caches
-                responseCache.clear();
-                
-                this.isGameRunning = gameRunning;
-                this.lastKnownState = null;
-                
-                document.body.classList.remove('clickmap-has-data');
-                document.body.classList.toggle('clickmap-active', gameRunning);
-                
-                // Adjust polling based on new state
-                if (!this.wsConnected) {
-                    this.stopHttpPolling();
-                    this.startHttpPolling();
-                }
-                
-                return;
-            }
-            
-            // STATE CHANGES
-            if (gameRunning !== this.isGameRunning) {
-                console.log(`🎮 State change via ${source}: ${this.isGameRunning} → ${gameRunning}`);
-                this.isGameRunning = gameRunning;
-                
-                // Adjust polling frequency
-                if (!this.wsConnected) {
-                    this.stopHttpPolling();
-                    this.startHttpPolling();
-                }
-            }
-            
-            if (clusters.length > 0) {
-                this.hasEverHadData = true;
-            }
-
-            this.updateVisualization(data, source);
+        // Updated handleMessage method in overlay.js
+handleMessage(data, source) {
+    const clusters = Array.isArray(data) ? data : (data?.clusters || []);
+    const gameRunning = data?.running === true;
+    const action = data?.action;
+    const allDataCleared = data?.allDataCleared === true;
+    const hardReset = data?.hardReset === true;
+    const stickyReset = data?.stickyReset === true;
+    const startWithClear = data?.startWithClear === true; // New flag for start with clear
+    const resetSignalId = data?.resetSignalId;
+    
+    this.updateCount++;
+    this.messageStats.dataUpdates++;
+    
+    // RESET HANDLING - Now includes START with clear
+    if (action === 'reset' || action === 'start' && (allDataCleared || startWithClear) || allDataCleared || hardReset || stickyReset) {
+        const clearType = action === 'start' ? 'START+CLEAR' : 'RESET';
+        console.log(`🗑️ ${clearType} via ${source}: ${action}, cleared=${allDataCleared}, hard=${hardReset}, sticky=${stickyReset}, startClear=${startWithClear}`);
+        
+        if (resetSignalId && this.lastProcessedResetId === resetSignalId) {
+            return; // Duplicate reset/start signal
         }
+        
+        if (resetSignalId) {
+            this.lastProcessedResetId = resetSignalId;
+            setTimeout(() => {
+                if (this.lastProcessedResetId === resetSignalId) {
+                    this.lastProcessedResetId = null;
+                }
+            }, 30000);
+        }
+        
+        // Clear visualization
+        if (this.renderer) {
+            this.renderer.updateClusters([]);
+            if (this.renderer.springs) this.renderer.springs.clear();
+            if (this.renderer.targets) this.renderer.targets.clear();
+        }
+        
+        // Clear caches
+        responseCache.clear();
+        
+        this.isGameRunning = gameRunning;
+        this.lastKnownState = null;
+        
+        document.body.classList.remove('clickmap-has-data');
+        document.body.classList.toggle('clickmap-active', gameRunning);
+        
+        // For start with clear, show active state
+        if (action === 'start' && startWithClear) {
+            document.body.classList.add('clickmap-active');
+            console.log('🎮 Started with fresh clickmap');
+        }
+        
+        // Adjust polling based on new state
+        if (!this.wsConnected) {
+            this.stopHttpPolling();
+            this.startHttpPolling();
+        }
+        
+        return;
+    }
+    
+    // Regular START handling (without clear)
+    if (action === 'start' && !allDataCleared && !startWithClear) {
+        console.log(`🎮 START via ${source} (keeping existing data)`);
+    }
+    
+    // STATE CHANGES
+    if (gameRunning !== this.isGameRunning) {
+        console.log(`🎮 State change via ${source}: ${this.isGameRunning} → ${gameRunning}`);
+        this.isGameRunning = gameRunning;
+        
+        // Adjust polling frequency
+        if (!this.wsConnected) {
+            this.stopHttpPolling();
+            this.startHttpPolling();
+        }
+    }
+    
+    if (clusters.length > 0) {
+        this.hasEverHadData = true;
+    }
+
+    this.updateVisualization(data, source);
+}
 
         // ========== SHARED UTILITIES ==========
         
@@ -732,36 +746,49 @@
             }
         }
 
-        updateVisualization(data, source) {
-            if (!this.renderer) return;
-            
-            const clusters = Array.isArray(data) ? data : (data?.clusters || []);
-            const allDataCleared = data?.allDataCleared === true;
-            const hardReset = data?.hardReset === true;
-            const stickyReset = data?.stickyReset === true;
-            
-            this.lastUpdate = Date.now();
-            
-            if (source.includes('reset') || allDataCleared || hardReset || stickyReset) {
-                this.renderer.updateClusters([]);
-            } else {
-                this.renderer.updateClusters(clusters);
-            }
-            
-            // Update CSS classes
-            const isActive = data?.running !== false;
-            const hasData = clusters.length > 0;
-            
-            document.body.classList.toggle('clickmap-active', isActive);
-            document.body.classList.toggle('clickmap-has-data', hasData);
-            
-            if (source.includes('reset') || allDataCleared || hardReset || stickyReset) {
-                document.body.classList.remove('clickmap-has-data');
-                document.body.offsetHeight; // Force reflow
-            }
-            
-            this.lastKnownState = data;
+        // Updated updateVisualization method in overlay.js
+updateVisualization(data, source) {
+    if (!this.renderer) return;
+    
+    const clusters = Array.isArray(data) ? data : (data?.clusters || []);
+    const allDataCleared = data?.allDataCleared === true;
+    const hardReset = data?.hardReset === true;
+    const stickyReset = data?.stickyReset === true;
+    const startWithClear = data?.startWithClear === true;
+    const action = data?.action;
+    
+    this.lastUpdate = Date.now();
+    
+    // Clear visualization for any clearing action (reset or start with clear)
+    if (source.includes('reset') || allDataCleared || hardReset || stickyReset || startWithClear || (action === 'start' && allDataCleared)) {
+        console.log(`🎨 Clearing visualization for: ${action || 'reset'}`);
+        this.renderer.updateClusters([]);
+    } else {
+        this.renderer.updateClusters(clusters);
+    }
+    
+    // Update CSS classes
+    const isActive = data?.running !== false;
+    const hasData = clusters.length > 0;
+    
+    document.body.classList.toggle('clickmap-active', isActive);
+    document.body.classList.toggle('clickmap-has-data', hasData);
+    
+    // Special handling for clearing actions
+    if (source.includes('reset') || allDataCleared || hardReset || stickyReset || startWithClear || (action === 'start' && allDataCleared)) {
+        document.body.classList.remove('clickmap-has-data');
+        
+        // Force reflow for immediate visual update
+        document.body.offsetHeight;
+        
+        // For start with clear, ensure active state is set
+        if (action === 'start' && (startWithClear || allDataCleared)) {
+            document.body.classList.add('clickmap-active');
         }
+    }
+    
+    this.lastKnownState = data;
+}
 
         setupVisibilityTracking() {
             document.addEventListener('visibilitychange', () => {

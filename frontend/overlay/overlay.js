@@ -1,5 +1,5 @@
-// frontend/overlay/overlay.js - ENHANCED for high-performance backend WITH all visual features
-// Preserves ALL original visual goodness while optimizing for the fast backend
+// frontend/overlay/overlay.js - OPTIMIZED for 5-second updates and ultra-high performance backend
+// Matches server's 5-second broadcast cycle for maximum efficiency
 
 (function () {
     'use strict';
@@ -7,7 +7,12 @@
     const EBS = 'https://smart-clickmap-backend.onrender.com'; // Your Render URL
     const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    // ========== COMPLETE HEATMAP RENDERER WITH ALL ORIGINAL FEATURES ==========
+    // OPTIMIZED POLLING SETTINGS - Match server's 5-second broadcast cycle
+    const POLL_INTERVAL = 5000; // 5 seconds to match server broadcasts
+    const STATUS_CHECK_INTERVAL = 15000; // 15 seconds for status checks when inactive
+    const MAX_CONSECUTIVE_ERRORS = 3;
+
+    // ========== PRESERVE ALL VISUAL FEATURES - ADVANCED HEATMAP RENDERER ==========
     class AdvancedHeatmapRenderer {
         constructor(canvas) {
             this.canvas = canvas;
@@ -42,7 +47,7 @@
             this.resize();
             this.start();
             
-            console.log('🎨 Advanced renderer with ALL features initialized');
+            console.log('🎨 Advanced renderer with ALL features initialized (5-second optimized)');
         }
 
         // ========== PRESERVE: COMPLETE ANIMATION SYSTEM ==========
@@ -139,7 +144,7 @@
             const filtered = (newClusters || [])
                 .filter(c => (c.percentage || 0) >= this.PERCENTAGE_THRESHOLD);
 
-            console.log(`🎨 Rendering: ${filtered.length} sophisticated clusters`);
+            console.log(`🎨 Rendering: ${filtered.length} sophisticated clusters (5s interval)`);
 
             const nextTargets = new Map();
             
@@ -299,7 +304,7 @@
             }
         }
 
-        // PRESERVE: Original shape decision logic
+        // PRESERVE: All the original rendering methods
         _shouldUsePolygon(drawable) {
             if (this.reduced) return false;
             
@@ -312,10 +317,8 @@
                    (drawable.shapeType === 'polygon');
         }
 
-        // PRESERVE: Advanced color calculation
         calculateAdvancedColors(drawable, isTop) {
             const percentage = drawable.percentage;
-            const density = drawable.density;
             const complexity = drawable.complexity;
             
             if (isTop) {
@@ -347,7 +350,6 @@
             }
         }
 
-        // PRESERVE: Enhanced circular area rendering
         renderEnhancedCircularArea(cx, cy, radius, colors, isTop) {
             const ctx = this.ctx;
             
@@ -381,15 +383,12 @@
             }
         }
 
-        // PRESERVE: Advanced polygon rendering with complexity-based irregularity
         renderAdvancedPolygonArea(cx, cy, radius, colors, tSec, seed, drawable) {
             const ctx = this.ctx;
             const sides = drawable.sides;
             const complexity = drawable.complexity;
             const eccentricity = drawable.eccentricity;
-            const irregularity = drawable.irregularity;
             
-            // PRESERVE: Complex shape generation
             const irregularityFactor = complexity * 0.15;
             const eccentricityFactor = eccentricity * 0.2;
             
@@ -397,7 +396,6 @@
             for (let i = 0; i <= sides; i++) {
                 const a = (i / sides) * Math.PI * 2;
                 
-                // PRESERVE: Multi-layer wobble system
                 const baseWobble = this._wobble(tSec + i * 0.07, seed * 0.73, 1.0, 0.06);
                 const irregularWobble = this._wobble(tSec * 0.3 + i * 0.2, seed * 1.17, 1.0, irregularityFactor);
                 const eccentricWobble = this._wobble(tSec * 0.5 + i * 0.15, seed * 1.41, 1.0, eccentricityFactor);
@@ -409,7 +407,6 @@
                     0.03 * eccentricWobble
                 );
                 
-                // PRESERVE: Eccentricity effect
                 const eccentricRadius = combinedRadius * (1 + eccentricity * Math.cos(a * 2) * 0.3);
                 
                 const x = cx + Math.cos(a) * eccentricRadius;
@@ -420,7 +417,6 @@
             }
             ctx.closePath();
 
-            // PRESERVE: Fill and stroke with enhanced effects
             ctx.fillStyle = colors.fill;
             ctx.fill();
 
@@ -428,7 +424,6 @@
             ctx.lineWidth = 3;
             ctx.stroke();
 
-            // PRESERVE: Additional complexity-based effects
             if (complexity > 0.5) {
                 ctx.strokeStyle = colors.border.replace(/[\d\.]+\)$/g, '0.4)');
                 ctx.lineWidth = 1;
@@ -436,7 +431,7 @@
             }
         }
 
-        // ========== PRESERVE: ADVANCED LABEL SYSTEM WITH ALL FEATURES ==========
+        // ========== PRESERVE: ADVANCED LABEL SYSTEM ==========
         _pointRectDistance(px, py, rx, ry, rw, rh) {
             const cx = Math.max(rx, Math.min(px, rx + rw));
             const cy = Math.max(ry, Math.min(py, ry + rh));
@@ -481,7 +476,6 @@
             const ctx = this.ctx;
             const str = `${percentage}%`;
 
-            // PRESERVE: Dynamic font sizing with importance scaling
             const baseFontSize = Math.max(16, Math.min(44, radius * 0.35));
             const importanceBonus = isTop ? baseFontSize * 0.15 : (percentage >= 25 ? baseFontSize * 0.08 : 0);
             const fontSize = baseFontSize + importanceBonus;
@@ -492,7 +486,6 @@
 
             const layout = this._computeAdvancedLabelLayoutCanvas(cx, cy, str, fontSize, radius);
 
-            // PRESERVE: Enhanced leader line for off-screen labels
             if (layout.separated) {
                 const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
                 const sx = cx + Math.cos(ang) * Math.max(0, radius - 6);
@@ -515,39 +508,32 @@
                 ctx.restore();
             }
 
-            // PRESERVE: Enhanced text rendering with multiple effects
             ctx.save();
             
-            // PRESERVE: Advanced shadow system
             ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
             ctx.shadowBlur = Math.max(10, fontSize * 0.25);
             ctx.shadowOffsetX = 2;
             ctx.shadowOffsetY = 2;
 
-            // Main text
             ctx.fillStyle = '#ffffff';
             ctx.fillText(str, layout.center.x, layout.center.y);
 
-            // Reset shadow
             ctx.shadowBlur = 0;
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 0;
 
-            // PRESERVE: Enhanced outline system
             const outlineWidth = isTop ? 2 : (isSplit ? 1.5 : 1);
             const outlineColor = isTop ? 'rgba(0, 255, 255, 0.95)' : 'rgba(147, 51, 234, 0.95)';
             ctx.strokeStyle = outlineColor;
             ctx.lineWidth = outlineWidth;
             ctx.strokeText(str, layout.center.x, layout.center.y);
             
-            // PRESERVE: Extra glow for top cluster
             if (isTop) {
                 ctx.shadowColor = 'rgba(0, 255, 255, 0.6)';
                 ctx.shadowBlur = 18;
                 ctx.fillText(str, layout.center.x, layout.center.y);
             }
             
-            // PRESERVE: Split cluster indication
             if (isSplit) {
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
                 ctx.lineWidth = 0.5;
@@ -563,31 +549,27 @@
         destroy() { this.stop(); }
     }
 
-    // ========== ENHANCED OVERLAY CONTROLLER WITH INTELLIGENT POLLING ==========
-    class EnhancedSmartOverlay {
+    // ========== OPTIMIZED OVERLAY CONTROLLER - 5 SECOND INTERVALS ==========
+    class OptimizedSmartOverlay {
         constructor() {
             this.channelId = this.getChannelFromUrl();
             this.renderer = null;
             this.pollInterval = null;
+            this.statusCheckInterval = null;
             this.consecutiveErrors = 0;
-            this.maxRetries = 3;
             this.updateCount = 0;
 
-            // Enhanced for high-performance backend
+            // Optimized state tracking
             this.isGameRunning = false;
-            this.consecutiveInactivePolls = 0;
-            this.maxInactivePolls = 2; // Faster detection
+            this.lastKnownState = null;
+            this.lastUpdate = 0;
             this.hasEverHadData = false;
             
-            // Adaptive polling based on activity
-            this.basePollInterval = 2000; // 2 seconds base
-            this.activePollInterval = 1000; // 1 second when active
-            this.currentPollInterval = this.basePollInterval;
-            
-            // Page visibility tracking
+            // Page visibility optimization
             this.isPageVisible = !document.hidden;
             this.setupVisibilityTracking();
 
+            console.log('🎯 Optimized overlay initialized (5-second intervals)');
             this.init();
         }
 
@@ -603,7 +585,7 @@
                 this.checkInitialStatus();
             }
             
-            console.log(`🎯 Enhanced overlay with ALL features initialized: ${this.channelId}`);
+            console.log(`🎯 Optimized overlay ready: ${this.channelId} (${POLL_INTERVAL}ms polling)`);
         }
 
         async checkInitialStatus() {
@@ -614,36 +596,45 @@
                 });
                 
                 if (!response.ok) {
-                    console.log('❌ High-performance backend not reachable');
+                    console.log('❌ Ultra-high performance backend not reachable');
+                    this.scheduleStatusCheck();
                     return;
                 }
 
                 const data = await response.json();
                 
-                // Start polling if game is running
+                console.log(`📊 Initial status: running=${data?.running}, clusters=${data?.clusters?.length || 0}`);
+                
                 if (data?.running === true) {
-                    console.log('🎮 Game is active - starting enhanced polling');
+                    console.log('🎮 Game is active - starting optimized polling');
                     this.isGameRunning = true;
-                    this.startAdaptivePolling();
+                    this.startOptimizedPolling();
                 } else {
-                    console.log('💤 Game is not running - overlay will wait');
+                    console.log('💤 Game is not running - will check periodically');
+                    this.isGameRunning = false;
                     this.scheduleStatusCheck();
                 }
                 
                 this.updateVisualization(data, 'initial');
 
             } catch (error) {
-                console.log('❌ Failed to check status:', error.message);
+                console.log('❌ Failed to check initial status:', error.message);
                 this.scheduleStatusCheck();
             }
         }
 
         scheduleStatusCheck() {
-            setTimeout(() => {
-                if (this.isPageVisible && !this.pollInterval) {
+            if (this.statusCheckInterval) {
+                clearInterval(this.statusCheckInterval);
+            }
+            
+            this.statusCheckInterval = setInterval(() => {
+                if (this.isPageVisible && !this.isGameRunning) {
                     this.checkInitialStatus();
                 }
-            }, 15000);
+            }, STATUS_CHECK_INTERVAL);
+            
+            console.log(`⏰ Status check scheduled every ${STATUS_CHECK_INTERVAL}ms`);
         }
 
         setupVisibilityTracking() {
@@ -651,14 +642,14 @@
                 this.isPageVisible = !document.hidden;
                 
                 if (this.isPageVisible) {
-                    console.log('👁️ Page visible - resuming');
+                    console.log('👁️ Page visible - resuming optimized polling');
                     if (this.isGameRunning && !this.pollInterval) {
-                        this.startAdaptivePolling();
+                        this.startOptimizedPolling();
                     } else if (!this.isGameRunning) {
                         this.checkInitialStatus();
                     }
                 } else {
-                    console.log('🫥 Page hidden - pausing');
+                    console.log('🫥 Page hidden - pausing all polling');
                     this.stopPolling();
                 }
             });
@@ -676,44 +667,35 @@
                 return;
             }
             
-            // PRESERVE: Use advanced renderer with all features
             this.renderer = new AdvancedHeatmapRenderer(canvas);
             const threshold = new URLSearchParams(window.location.search).get('threshold');
             if (threshold) this.renderer.setThreshold(parseInt(threshold, 10));
         }
 
-        startAdaptivePolling() {
-            if (this.pollInterval) return;
+        startOptimizedPolling() {
+            this.stopPolling(); // Clean up any existing intervals
+            
             if (!this.isPageVisible) return;
             
-            this.consecutiveInactivePolls = 0;
             this.consecutiveErrors = 0;
             
-            // Start with active polling
-            this.currentPollInterval = this.activePollInterval;
-            this.pollInterval = setInterval(() => this.poll(), this.currentPollInterval);
-            console.log(`🚀 Enhanced adaptive polling started (${this.currentPollInterval}ms)`);
+            // Start 5-second polling to match server broadcasts
+            this.pollInterval = setInterval(() => this.poll(), POLL_INTERVAL);
+            this.poll(); // Initial poll
+            
+            console.log(`🚀 Optimized polling started (${POLL_INTERVAL}ms intervals)`);
         }
 
         stopPolling() {
             if (this.pollInterval) {
                 clearInterval(this.pollInterval);
                 this.pollInterval = null;
-                console.log('⏹️ Polling stopped');
+                console.log('⏹️ Optimized polling stopped');
             }
-        }
-
-        adaptPollInterval(hasActivity) {
-            const newInterval = hasActivity ? this.activePollInterval : this.basePollInterval;
             
-            if (newInterval !== this.currentPollInterval) {
-                this.currentPollInterval = newInterval;
-                
-                if (this.pollInterval) {
-                    clearInterval(this.pollInterval);
-                    this.pollInterval = setInterval(() => this.poll(), this.currentPollInterval);
-                    console.log(`🔄 Adapted polling to ${this.currentPollInterval}ms`);
-                }
+            if (this.statusCheckInterval) {
+                clearInterval(this.statusCheckInterval);
+                this.statusCheckInterval = null;
             }
         }
 
@@ -745,30 +727,54 @@
             const clusters = Array.isArray(data) ? data : (data?.clusters || []);
             const gameRunning = data?.running === true;
             const hasActivity = clusters.length > 0;
+            const isHardCutoff = data?.hardCutoff === true;
+            const action = data?.action;
             
             this.consecutiveErrors = 0;
             
-            // Adaptive polling based on activity
-            this.adaptPollInterval(hasActivity);
-            
-            // Game state detection
-            if (!gameRunning) {
-                this.consecutiveInactivePolls++;
-                console.log(`🔍 Game inactive (${this.consecutiveInactivePolls}/${this.maxInactivePolls})`);
+            // Handle immediate state changes from start/stop/reset
+            if (isHardCutoff || action) {
+                console.log(`🔥 HARD STATE CHANGE: ${action} - running=${gameRunning}`);
                 
-                if (this.consecutiveInactivePolls >= this.maxInactivePolls) {
-                    console.log('🛑 Game confirmed inactive - stopping polling');
+                if (action === 'start') {
+                    this.isGameRunning = true;
+                    console.log('🚀 Game started - overlay activated');
+                    // Clear any old data
+                    this.updateVisualization({ running: true, clusters: [] }, 'start');
+                } else if (action === 'stop') {
                     this.isGameRunning = false;
+                    console.log('🛑 Game stopped - overlay deactivated');
                     this.stopPolling();
                     this.scheduleStatusCheck();
+                    // Show final state then clear
+                    this.updateVisualization(data, 'stop');
+                    setTimeout(() => {
+                        this.updateVisualization({ running: false, clusters: [] }, 'stop_clear');
+                    }, 2000);
+                    return;
+                } else if (action === 'reset') {
+                    console.log('🗑️ Data reset - clearing visualization');
+                    this.updateVisualization({ running: gameRunning, clusters: [] }, 'reset');
+                }
+            }
+            
+            // Detect regular game state changes
+            if (gameRunning !== this.isGameRunning && !isHardCutoff) {
+                console.log(`🎮 Game state changed: ${this.isGameRunning} → ${gameRunning}`);
+                this.isGameRunning = gameRunning;
+                
+                if (!gameRunning) {
+                    console.log('🛑 Game stopped - switching to status check mode');
+                    this.stopPolling();
+                    this.scheduleStatusCheck();
+                    // Clear visualization when game stops
+                    this.updateVisualization({ running: false, clusters: [] }, 'game_stopped');
                     return;
                 }
-            } else {
-                this.consecutiveInactivePolls = 0;
-                this.isGameRunning = true;
-                if (hasActivity) {
-                    this.hasEverHadData = true;
-                }
+            }
+            
+            if (hasActivity) {
+                this.hasEverHadData = true;
             }
 
             this.updateVisualization(data, 'poll');
@@ -778,11 +784,12 @@
             this.consecutiveErrors++;
             
             if (this.consecutiveErrors <= 2) {
-                console.warn(`Connection issue ${this.consecutiveErrors}/3:`, error.message);
+                console.warn(`Connection issue ${this.consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}:`, error.message);
             }
             
-            if (this.consecutiveErrors >= 3) {
-                console.error('❌ Too many errors - stopping polling');
+            if (this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                console.error('❌ Too many consecutive errors - switching to status check mode');
+                this.isGameRunning = false;
                 this.stopPolling();
                 this.scheduleStatusCheck();
             }
@@ -793,31 +800,40 @@
             
             const clusters = Array.isArray(data) ? data : (data?.clusters || []);
             this.updateCount++;
+            this.lastUpdate = Date.now();
             
-            if (clusters.length > 0 || this.updateCount % 10 === 1) {
-                console.log(`🎨 Enhanced update #${this.updateCount} (${source}): ${clusters.length} sophisticated clusters`);
+            // Log every 5th update or when there are clusters
+            if (clusters.length > 0 || this.updateCount % 5 === 1) {
+                console.log(`🎨 Update #${this.updateCount} (${source}): ${clusters.length} clusters (5s optimized)`);
             }
             
-            // PRESERVE: Update with all sophisticated cluster data
+            // Update renderer with sophisticated clusters
             this.renderer.updateClusters(clusters);
             
-            // Update body classes for CSS styling
+            // Update CSS classes for styling
             document.body.classList.toggle('clickmap-active', data?.running !== false);
             document.body.classList.toggle('clickmap-has-data', clusters.length > 0);
+            
+            // Store last known good state
+            this.lastKnownState = data;
         }
 
         getStatus() {
             return {
                 channelId: this.channelId,
-                transport: `Enhanced HTTP (${this.currentPollInterval}ms adaptive)`,
+                threshold: this.threshold,
+                transport: `Optimized HTTP (${POLL_INTERVAL}ms)`,
                 updateCount: this.updateCount,
                 consecutiveErrors: this.consecutiveErrors,
                 isGameRunning: this.isGameRunning,
                 hasEverHadData: this.hasEverHadData,
                 isPolling: !!this.pollInterval,
                 isPageVisible: this.isPageVisible,
-                backend: 'High-Performance with Full Features',
-                fps: this.renderer ? this.renderer.getFPS() : 0
+                lastUpdate: this.lastUpdate,
+                backend: 'Ultra High-Performance with Sampling',
+                fps: this.renderer ? this.renderer.getFPS() : 0,
+                pollInterval: POLL_INTERVAL,
+                statusCheckInterval: STATUS_CHECK_INTERVAL
             };
         }
 
@@ -826,18 +842,18 @@
             if (this.renderer) {
                 this.renderer.destroy();
             }
-            console.log('🧹 Enhanced overlay destroyed');
+            console.log('🧹 Optimized overlay destroyed');
         }
     }
 
     // ========== INITIALIZATION ==========
     function initialize() {
         try {
-            const overlay = new EnhancedSmartOverlay();
+            const overlay = new OptimizedSmartOverlay();
             window.smartOverlay = overlay; // For debugging
-            console.log('🎯 Enhanced overlay with ALL visual features loaded');
+            console.log('🎯 Optimized 5-second overlay with ALL visual features loaded');
         } catch (error) { 
-            console.error('Failed to initialize enhanced overlay:', error); 
+            console.error('Failed to initialize optimized overlay:', error); 
         }
     }
 

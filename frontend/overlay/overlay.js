@@ -1,5 +1,5 @@
-// frontend/overlay/overlay.js - OPTIMIZED for 5-second updates and ultra-high performance backend
-// Matches server's 5-second broadcast cycle for maximum efficiency with sticky reset support
+// frontend/overlay/overlay.js - OPTIMIZED for 5-second updates with AGGRESSIVE RESET DETECTION
+// Matches server's 5-second broadcast cycle + rapid polling for resets
 
 (function () {
     'use strict';
@@ -10,6 +10,7 @@
     // OPTIMIZED POLLING SETTINGS - Match server's 5-second broadcast cycle
     const POLL_INTERVAL = 5000; // 5 seconds to match server broadcasts
     const STATUS_CHECK_INTERVAL = 15000; // 15 seconds for status checks when inactive
+    const RAPID_POLL_INTERVAL = 500; // 500ms for rapid reset detection
     const MAX_CONSECUTIVE_ERRORS = 3;
 
     // ========== PRESERVE ALL VISUAL FEATURES - ADVANCED HEATMAP RENDERER ==========
@@ -50,7 +51,7 @@
             this.resize();
             this.start();
             
-            console.log('🎨 Advanced renderer with ALL features initialized (5-second optimized)');
+            console.log('🎨 Advanced renderer with ALL features initialized (5-second optimized with rapid reset)');
         }
 
         // ========== PRESERVE: COMPLETE ANIMATION SYSTEM ==========
@@ -552,14 +553,14 @@
         destroy() { this.stop(); }
     }
 
-    // ========== OPTIMIZED OVERLAY CONTROLLER - 5 SECOND INTERVALS WITH STICKY RESET ==========
-    class OptimizedSmartOverlay {
+    // ========== ULTRA-AGGRESSIVE OVERLAY CONTROLLER - INSTANT RESET DETECTION ==========
+    class UltraAggressiveSmartOverlay {
         constructor() {
             this.channelId = this.getChannelFromUrl();
             this.renderer = null;
             this.pollInterval = null;
             this.statusCheckInterval = null;
-            this.rapidPollInterval = null; // NEW: For rapid polling after reset
+            this.rapidPollInterval = null; // NEW: For rapid reset detection
             this.consecutiveErrors = 0;
             this.updateCount = 0;
             this.lastProcessedResetId = null; // NEW: Track processed reset signals
@@ -574,7 +575,7 @@
             this.isPageVisible = !document.hidden;
             this.setupVisibilityTracking();
 
-            console.log('🎯 Optimized overlay initialized (5-second intervals with rapid reset recovery)');
+            console.log('🎯 ULTRA-AGGRESSIVE overlay initialized with instant reset detection');
             this.init();
         }
 
@@ -590,7 +591,7 @@
                 this.checkInitialStatus();
             }
             
-            console.log(`🎯 Optimized overlay ready: ${this.channelId} (${POLL_INTERVAL}ms polling)`);
+            console.log(`🎯 Overlay ready: ${this.channelId} (${POLL_INTERVAL}ms polling + ${RAPID_POLL_INTERVAL}ms rapid reset detection)`);
         }
 
         async checkInitialStatus() {
@@ -662,6 +663,7 @@
                 } else {
                     console.log('🫥 Page hidden - pausing all polling');
                     this.stopPolling();
+                    this.stopRapidPolling();
                 }
             });
         }
@@ -694,7 +696,10 @@
             this.pollInterval = setInterval(() => this.poll(), POLL_INTERVAL);
             this.poll(); // Initial poll
             
-            console.log(`🚀 Optimized polling started (${POLL_INTERVAL}ms intervals)`);
+            // ALWAYS start rapid polling for reset detection
+            this.startRapidResetDetection();
+            
+            console.log(`🚀 Optimized polling started (${POLL_INTERVAL}ms regular + ${RAPID_POLL_INTERVAL}ms rapid reset detection)`);
         }
 
         stopPolling() {
@@ -710,32 +715,15 @@
             }
         }
 
-        stopRapidPolling() {
-            if (this.rapidPollInterval) {
-                clearInterval(this.rapidPollInterval);
-                this.rapidPollInterval = null;
-                console.log('⚡ Rapid polling stopped');
-            }
-        }
-
-        startRapidPollingAfterReset() {
+        // NEW: Always-on rapid polling for reset detection
+        startRapidResetDetection() {
             // Stop any existing rapid polling
-            if (this.rapidPollInterval) {
-                clearInterval(this.rapidPollInterval);
-            }
+            this.stopRapidPolling();
             
-            // Stop regular polling temporarily
-            const wasPolling = !!this.pollInterval;
-            this.stopPolling();
-            
-            let rapidPollCount = 0;
-            const maxRapidPolls = 20; // 20 polls over 10 seconds = every 500ms
-            
-            console.log('⚡ Starting rapid polling (500ms intervals) for reset cleanup');
+            console.log(`⚡ Starting ALWAYS-ON rapid reset detection (${RAPID_POLL_INTERVAL}ms intervals)`);
             
             this.rapidPollInterval = setInterval(async () => {
-                rapidPollCount++;
-                
+                // Only check for reset signals, don't replace regular polling
                 try {
                     const response = await fetch(`${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`, { 
                         cache: 'no-store',
@@ -745,42 +733,30 @@
                     if (response.ok) {
                         const data = await response.json();
                         
-                        // Check if we're still getting reset signals
-                        if (data?.stickyReset || data?.action === 'reset' || data?.hardReset) {
-                            console.log(`⚡ Rapid poll #${rapidPollCount}: Still receiving reset signal`);
+                        // Only process if this contains reset signals
+                        if (data?.stickyReset || data?.action === 'reset' || data?.hardReset || data?.allDataCleared) {
+                            console.log(`⚡ RAPID RESET DETECTION: Found reset signal - processing immediately`);
                             this.handlePollResponse(data);
-                        } else {
-                            console.log(`⚡ Rapid poll #${rapidPollCount}: Normal data, reset complete`);
-                            // Reset complete, resume normal polling
-                            this.stopRapidPolling();
-                            
-                            if (wasPolling || data?.running) {
-                                this.startOptimizedPolling();
-                            }
-                            return;
                         }
                     }
-                    
                 } catch (error) {
-                    console.warn(`⚡ Rapid poll #${rapidPollCount} failed:`, error.message);
+                    // Silent fail for rapid polling - don't log every error
                 }
-                
-                // Stop rapid polling after max attempts
-                if (rapidPollCount >= maxRapidPolls) {
-                    console.log('⚡ Rapid polling complete - resuming normal polling');
-                    this.stopRapidPolling();
-                    
-                    if (wasPolling) {
-                        this.startOptimizedPolling();
-                    }
-                }
-                
-            }, 500); // Poll every 500ms during rapid mode
+            }, RAPID_POLL_INTERVAL);
+        }
+
+        stopRapidPolling() {
+            if (this.rapidPollInterval) {
+                clearInterval(this.rapidPollInterval);
+                this.rapidPollInterval = null;
+                console.log('⚡ Rapid reset detection stopped');
+            }
         }
 
         async poll() {
             if (!this.isPageVisible) {
                 this.stopPolling();
+                this.stopRapidPolling();
                 return;
             }
 
@@ -818,9 +794,9 @@
             
             this.consecutiveErrors = 0;
             
-            // ENHANCED RESET HANDLING: Immediate and aggressive clearing
+            // ULTRA-AGGRESSIVE RESET HANDLING: Immediate and brutal clearing
             if (action === 'reset' || allDataCleared || hardReset || stickyReset) {
-                console.log(`🗑️ RESET DETECTED: action=${action}, allDataCleared=${allDataCleared}, hardReset=${hardReset}, stickyReset=${stickyReset}, signalId=${resetSignalId}`);
+                console.log(`🗑️ ULTRA-AGGRESSIVE RESET DETECTED: action=${action}, allDataCleared=${allDataCleared}, hardReset=${hardReset}, stickyReset=${stickyReset}, signalId=${resetSignalId}`);
                 
                 // Prevent processing the same reset signal multiple times
                 if (resetSignalId && this.lastProcessedResetId === resetSignalId) {
@@ -830,16 +806,23 @@
                 
                 if (resetSignalId) {
                     this.lastProcessedResetId = resetSignalId;
+                    // Clear this after 30 seconds to allow reprocessing
+                    setTimeout(() => {
+                        if (this.lastProcessedResetId === resetSignalId) {
+                            this.lastProcessedResetId = null;
+                        }
+                    }, 30000);
                 }
                 
-                // FORCE IMMEDIATE CLEAR: Don't wait, clear everything now
-                console.log('🔥 FORCE IMMEDIATE RESET: Clearing renderer immediately');
+                // NUCLEAR RESET: Multiple immediate clearing approaches
+                console.log('🔥 NUCLEAR RESET: Clearing with multiple approaches');
                 
-                // 1. Immediately clear the renderer
+                // 1. Immediately clear the renderer with all methods
                 if (this.renderer) {
+                    // Method 1: Standard clear
                     this.renderer.updateClusters([]);
                     
-                    // 2. Force clear any cached/animated clusters
+                    // Method 2: Force clear all data structures
                     if (this.renderer.springs) {
                         this.renderer.springs.clear();
                     }
@@ -850,46 +833,64 @@
                         this.renderer.animatedClusters.clear();
                     }
                     
-                    // 3. Force a manual render to ensure canvas is cleared
+                    // Method 3: Manual canvas clear
                     if (this.renderer.ctx) {
                         const canvas = this.renderer.canvas;
                         const ctx = this.renderer.ctx;
                         const W = canvas.width / (window.devicePixelRatio || 1);
                         const H = canvas.height / (window.devicePixelRatio || 1);
                         ctx.clearRect(0, 0, W, H);
-                        console.log('🧹 Canvas manually cleared');
+                        console.log('🧹 Canvas manually nuked');
                     }
+                    
+                    // Method 4: Repeated clearing with delays
+                    setTimeout(() => {
+                        console.log('🔥 Delayed nuclear clear #1');
+                        this.renderer.updateClusters([]);
+                        if (this.renderer.springs) this.renderer.springs.clear();
+                        if (this.renderer.targets) this.renderer.targets.clear();
+                    }, 50);
+                    
+                    setTimeout(() => {
+                        console.log('🔥 Delayed nuclear clear #2');
+                        this.renderer.updateClusters([]);
+                        if (this.renderer.springs) this.renderer.springs.clear();
+                        if (this.renderer.targets) this.renderer.targets.clear();
+                    }, 150);
+                    
+                    setTimeout(() => {
+                        console.log('🔥 Final nuclear clear #3');
+                        this.renderer.updateClusters([]);
+                    }, 300);
                 }
                 
-                // 4. Update state immediately
+                // 2. Update state immediately
                 this.isGameRunning = gameRunning;
                 
-                // 5. Clear any cached state
+                // 3. Nuclear clear of all cached state
                 this.lastKnownState = null;
                 
-                // 6. Update CSS classes
+                // 4. Update CSS classes aggressively
                 document.body.classList.remove('clickmap-has-data');
                 document.body.classList.toggle('clickmap-active', gameRunning);
                 
-                console.log('✅ RESET COMPLETE: All visualization cleared');
+                // 5. Force DOM update
+                document.body.offsetHeight; // Force reflow
                 
-                // 7. If this is a sticky reset, start rapid polling to catch any missed signals
-                if (stickyReset) {
-                    console.log('🚀 STICKY RESET: Starting rapid polling for 10 seconds');
-                    this.startRapidPollingAfterReset();
-                }
+                console.log('✅ NUCLEAR RESET COMPLETE: All visualization obliterated');
                 
-                // 8. Update polling strategy based on new state
+                // 6. Update polling strategy based on new state
                 if (gameRunning && !this.pollInterval) {
                     console.log('🚀 RESET: Game is running, starting polling');
                     this.startOptimizedPolling();
                 } else if (!gameRunning) {
                     console.log('💤 RESET: Game not running, switching to status checks');
                     this.stopPolling();
+                    // Keep rapid polling running for reset detection
                     this.scheduleStatusCheck();
                 }
                 
-                // 9. Store cleared state
+                // 7. Store cleared state
                 this.lastKnownState = {
                     running: gameRunning,
                     clusters: [],
@@ -990,6 +991,7 @@
                 this.isGameRunning = false;
                 this.stopPolling();
                 this.scheduleStatusCheck();
+                // Keep rapid polling for reset detection
             }
         }
 
@@ -1002,41 +1004,52 @@
             const dataPreserved = data?.dataPreserved === true;
             const allDataCleared = data?.allDataCleared === true;
             const hardReset = data?.hardReset === true;
+            const stickyReset = data?.stickyReset === true;
             
             this.updateCount++;
             this.lastUpdate = Date.now();
             
             // Enhanced logging for state changes
             if (source.includes('start') || source.includes('stop') || source.includes('reset') || source.includes('freeze') || source.includes('unfreeze')) {
-                console.log(`🎨 ${source.toUpperCase()}: ${clusters.length} clusters, frozen=${frozen}, unfrozen=${unfrozen}, preserved=${dataPreserved}, cleared=${allDataCleared}, hardReset=${hardReset}`);
+                console.log(`🎨 ${source.toUpperCase()}: ${clusters.length} clusters, frozen=${frozen}, unfrozen=${unfrozen}, preserved=${dataPreserved}, cleared=${allDataCleared}, hardReset=${hardReset}, stickyReset=${stickyReset}`);
             } else if (clusters.length > 0 || this.updateCount % 5 === 1) {
                 console.log(`🎨 Update #${this.updateCount} (${source}): ${clusters.length} clusters`);
             }
             
-            // ENHANCED RESET HANDLING: Multiple approaches to ensure clearing
-            if (source.includes('reset') || allDataCleared || hardReset) {
-                console.log('🔥 MULTIPLE RESET APPROACHES: Trying all clearing methods');
+            // NUCLEAR RESET HANDLING: Multiple approaches with extreme prejudice
+            if (source.includes('reset') || allDataCleared || hardReset || stickyReset) {
+                console.log('🔥 NUCLEAR RESET VISUALIZATION: Obliterating with extreme prejudice');
                 
-                // Approach 1: Immediate clear
+                // Nuclear approach 1: Immediate clear
                 this.renderer.updateClusters([]);
                 
-                // Approach 2: Force clear with delay
-                setTimeout(() => {
-                    console.log('🔥 Delayed reset clear #1');
-                    this.renderer.updateClusters([]);
-                }, 50);
+                // Nuclear approach 2: Delayed clears with increasing delays
+                const delays = [25, 75, 150, 300, 600];
+                delays.forEach((delay, index) => {
+                    setTimeout(() => {
+                        console.log(`🔥 Nuclear delayed clear #${index + 1} at ${delay}ms`);
+                        this.renderer.updateClusters([]);
+                        
+                        // Also clear data structures
+                        if (this.renderer.springs) this.renderer.springs.clear();
+                        if (this.renderer.targets) this.renderer.targets.clear();
+                        
+                        // Manual canvas clear for good measure
+                        if (this.renderer.ctx) {
+                            const canvas = this.renderer.canvas;
+                            const ctx = this.renderer.ctx;
+                            const W = canvas.width / (window.devicePixelRatio || 1);
+                            const H = canvas.height / (window.devicePixelRatio || 1);
+                            ctx.clearRect(0, 0, W, H);
+                        }
+                    }, delay);
+                });
                 
-                // Approach 3: Second delayed clear
+                // Nuclear approach 3: Final update with actual data (should be empty)
                 setTimeout(() => {
-                    console.log('🔥 Delayed reset clear #2');
-                    this.renderer.updateClusters([]);
-                }, 200);
-                
-                // Approach 4: Final clear with data (should be empty)
-                setTimeout(() => {
-                    console.log('🔥 Final reset update with actual data (should be empty)');
+                    console.log('🔥 Final nuclear update with actual data (should be empty)');
                     this.renderer.updateClusters(clusters);
-                }, 500);
+                }, 1000);
                 
             } else {
                 // Normal update
@@ -1050,53 +1063,66 @@
             document.body.classList.toggle('clickmap-active', isActive);
             document.body.classList.toggle('clickmap-has-data', hasData);
             
-            // Special handling for resets
-            if (source.includes('reset') || allDataCleared || hardReset) {
-                // Force remove data class for resets
+            // Nuclear handling for resets
+            if (source.includes('reset') || allDataCleared || hardReset || stickyReset) {
+                // Nuclear force remove data class for resets
                 document.body.classList.remove('clickmap-has-data');
-                console.log('🎨 CSS classes updated for reset: clickmap-has-data removed');
+                // Force reflow
+                document.body.offsetHeight;
+                console.log('🎨 CSS classes nuked for reset: clickmap-has-data obliterated');
             }
             
             // Store last known good state
             this.lastKnownState = data;
         }
 
-        // Add method to force clear everything (for debugging)
-        forceResetVisualization() {
-            console.log('🆘 EMERGENCY RESET: Force clearing all visualization');
+        // Nuclear emergency reset function
+        forceNuclearReset() {
+            console.log('🆘 NUCLEAR EMERGENCY RESET: Force obliterating all visualization');
             
             if (this.renderer) {
-                // Clear all data structures
+                // Nuclear clear all data structures
                 this.renderer.updateClusters([]);
                 
                 if (this.renderer.springs) this.renderer.springs.clear();
                 if (this.renderer.targets) this.renderer.targets.clear();
                 if (this.renderer.animatedClusters) this.renderer.animatedClusters.clear();
                 
-                // Manual canvas clear
+                // Nuclear manual canvas clear
                 if (this.renderer.ctx) {
                     const canvas = this.renderer.canvas;
                     const ctx = this.renderer.ctx;
                     const W = canvas.width / (window.devicePixelRatio || 1);
                     const H = canvas.height / (window.devicePixelRatio || 1);
                     ctx.clearRect(0, 0, W, H);
+                    
+                    // Nuclear: Clear multiple times
+                    for (let i = 0; i < 5; i++) {
+                        setTimeout(() => {
+                            ctx.clearRect(0, 0, W, H);
+                        }, i * 50);
+                    }
                 }
             }
             
-            // Clear state
+            // Nuclear clear state
             this.lastKnownState = null;
+            this.lastProcessedResetId = null;
             
-            // Update classes
+            // Nuclear update classes
             document.body.classList.remove('clickmap-has-data');
+            document.body.classList.remove('clickmap-active');
             
-            console.log('✅ EMERGENCY RESET: Complete');
+            // Force reflow
+            document.body.offsetHeight;
+            
+            console.log('✅ NUCLEAR EMERGENCY RESET: Complete obliteration achieved');
         }
 
         getStatus() {
             return {
                 channelId: this.channelId,
-                threshold: this.threshold,
-                transport: `Optimized HTTP (${POLL_INTERVAL}ms)`,
+                transport: `Ultra-Aggressive HTTP (${POLL_INTERVAL}ms + ${RAPID_POLL_INTERVAL}ms rapid)`,
                 updateCount: this.updateCount,
                 consecutiveErrors: this.consecutiveErrors,
                 isGameRunning: this.isGameRunning,
@@ -1105,9 +1131,10 @@
                 isRapidPolling: !!this.rapidPollInterval,
                 isPageVisible: this.isPageVisible,
                 lastUpdate: this.lastUpdate,
-                backend: 'Ultra High-Performance with Sampling',
+                backend: 'Ultra High-Performance with Sticky Reset',
                 fps: this.renderer ? this.renderer.getFPS() : 0,
                 pollInterval: POLL_INTERVAL,
+                rapidPollInterval: RAPID_POLL_INTERVAL,
                 statusCheckInterval: STATUS_CHECK_INTERVAL,
                 isActive: document.body.classList.contains('clickmap-active'),
                 hasData: document.body.classList.contains('clickmap-has-data'),
@@ -1118,22 +1145,22 @@
 
         destroy() {
             this.stopPolling();
-            this.stopRapidPolling(); // NEW: Clean up rapid polling
+            this.stopRapidPolling();
             if (this.renderer) {
                 this.renderer.destroy();
             }
-            console.log('🧹 Optimized overlay destroyed');
+            console.log('🧹 Ultra-aggressive overlay destroyed');
         }
     }
 
     // ========== INITIALIZATION ==========
     function initialize() {
         try {
-            const overlay = new OptimizedSmartOverlay();
+            const overlay = new UltraAggressiveSmartOverlay();
             window.smartOverlay = overlay; // For debugging
-            console.log('🎯 Optimized 5-second overlay with ALL visual features and sticky reset support loaded');
+            console.log('🎯 ULTRA-AGGRESSIVE overlay with INSTANT reset detection loaded');
         } catch (error) { 
-            console.error('Failed to initialize optimized overlay:', error); 
+            console.error('Failed to initialize ultra-aggressive overlay:', error); 
         }
     }
 
@@ -1143,10 +1170,10 @@
         initialize();
     }
 
-    // Make the force reset available globally for debugging
-    window.forceResetOverlay = () => {
-        if (window.smartOverlay && window.smartOverlay.forceResetVisualization) {
-            window.smartOverlay.forceResetVisualization();
+    // Make the nuclear reset available globally for emergency use
+    window.forceNuclearReset = () => {
+        if (window.smartOverlay && window.smartOverlay.forceNuclearReset) {
+            window.smartOverlay.forceNuclearReset();
         }
     };
 })();

@@ -1175,7 +1175,7 @@ app.get('/debug/state', async (req, res) => {
     }
 });
 
-// FIXED START/STOP/RESET with proper data preservation
+// FIXED START/STOP/RESET with proper data preservation and unfreezing
 app.post('/start', async (req, res) => {
     log('🚀 START endpoint called');
     
@@ -1207,6 +1207,8 @@ app.post('/start', async (req, res) => {
         broadcastData.channelId = channelId || 'all';
         broadcastData.timestamp = Date.now();
         broadcastData.dataPreserved = true; // Signal that data was preserved
+        broadcastData.frozen = false; // EXPLICITLY clear frozen state
+        broadcastData.unfrozen = true; // Signal that we're unfreezing
         
         // Immediate broadcast for start
         broadcastManager.forceImmediateBroadcast(channelId || 'all', broadcastData);
@@ -1216,6 +1218,7 @@ app.post('/start', async (req, res) => {
             status: 'started',
             running: true,
             dataPreserved: true,
+            unfrozen: true,
             stateVersion: result,
             instanceId: INSTANCE_ID
         });
@@ -1309,7 +1312,9 @@ app.post('/reset', async (req, res) => {
             action: 'reset',
             channelId: channelId || 'all',
             timestamp: Date.now(),
-            allDataCleared: true // Signal that all data was cleared
+            allDataCleared: true, // Signal that all data was cleared
+            frozen: false, // EXPLICITLY clear frozen state
+            unfrozen: true // Signal that we're clearing frozen state
         };
         
         // Immediate broadcast for reset
@@ -1320,6 +1325,7 @@ app.post('/reset', async (req, res) => {
             status: 'reset',
             running: running,
             allDataCleared: true,
+            unfrozen: true,
             instanceId: INSTANCE_ID
         });
         

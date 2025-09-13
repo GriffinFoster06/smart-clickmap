@@ -892,8 +892,18 @@
                 console.log(`🎨 Update #${this.updateCount} (${source}): ${clusters.length} clusters`);
             }
             
-            // Update renderer with sophisticated clusters
-            this.renderer.updateClusters(clusters);
+            // Force clear renderer for reset operations
+            if (source.includes('reset') || allDataCleared) {
+                console.log('🔥 Force clearing renderer for reset operation');
+                this.renderer.updateClusters([]);
+                // Small delay then update with actual data (which should be empty)
+                setTimeout(() => {
+                    this.renderer.updateClusters(clusters);
+                }, 100);
+            } else {
+                // Normal update
+                this.renderer.updateClusters(clusters);
+            }
             
             // Update CSS classes for styling - no frozen visual styling
             const isActive = data?.running !== false; // Just check if running

@@ -223,7 +223,7 @@
             this.startPolling();
         }
 
-        // ========== IMMEDIATE STATE UPDATE HANDLING ==========
+        // ========== IMMEDIATE STATE UPDATE HANDLING - FIXED ==========
         handleImmediateUpdate(data) {
             const action = data.action;
             const version = data.version || 0;
@@ -232,35 +232,30 @@
             // Detect instance changes during autoscaling
             if (this.lastInstanceId && this.lastInstanceId !== instanceId) {
                 console.log(`Instance changed: ${this.lastInstanceId} -> ${instanceId}`);
-                // Don't clear on instance change if we have valid data
-                // The new instance should send current state
             }
             this.lastInstanceId = instanceId;
             
-            // IMMEDIATE ACTION HANDLING
+            // IMMEDIATE ACTION HANDLING - SIMPLIFIED
             if (action === 'start') {
-                console.log('START received - immediate clear');
-                this.immediatelyClear();
+                console.log('START received - enabling overlay');
                 this.isGameRunning = true;
                 this.lastVersion = version;
-                this.forceCleared = true; // Prevent any catch-up
+                this.immediatelyClear(); // Clear old data
                 return;
             }
             
             if (action === 'stop') {
-                console.log('STOP received - immediate clear, no catch-up');
-                this.immediatelyClear();
+                console.log('STOP received - disabling overlay');
                 this.isGameRunning = false;
                 this.lastVersion = version;
-                this.forceCleared = true; // Prevent any final data display
+                this.immediatelyClear(); // Clear and stay cleared
                 return;
             }
             
             if (action === 'reset') {
-                console.log('RESET received - immediate clear');
-                this.immediatelyClear();
+                console.log('RESET received - clearing data');
                 this.lastVersion = version;
-                this.forceCleared = true; // Prevent any catch-up
+                this.immediatelyClear(); // Just clear data, keep running state
                 return;
             }
             
@@ -270,39 +265,29 @@
                 return;
             }
             
-            // Update game state
+            // Update game state from data
             const wasRunning = this.isGameRunning;
             const newRunning = data.running === true;
             
             // Handle state transitions
-            if (wasRunning && !newRunning) {
-                console.log('Game stopped via data update');
-                this.immediatelyClear();
-                this.isGameRunning = false;
-                this.lastVersion = version;
-                return;
-            }
-            
-            if (!wasRunning && newRunning) {
-                console.log('Game started via data update');
-                this.immediatelyClear(); // Clear before showing new data
-                this.isGameRunning = true;
-                this.forceCleared = false; // Allow new data
+            if (wasRunning !== newRunning) {
+                console.log(`State change: ${wasRunning} -> ${newRunning}`);
+                this.isGameRunning = newRunning;
+                
+                if (!newRunning) {
+                    this.immediatelyClear();
+                    return;
+                }
             }
             
             this.isGameRunning = newRunning;
             this.lastVersion = version;
             
-            // Only update visualization if running and not force-cleared
-            if (this.isGameRunning && !this.forceCleared) {
+            // Always update visualization if running
+            if (this.isGameRunning) {
                 this.updateVisualization(data, 'realtime');
-            } else if (!this.isGameRunning) {
-                this.immediatelyClear(); // Ensure cleared state when not running
-            }
-            
-            // Reset force-cleared flag after first valid update
-            if (this.forceCleared && this.isGameRunning && data.clusters && data.clusters.length > 0) {
-                this.forceCleared = false;
+            } else {
+                this.immediatelyClear();
             }
         }
 

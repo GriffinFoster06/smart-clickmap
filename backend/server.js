@@ -877,6 +877,8 @@ async function getCurrentHeatmapData(channelId, threshold = 3) {
         let totalUsers = 0;
 
         const allChannelData = await clickEngine.getAllChannelClicks();
+        console.log(`🔍 Getting ALL channel data: ${allChannelData.size} channels`);
+        
         allChannelData.forEach((channelClicks) => {
             totalClicks += channelClicks.size;
             totalUsers += channelClicks.size;
@@ -887,6 +889,7 @@ async function getCurrentHeatmapData(channelId, threshold = 3) {
         });
 
         const clusters = processClicksIntoVisualClusters(allPoints, threshold);
+        console.log(`🎨 Processed ${allPoints.length} points into ${clusters.length} clusters`);
 
         return {
             running: running,
@@ -901,8 +904,10 @@ async function getCurrentHeatmapData(channelId, threshold = 3) {
     }
 
     const channelClicks = await clickEngine.getChannelClicks(channelId);
+    console.log(`🔍 Getting channel ${channelId} data: ${channelClicks ? channelClicks.size : 0} clicks`);
 
     if (!channelClicks || channelClicks.size === 0) {
+        console.log(`✅ Returning empty data for channel ${channelId}`);
         return {
             running: running,
             clusters: [],
@@ -917,8 +922,7 @@ async function getCurrentHeatmapData(channelId, threshold = 3) {
 
     const points = Array.from(channelClicks.values());
     const clusters = processClicksIntoVisualClusters(points, threshold);
-
-    log(`🔍 Channel ${channelId}: ${points.length} points → ${clusters.length} clusters`, 'debug');
+    console.log(`🎨 Channel ${channelId}: ${points.length} points → ${clusters.length} clusters`);
 
     return {
         running: running,

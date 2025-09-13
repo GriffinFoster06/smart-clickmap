@@ -2122,7 +2122,7 @@ let wss = null;
 try {
     wss = new WebSocketServer({
         server: httpServer,
-        path: '/ws',
+        // Remove path restriction to handle dynamic paths like /ws/{channelId}
         perMessageDeflate: false,
         clientTracking: false, // We handle this ourselves
         maxPayload: 16 * 1024 // 16KB max message size

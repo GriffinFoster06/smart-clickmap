@@ -521,6 +521,65 @@ app.post('/click', (req, res) => {
     });
 });
 
+// Add this test endpoint to your server.js (add it after the existing /click endpoint)
+
+// TEST CLICK ENDPOINT - For load testing without JWT validation
+app.post('/test-click', (req, res) => {
+    requestsPerSecond++;
+    
+    // Rate limit
+    if (requestsPerSecond > CONFIG.MAX_CLICKS_PER_SECOND) {
+        return res.status(429).json({ error: 'Rate limit exceeded' });
+    }
+    
+    // Quick rejection if not running
+    if (!gameState.isRunning) {
+        return res.status(400).json({ error: 'Game not running - use /start endpoint first' });
+    }
+    
+    // Create mock payload for testing (no JWT validation)
+    const payload = {
+        channel_id: req.body.channelId || 'test_channel',
+        user_id: req.body.userId || 'test_user',
+        exp: Math.floor(Date.now() / 1000) + 3600
+    };
+    
+    // Validate coordinates
+    const { x, y } = req.body;
+    if (typeof x !== 'number' || typeof y !== 'number' ||
+        x < 0 || x > 1 || y < 0 || y > 1) {
+        return res.status(400).json({ error: 'Invalid coordinates' });
+    }
+    
+    // Process click
+    const accepted = clickEngine.addClick(
+        payload.channel_id,
+        payload.user_id,
+        x, y
+    );
+    
+    res.json({ 
+        success: true,
+        accepted,
+        testMode: true,
+        channel: payload.channel_id,
+        coordinates: { x, y }
+    });
+});
+
+// Optional: Add a test status endpoint
+app.get('/test-status', (req, res) => {
+    const status = clickEngine.getStatus();
+    const state = gameState.getState();
+    
+    res.json({
+        ...state,
+        ...status,
+        testEndpoint: true,
+        message: 'Test endpoint is working'
+    });
+});
+
 // HEATMAP
 app.get('/heatmap', (req, res) => {
     const channelId = req.query.channel;

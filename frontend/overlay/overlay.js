@@ -732,272 +732,163 @@
             }
         }
 
-        // Replace the handlePollResponse method in overlay.js with this enhanced version:
-
-handlePollResponse(data) {
-    const clusters = Array.isArray(data) ? data : (data?.clusters || []);
-    const gameRunning = data?.running === true;
-    const hasActivity = clusters.length > 0;
-    const isHardCutoff = data?.hardCutoff === true;
-    const action = data?.action;
-    const frozen = data?.frozen === true;
-    const unfrozen = data?.unfrozen === true;
-    const dataPreserved = data?.dataPreserved === true;
-    const allDataCleared = data?.allDataCleared === true;
-    const hardReset = data?.hardReset === true; // NEW: Enhanced reset signal
-    
-    this.consecutiveErrors = 0;
-    
-    // ENHANCED RESET HANDLING: Immediate and aggressive clearing
-    if (action === 'reset' || allDataCleared || hardReset) {
-        console.log(`🗑️ RESET DETECTED: action=${action}, allDataCleared=${allDataCleared}, hardReset=${hardReset}`);
-        
-        // FORCE IMMEDIATE CLEAR: Don't wait, clear everything now
-        console.log('🔥 FORCE IMMEDIATE RESET: Clearing renderer immediately');
-        
-        // 1. Immediately clear the renderer
-        if (this.renderer) {
-            this.renderer.updateClusters([]);
+        handlePollResponse(data) {
+            const clusters = Array.isArray(data) ? data : (data?.clusters || []);
+            const gameRunning = data?.running === true;
+            const hasActivity = clusters.length > 0;
+            const isHardCutoff = data?.hardCutoff === true;
+            const action = data?.action;
+            const frozen = data?.frozen === true;
+            const unfrozen = data?.unfrozen === true;
+            const dataPreserved = data?.dataPreserved === true;
+            const allDataCleared = data?.allDataCleared === true;
+            const hardReset = data?.hardReset === true; // NEW: Enhanced reset signal
             
-            // 2. Force clear any cached/animated clusters
-            if (this.renderer.springs) {
-                this.renderer.springs.clear();
+            this.consecutiveErrors = 0;
+            
+            // ENHANCED RESET HANDLING: Immediate and aggressive clearing
+            if (action === 'reset' || allDataCleared || hardReset) {
+                console.log(`🗑️ RESET DETECTED: action=${action}, allDataCleared=${allDataCleared}, hardReset=${hardReset}`);
+                
+                // FORCE IMMEDIATE CLEAR: Don't wait, clear everything now
+                console.log('🔥 FORCE IMMEDIATE RESET: Clearing renderer immediately');
+                
+                // 1. Immediately clear the renderer
+                if (this.renderer) {
+                    this.renderer.updateClusters([]);
+                    
+                    // 2. Force clear any cached/animated clusters
+                    if (this.renderer.springs) {
+                        this.renderer.springs.clear();
+                    }
+                    if (this.renderer.targets) {
+                        this.renderer.targets.clear();
+                    }
+                    if (this.renderer.animatedClusters) {
+                        this.renderer.animatedClusters.clear();
+                    }
+                    
+                    // 3. Force a manual render to ensure canvas is cleared
+                    if (this.renderer.ctx) {
+                        const canvas = this.renderer.canvas;
+                        const ctx = this.renderer.ctx;
+                        const W = canvas.width / (window.devicePixelRatio || 1);
+                        const H = canvas.height / (window.devicePixelRatio || 1);
+                        ctx.clearRect(0, 0, W, H);
+                        console.log('🧹 Canvas manually cleared');
+                    }
+                }
+                
+                // 4. Update state immediately
+                this.isGameRunning = gameRunning;
+                
+                // 5. Clear any cached state
+                this.lastKnownState = null;
+                
+                // 6. Update CSS classes
+                document.body.classList.remove('clickmap-has-data');
+                document.body.classList.toggle('clickmap-active', gameRunning);
+                
+                console.log('✅ RESET COMPLETE: All visualization cleared');
+                
+                // 7. Update polling strategy based on new state
+                if (gameRunning && !this.pollInterval) {
+                    console.log('🚀 RESET: Game is running, starting polling');
+                    this.startOptimizedPolling();
+                } else if (!gameRunning) {
+                    console.log('💤 RESET: Game not running, switching to status checks');
+                    this.stopPolling();
+                    this.scheduleStatusCheck();
+                }
+                
+                // 8. Store cleared state
+                this.lastKnownState = {
+                    running: gameRunning,
+                    clusters: [],
+                    totalClicks: 0,
+                    uniqueUsers: 0,
+                    coverage: 0,
+                    frozen: false,
+                    action: 'reset'
+                };
+                
+                return; // Exit early for reset
             }
-            if (this.renderer.targets) {
-                this.renderer.targets.clear();
+            
+            // Handle immediate state changes from start/stop
+            if (isHardCutoff || action) {
+                console.log(`🔥 STATE CHANGE: ${action} - running=${gameRunning}, frozen=${frozen}, unfrozen=${unfrozen}, preserved=${dataPreserved}`);
+                
+                if (action === 'start') {
+                    this.isGameRunning = true;
+                    console.log('🚀 Game started - overlay activated, unfrozen, data preserved');
+                    
+                    const unfrozenData = {
+                        ...data,
+                        running: true,
+                        frozen: false,
+                        unfrozen: true,
+                        clusters: clusters
+                    };
+                    this.updateVisualization(unfrozenData, 'start_unfreeze');
+                    
+                } else if (action === 'stop') {
+                    this.isGameRunning = false;
+                    console.log('🛑 Game stopped - overlay FROZEN (data preserved)');
+                    this.stopPolling();
+                    this.scheduleStatusCheck();
+                    
+                    const frozenData = {
+                        ...data,
+                        running: false,
+                        frozen: true,
+                        unfrozen: false,
+                        clusters: clusters
+                    };
+                    this.updateVisualization(frozenData, 'stop_freeze');
+                    return;
+                }
             }
-            if (this.renderer.animatedClusters) {
-                this.renderer.animatedClusters.clear();
+            
+            // Handle unfrozen signal
+            if (unfrozen && !action) {
+                console.log('🔓 Received unfreeze signal - clearing frozen state');
+                const unfrozenData = {
+                    ...data,
+                    frozen: false,
+                    unfrozen: true
+                };
+                this.updateVisualization(unfrozenData, 'unfreeze_signal');
             }
             
-            // 3. Force a manual render to ensure canvas is cleared
-            if (this.renderer.ctx) {
-                const canvas = this.renderer.canvas;
-                const ctx = this.renderer.ctx;
-                const W = canvas.width / (window.devicePixelRatio || 1);
-                const H = canvas.height / (window.devicePixelRatio || 1);
-                ctx.clearRect(0, 0, W, H);
-                console.log('🧹 Canvas manually cleared');
+            // Detect regular game state changes
+            if (gameRunning !== this.isGameRunning && !isHardCutoff) {
+                console.log(`🎮 Game state changed: ${this.isGameRunning} → ${gameRunning}`);
+                this.isGameRunning = gameRunning;
+                
+                if (!gameRunning) {
+                    console.log('🛑 Game stopped - switching to status check mode (preserving visualization)');
+                    this.stopPolling();
+                    this.scheduleStatusCheck();
+                    
+                    const preservedData = {
+                        ...data,
+                        running: false,
+                        frozen: true,
+                        clusters: clusters.length > 0 ? clusters : (this.lastKnownState?.clusters || [])
+                    };
+                    this.updateVisualization(preservedData, 'game_stopped_preserve');
+                    return;
+                }
             }
-        }
-        
-        // 4. Update state immediately
-        this.isGameRunning = gameRunning;
-        
-        // 5. Clear any cached state
-        this.lastKnownState = null;
-        
-        // 6. Update CSS classes
-        document.body.classList.remove('clickmap-has-data');
-        document.body.classList.toggle('clickmap-active', gameRunning);
-        
-        console.log('✅ RESET COMPLETE: All visualization cleared');
-        
-        // 7. Update polling strategy based on new state
-        if (gameRunning && !this.pollInterval) {
-            console.log('🚀 RESET: Game is running, starting polling');
-            this.startOptimizedPolling();
-        } else if (!gameRunning) {
-            console.log('💤 RESET: Game not running, switching to status checks');
-            this.stopPolling();
-            this.scheduleStatusCheck();
-        }
-        
-        // 8. Store cleared state
-        this.lastKnownState = {
-            running: gameRunning,
-            clusters: [],
-            totalClicks: 0,
-            uniqueUsers: 0,
-            coverage: 0,
-            frozen: false,
-            action: 'reset'
-        };
-        
-        return; // Exit early for reset
-    }
-    
-    // Handle immediate state changes from start/stop
-    if (isHardCutoff || action) {
-        console.log(`🔥 STATE CHANGE: ${action} - running=${gameRunning}, frozen=${frozen}, unfrozen=${unfrozen}, preserved=${dataPreserved}`);
-        
-        if (action === 'start') {
-            this.isGameRunning = true;
-            console.log('🚀 Game started - overlay activated, unfrozen, data preserved');
             
-            const unfrozenData = {
-                ...data,
-                running: true,
-                frozen: false,
-                unfrozen: true,
-                clusters: clusters
-            };
-            this.updateVisualization(unfrozenData, 'start_unfreeze');
-            
-        } else if (action === 'stop') {
-            this.isGameRunning = false;
-            console.log('🛑 Game stopped - overlay FROZEN (data preserved)');
-            this.stopPolling();
-            this.scheduleStatusCheck();
-            
-            const frozenData = {
-                ...data,
-                running: false,
-                frozen: true,
-                unfrozen: false,
-                clusters: clusters
-            };
-            this.updateVisualization(frozenData, 'stop_freeze');
-            return;
+            if (hasActivity) {
+                this.hasEverHadData = true;
+            }
+
+            // Regular update
+            this.updateVisualization(data, 'poll');
         }
-    }
-    
-    // Handle unfrozen signal
-    if (unfrozen && !action) {
-        console.log('🔓 Received unfreeze signal - clearing frozen state');
-        const unfrozenData = {
-            ...data,
-            frozen: false,
-            unfrozen: true
-        };
-        this.updateVisualization(unfrozenData, 'unfreeze_signal');
-    }
-    
-    // Detect regular game state changes
-    if (gameRunning !== this.isGameRunning && !isHardCutoff) {
-        console.log(`🎮 Game state changed: ${this.isGameRunning} → ${gameRunning}`);
-        this.isGameRunning = gameRunning;
-        
-        if (!gameRunning) {
-            console.log('🛑 Game stopped - switching to status check mode (preserving visualization)');
-            this.stopPolling();
-            this.scheduleStatusCheck();
-            
-            const preservedData = {
-                ...data,
-                running: false,
-                frozen: true,
-                clusters: clusters.length > 0 ? clusters : (this.lastKnownState?.clusters || [])
-            };
-            this.updateVisualization(preservedData, 'game_stopped_preserve');
-            return;
-        }
-    }
-    
-    if (hasActivity) {
-        this.hasEverHadData = true;
-    }
-
-    // Regular update
-    this.updateVisualization(data, 'poll');
-}
-
-// Also enhance the updateVisualization method:
-updateVisualization(data, source = 'poll') {
-    if (!this.renderer) return;
-    
-    const clusters = Array.isArray(data) ? data : (data?.clusters || []);
-    const frozen = data?.frozen === true;
-    const unfrozen = data?.unfrozen === true;
-    const dataPreserved = data?.dataPreserved === true;
-    const allDataCleared = data?.allDataCleared === true;
-    const hardReset = data?.hardReset === true;
-    
-    this.updateCount++;
-    this.lastUpdate = Date.now();
-    
-    // Enhanced logging for state changes
-    if (source.includes('start') || source.includes('stop') || source.includes('reset') || source.includes('freeze') || source.includes('unfreeze')) {
-        console.log(`🎨 ${source.toUpperCase()}: ${clusters.length} clusters, frozen=${frozen}, unfrozen=${unfrozen}, preserved=${dataPreserved}, cleared=${allDataCleared}, hardReset=${hardReset}`);
-    } else if (clusters.length > 0 || this.updateCount % 5 === 1) {
-        console.log(`🎨 Update #${this.updateCount} (${source}): ${clusters.length} clusters`);
-    }
-    
-    // ENHANCED RESET HANDLING: Multiple approaches to ensure clearing
-    if (source.includes('reset') || allDataCleared || hardReset) {
-        console.log('🔥 MULTIPLE RESET APPROACHES: Trying all clearing methods');
-        
-        // Approach 1: Immediate clear
-        this.renderer.updateClusters([]);
-        
-        // Approach 2: Force clear with delay
-        setTimeout(() => {
-            console.log('🔥 Delayed reset clear #1');
-            this.renderer.updateClusters([]);
-        }, 50);
-        
-        // Approach 3: Second delayed clear
-        setTimeout(() => {
-            console.log('🔥 Delayed reset clear #2');
-            this.renderer.updateClusters([]);
-        }, 200);
-        
-        // Approach 4: Final clear with data (should be empty)
-        setTimeout(() => {
-            console.log('🔥 Final reset update with actual data (should be empty)');
-            this.renderer.updateClusters(clusters);
-        }, 500);
-        
-    } else {
-        // Normal update
-        this.renderer.updateClusters(clusters);
-    }
-    
-    // Update CSS classes - enhanced for reset
-    const isActive = data?.running !== false;
-    const hasData = clusters.length > 0;
-    
-    document.body.classList.toggle('clickmap-active', isActive);
-    document.body.classList.toggle('clickmap-has-data', hasData);
-    
-    // Special handling for resets
-    if (source.includes('reset') || allDataCleared || hardReset) {
-        // Force remove data class for resets
-        document.body.classList.remove('clickmap-has-data');
-        console.log('🎨 CSS classes updated for reset: clickmap-has-data removed');
-    }
-    
-    // Store last known good state
-    this.lastKnownState = data;
-}
-
-// Also add this method to force clear everything (for debugging):
-forceResetVisualization() {
-    console.log('🆘 EMERGENCY RESET: Force clearing all visualization');
-    
-    if (this.renderer) {
-        // Clear all data structures
-        this.renderer.updateClusters([]);
-        
-        if (this.renderer.springs) this.renderer.springs.clear();
-        if (this.renderer.targets) this.renderer.targets.clear();
-        if (this.renderer.animatedClusters) this.renderer.animatedClusters.clear();
-        
-        // Manual canvas clear
-        if (this.renderer.ctx) {
-            const canvas = this.renderer.canvas;
-            const ctx = this.renderer.ctx;
-            const W = canvas.width / (window.devicePixelRatio || 1);
-            const H = canvas.height / (window.devicePixelRatio || 1);
-            ctx.clearRect(0, 0, W, H);
-        }
-    }
-    
-    // Clear state
-    this.lastKnownState = null;
-    
-    // Update classes
-    document.body.classList.remove('clickmap-has-data');
-    
-    console.log('✅ EMERGENCY RESET: Complete');
-}
-
-// Make the force reset available globally for debugging
-window.forceResetOverlay = () => {
-    if (window.smartOverlay && window.smartOverlay.forceResetVisualization) {
-        window.smartOverlay.forceResetVisualization();
-    }
-};
 
         handlePollError(error) {
             this.consecutiveErrors++;
@@ -1014,7 +905,104 @@ window.forceResetOverlay = () => {
             }
         }
 
-        
+        updateVisualization(data, source = 'poll') {
+            if (!this.renderer) return;
+            
+            const clusters = Array.isArray(data) ? data : (data?.clusters || []);
+            const frozen = data?.frozen === true;
+            const unfrozen = data?.unfrozen === true;
+            const dataPreserved = data?.dataPreserved === true;
+            const allDataCleared = data?.allDataCleared === true;
+            const hardReset = data?.hardReset === true;
+            
+            this.updateCount++;
+            this.lastUpdate = Date.now();
+            
+            // Enhanced logging for state changes
+            if (source.includes('start') || source.includes('stop') || source.includes('reset') || source.includes('freeze') || source.includes('unfreeze')) {
+                console.log(`🎨 ${source.toUpperCase()}: ${clusters.length} clusters, frozen=${frozen}, unfrozen=${unfrozen}, preserved=${dataPreserved}, cleared=${allDataCleared}, hardReset=${hardReset}`);
+            } else if (clusters.length > 0 || this.updateCount % 5 === 1) {
+                console.log(`🎨 Update #${this.updateCount} (${source}): ${clusters.length} clusters`);
+            }
+            
+            // ENHANCED RESET HANDLING: Multiple approaches to ensure clearing
+            if (source.includes('reset') || allDataCleared || hardReset) {
+                console.log('🔥 MULTIPLE RESET APPROACHES: Trying all clearing methods');
+                
+                // Approach 1: Immediate clear
+                this.renderer.updateClusters([]);
+                
+                // Approach 2: Force clear with delay
+                setTimeout(() => {
+                    console.log('🔥 Delayed reset clear #1');
+                    this.renderer.updateClusters([]);
+                }, 50);
+                
+                // Approach 3: Second delayed clear
+                setTimeout(() => {
+                    console.log('🔥 Delayed reset clear #2');
+                    this.renderer.updateClusters([]);
+                }, 200);
+                
+                // Approach 4: Final clear with data (should be empty)
+                setTimeout(() => {
+                    console.log('🔥 Final reset update with actual data (should be empty)');
+                    this.renderer.updateClusters(clusters);
+                }, 500);
+                
+            } else {
+                // Normal update
+                this.renderer.updateClusters(clusters);
+            }
+            
+            // Update CSS classes - enhanced for reset
+            const isActive = data?.running !== false;
+            const hasData = clusters.length > 0;
+            
+            document.body.classList.toggle('clickmap-active', isActive);
+            document.body.classList.toggle('clickmap-has-data', hasData);
+            
+            // Special handling for resets
+            if (source.includes('reset') || allDataCleared || hardReset) {
+                // Force remove data class for resets
+                document.body.classList.remove('clickmap-has-data');
+                console.log('🎨 CSS classes updated for reset: clickmap-has-data removed');
+            }
+            
+            // Store last known good state
+            this.lastKnownState = data;
+        }
+
+        // Add method to force clear everything (for debugging)
+        forceResetVisualization() {
+            console.log('🆘 EMERGENCY RESET: Force clearing all visualization');
+            
+            if (this.renderer) {
+                // Clear all data structures
+                this.renderer.updateClusters([]);
+                
+                if (this.renderer.springs) this.renderer.springs.clear();
+                if (this.renderer.targets) this.renderer.targets.clear();
+                if (this.renderer.animatedClusters) this.renderer.animatedClusters.clear();
+                
+                // Manual canvas clear
+                if (this.renderer.ctx) {
+                    const canvas = this.renderer.canvas;
+                    const ctx = this.renderer.ctx;
+                    const W = canvas.width / (window.devicePixelRatio || 1);
+                    const H = canvas.height / (window.devicePixelRatio || 1);
+                    ctx.clearRect(0, 0, W, H);
+                }
+            }
+            
+            // Clear state
+            this.lastKnownState = null;
+            
+            // Update classes
+            document.body.classList.remove('clickmap-has-data');
+            
+            console.log('✅ EMERGENCY RESET: Complete');
+        }
 
         getStatus() {
             return {
@@ -1063,4 +1051,11 @@ window.forceResetOverlay = () => {
     } else {
         initialize();
     }
+
+    // Make the force reset available globally for debugging
+    window.forceResetOverlay = () => {
+        if (window.smartOverlay && window.smartOverlay.forceResetVisualization) {
+            window.smartOverlay.forceResetVisualization();
+        }
+    };
 })();

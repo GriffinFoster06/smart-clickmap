@@ -1,5 +1,5 @@
 // frontend/overlay/overlay.js - OPTIMIZED for 5-second updates and ultra-high performance backend
-// Matches server's 5-second broadcast cycle for maximum efficiency
+// Matches server's 5-second broadcast cycle for maximum efficiency with sticky reset support
 
 (function () {
     'use strict';
@@ -552,15 +552,17 @@
         destroy() { this.stop(); }
     }
 
-    // ========== OPTIMIZED OVERLAY CONTROLLER - 5 SECOND INTERVALS ==========
+    // ========== OPTIMIZED OVERLAY CONTROLLER - 5 SECOND INTERVALS WITH STICKY RESET ==========
     class OptimizedSmartOverlay {
         constructor() {
             this.channelId = this.getChannelFromUrl();
             this.renderer = null;
             this.pollInterval = null;
             this.statusCheckInterval = null;
+            this.rapidPollInterval = null; // NEW: For rapid polling after reset
             this.consecutiveErrors = 0;
             this.updateCount = 0;
+            this.lastProcessedResetId = null; // NEW: Track processed reset signals
 
             // Optimized state tracking
             this.isGameRunning = false;
@@ -572,7 +574,7 @@
             this.isPageVisible = !document.hidden;
             this.setupVisibilityTracking();
 
-            console.log('🎯 Optimized overlay initialized (5-second intervals)');
+            console.log('🎯 Optimized overlay initialized (5-second intervals with rapid reset recovery)');
             this.init();
         }
 
@@ -606,7 +608,7 @@
 
                 const data = await response.json();
                 
-                console.log(`📊 Initial status: running=${data?.running}, clusters=${data?.clusters?.length || 0}, frozen=${data?.frozen}`);
+                console.log(`📊 Initial status: running=${data?.running}, clusters=${data?.clusters?.length || 0}, frozen=${data?.frozen}, stickyReset=${data?.stickyReset}`);
                 
                 if (data?.running === true) {
                     console.log('🎮 Game is active - starting optimized polling');
@@ -708,6 +710,74 @@
             }
         }
 
+        stopRapidPolling() {
+            if (this.rapidPollInterval) {
+                clearInterval(this.rapidPollInterval);
+                this.rapidPollInterval = null;
+                console.log('⚡ Rapid polling stopped');
+            }
+        }
+
+        startRapidPollingAfterReset() {
+            // Stop any existing rapid polling
+            if (this.rapidPollInterval) {
+                clearInterval(this.rapidPollInterval);
+            }
+            
+            // Stop regular polling temporarily
+            const wasPolling = !!this.pollInterval;
+            this.stopPolling();
+            
+            let rapidPollCount = 0;
+            const maxRapidPolls = 20; // 20 polls over 10 seconds = every 500ms
+            
+            console.log('⚡ Starting rapid polling (500ms intervals) for reset cleanup');
+            
+            this.rapidPollInterval = setInterval(async () => {
+                rapidPollCount++;
+                
+                try {
+                    const response = await fetch(`${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`, { 
+                        cache: 'no-store',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        
+                        // Check if we're still getting reset signals
+                        if (data?.stickyReset || data?.action === 'reset' || data?.hardReset) {
+                            console.log(`⚡ Rapid poll #${rapidPollCount}: Still receiving reset signal`);
+                            this.handlePollResponse(data);
+                        } else {
+                            console.log(`⚡ Rapid poll #${rapidPollCount}: Normal data, reset complete`);
+                            // Reset complete, resume normal polling
+                            this.stopRapidPolling();
+                            
+                            if (wasPolling || data?.running) {
+                                this.startOptimizedPolling();
+                            }
+                            return;
+                        }
+                    }
+                    
+                } catch (error) {
+                    console.warn(`⚡ Rapid poll #${rapidPollCount} failed:`, error.message);
+                }
+                
+                // Stop rapid polling after max attempts
+                if (rapidPollCount >= maxRapidPolls) {
+                    console.log('⚡ Rapid polling complete - resuming normal polling');
+                    this.stopRapidPolling();
+                    
+                    if (wasPolling) {
+                        this.startOptimizedPolling();
+                    }
+                }
+                
+            }, 500); // Poll every 500ms during rapid mode
+        }
+
         async poll() {
             if (!this.isPageVisible) {
                 this.stopPolling();
@@ -742,13 +812,25 @@
             const unfrozen = data?.unfrozen === true;
             const dataPreserved = data?.dataPreserved === true;
             const allDataCleared = data?.allDataCleared === true;
-            const hardReset = data?.hardReset === true; // NEW: Enhanced reset signal
+            const hardReset = data?.hardReset === true;
+            const stickyReset = data?.stickyReset === true; // NEW: Sticky reset signal
+            const resetSignalId = data?.resetSignalId; // NEW: Unique reset ID
             
             this.consecutiveErrors = 0;
             
             // ENHANCED RESET HANDLING: Immediate and aggressive clearing
-            if (action === 'reset' || allDataCleared || hardReset) {
-                console.log(`🗑️ RESET DETECTED: action=${action}, allDataCleared=${allDataCleared}, hardReset=${hardReset}`);
+            if (action === 'reset' || allDataCleared || hardReset || stickyReset) {
+                console.log(`🗑️ RESET DETECTED: action=${action}, allDataCleared=${allDataCleared}, hardReset=${hardReset}, stickyReset=${stickyReset}, signalId=${resetSignalId}`);
+                
+                // Prevent processing the same reset signal multiple times
+                if (resetSignalId && this.lastProcessedResetId === resetSignalId) {
+                    console.log(`⚠️ Ignoring duplicate reset signal: ${resetSignalId}`);
+                    return;
+                }
+                
+                if (resetSignalId) {
+                    this.lastProcessedResetId = resetSignalId;
+                }
                 
                 // FORCE IMMEDIATE CLEAR: Don't wait, clear everything now
                 console.log('🔥 FORCE IMMEDIATE RESET: Clearing renderer immediately');
@@ -791,7 +873,13 @@
                 
                 console.log('✅ RESET COMPLETE: All visualization cleared');
                 
-                // 7. Update polling strategy based on new state
+                // 7. If this is a sticky reset, start rapid polling to catch any missed signals
+                if (stickyReset) {
+                    console.log('🚀 STICKY RESET: Starting rapid polling for 10 seconds');
+                    this.startRapidPollingAfterReset();
+                }
+                
+                // 8. Update polling strategy based on new state
                 if (gameRunning && !this.pollInterval) {
                     console.log('🚀 RESET: Game is running, starting polling');
                     this.startOptimizedPolling();
@@ -801,7 +889,7 @@
                     this.scheduleStatusCheck();
                 }
                 
-                // 8. Store cleared state
+                // 9. Store cleared state
                 this.lastKnownState = {
                     running: gameRunning,
                     clusters: [],
@@ -1014,6 +1102,7 @@
                 isGameRunning: this.isGameRunning,
                 hasEverHadData: this.hasEverHadData,
                 isPolling: !!this.pollInterval,
+                isRapidPolling: !!this.rapidPollInterval,
                 isPageVisible: this.isPageVisible,
                 lastUpdate: this.lastUpdate,
                 backend: 'Ultra High-Performance with Sampling',
@@ -1022,12 +1111,14 @@
                 statusCheckInterval: STATUS_CHECK_INTERVAL,
                 isActive: document.body.classList.contains('clickmap-active'),
                 hasData: document.body.classList.contains('clickmap-has-data'),
-                lastKnownState: this.lastKnownState
+                lastKnownState: this.lastKnownState,
+                lastProcessedResetId: this.lastProcessedResetId
             };
         }
 
         destroy() {
             this.stopPolling();
+            this.stopRapidPolling(); // NEW: Clean up rapid polling
             if (this.renderer) {
                 this.renderer.destroy();
             }
@@ -1040,7 +1131,7 @@
         try {
             const overlay = new OptimizedSmartOverlay();
             window.smartOverlay = overlay; // For debugging
-            console.log('🎯 Optimized 5-second overlay with ALL visual features loaded');
+            console.log('🎯 Optimized 5-second overlay with ALL visual features and sticky reset support loaded');
         } catch (error) { 
             console.error('Failed to initialize optimized overlay:', error); 
         }

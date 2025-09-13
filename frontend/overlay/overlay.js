@@ -1,5 +1,5 @@
-// frontend/overlay/overlay.js - Real-time priority with immediate state changes
-// Never plays catch-up, responds instantly to stop/reset
+// frontend/overlay/overlay.js - FIXED CONNECTIVITY VERSION
+// Ensures proper connection with fallback to HTTP polling
 
 (function () {
     'use strict';
@@ -9,47 +9,8 @@
     const STATUS_CHECK_INTERVAL = 15000;
     const MAX_CONSECUTIVE_ERRORS = 3;
 
-    // ========== LOAD RENDERERS ==========
-    function loadRenderers() {
-        return new Promise((resolve) => {
-            let loadedCount = 0;
-            let hasFastRenderer = false;
-            
-            // Load standard renderer first (fallback)
-            const standardScript = document.createElement('script');
-            standardScript.src = 'heatmap.js';
-            standardScript.onload = () => {
-                console.log('✅ Standard renderer loaded');
-                loadedCount++;
-                if (loadedCount === 2) resolve(hasFastRenderer);
-            };
-            standardScript.onerror = () => {
-                console.error('❌ Failed to load standard renderer');
-                loadedCount++;
-                if (loadedCount === 2) resolve(hasFastRenderer);
-            };
-            document.head.appendChild(standardScript);
-            
-            // Try to load fast renderer
-            const fastScript = document.createElement('script');
-            fastScript.src = 'heatmap-fast.js';
-            fastScript.onload = () => {
-                console.log('✅ Fast renderer loaded');
-                hasFastRenderer = true;
-                loadedCount++;
-                if (loadedCount === 2) resolve(hasFastRenderer);
-            };
-            fastScript.onerror = () => {
-                console.log('⚠️ Fast renderer not available');
-                loadedCount++;
-                if (loadedCount === 2) resolve(hasFastRenderer);
-            };
-            document.head.appendChild(fastScript);
-        });
-    }
-
-    // ========== REAL-TIME OVERLAY ==========
-    class RealTimeOverlay {
+    // ========== OVERLAY CONTROLLER ==========
+    class SmartOverlay {
         constructor() {
             this.channelId = this.getChannelFromUrl();
             this.renderer = null;
@@ -57,15 +18,15 @@
             this.pollInterval = null;
             this.statusCheckInterval = null;
             
-            // State tracking
+            // State
             this.isGameRunning = false;
             this.lastVersion = 0;
             this.consecutiveErrors = 0;
             this.updateCount = 0;
             this.lastUpdate = 0;
             
-            // WebSocket preference
-            this.preferWebSocket = true;
+            // Connection preference
+            this.useWebSocket = false; // Start with HTTP, upgrade if possible
             this.wsReconnectAttempts = 0;
             this.maxWsReconnects = 3;
             
@@ -73,39 +34,76 @@
             this.isPageVisible = !document.hidden;
             this.setupVisibilityTracking();
             
-            console.log('🎯 Real-time overlay initializing...');
+            console.log('🎯 Smart overlay initializing...');
+            console.log(`📡 Backend: ${EBS}`);
+            console.log(`📺 Channel: ${this.channelId || 'NONE'}`);
+            
             this.init();
         }
 
         async init() {
-            if (!this.channelId) {
-                console.log('❌ No channel parameter');
-                return;
-            }
+            // Load renderers first
+            await this.loadRenderers();
             
-            // Load renderers
-            const hasFastRenderer = await loadRenderers();
-            this.setupRenderer(hasFastRenderer);
+            // Setup renderer
+            this.setupRenderer();
             
-            // Try WebSocket first for real-time updates
-            if (this.preferWebSocket) {
-                this.connectWebSocket();
-            } else {
-                this.startPolling();
-            }
+            // Start with HTTP polling (more reliable)
+            this.startPolling();
             
-            console.log(`🎯 Real-time overlay ready: ${this.channelId}`);
+            // Try WebSocket after initial connection
+            setTimeout(() => {
+                if (this.isPageVisible) {
+                    this.tryWebSocketUpgrade();
+                }
+            }, 2000);
+            
+            console.log(`✅ Overlay initialized for channel: ${this.channelId || 'global'}`);
         }
 
-        setupRenderer(useFastRenderer) {
+        async loadRenderers() {
+            console.log('Loading renderers...');
+            
+            // Load standard renderer (required)
+            await new Promise((resolve) => {
+                const script = document.createElement('script');
+                script.src = 'heatmap.js';
+                script.onload = () => {
+                    console.log('✅ Standard renderer loaded');
+                    resolve();
+                };
+                script.onerror = () => {
+                    console.error('❌ Failed to load standard renderer');
+                    resolve();
+                };
+                document.head.appendChild(script);
+            });
+            
+            // Try to load fast renderer (optional)
+            await new Promise((resolve) => {
+                const script = document.createElement('script');
+                script.src = 'heatmap-fast.js';
+                script.onload = () => {
+                    console.log('✅ Fast renderer loaded');
+                    resolve();
+                };
+                script.onerror = () => {
+                    console.log('⚠️ Fast renderer not available');
+                    resolve();
+                };
+                document.head.appendChild(script);
+            });
+        }
+
+        setupRenderer() {
             const canvas = document.getElementById('overlay-canvas');
             if (!canvas) {
                 console.error('❌ Canvas not found');
                 return;
             }
             
-            // Use fast renderer if available
-            if (useFastRenderer && window.FastHeatmapRenderer) {
+            // Try fast renderer first
+            if (window.FastHeatmapRenderer) {
                 console.log('⚡ Using FAST renderer');
                 this.renderer = new window.FastHeatmapRenderer(canvas);
             } else if (window.HeatmapRenderer) {
@@ -123,136 +121,17 @@
             }
         }
 
-        // ========== WEBSOCKET FOR REAL-TIME ==========
-        connectWebSocket() {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                return;
-            }
-            
-            const wsUrl = EBS.replace('https://', 'wss://').replace('http://', 'ws://');
-            const fullUrl = `${wsUrl}/ws/${this.channelId}`;
-            
-            console.log(`🔌 Connecting WebSocket: ${fullUrl}`);
-            
-            try {
-                this.ws = new WebSocket(fullUrl);
-                
-                this.ws.onopen = () => {
-                    console.log('✅ WebSocket connected');
-                    this.wsReconnectAttempts = 0;
-                    this.consecutiveErrors = 0;
-                    
-                    // Stop polling if it was running
-                    this.stopPolling();
-                };
-                
-                this.ws.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        this.handleRealtimeUpdate(data);
-                    } catch (error) {
-                        console.error('WebSocket parse error:', error);
-                    }
-                };
-                
-                this.ws.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                };
-                
-                this.ws.onclose = () => {
-                    console.log('🔌 WebSocket closed');
-                    this.ws = null;
-                    
-                    // Try to reconnect or fall back to polling
-                    if (this.wsReconnectAttempts < this.maxWsReconnects && this.isPageVisible) {
-                        this.wsReconnectAttempts++;
-                        console.log(`Reconnect attempt ${this.wsReconnectAttempts}/${this.maxWsReconnects}`);
-                        setTimeout(() => this.connectWebSocket(), 2000);
-                    } else {
-                        console.log('📡 Falling back to HTTP polling');
-                        this.preferWebSocket = false;
-                        this.startPolling();
-                    }
-                };
-                
-            } catch (error) {
-                console.error('WebSocket connection failed:', error);
-                this.preferWebSocket = false;
-                this.startPolling();
-            }
-        }
-
-        // ========== HANDLE REAL-TIME UPDATES ==========
-        handleRealtimeUpdate(data) {
-            const action = data.action;
-            const version = data.version || 0;
-            
-            // IMMEDIATE ACTION HANDLING
-            if (action === 'start') {
-                console.log('🚀 START received - clearing display');
-                this.isGameRunning = true;
-                this.lastVersion = version;
-                this.clearDisplay();
-                return;
-            }
-            
-            if (action === 'stop' || action === 'stop_clear') {
-                console.log('🛑 STOP received - halting updates');
-                this.isGameRunning = false;
-                this.lastVersion = version;
-                
-                if (action === 'stop_clear') {
-                    this.clearDisplay();
-                } else {
-                    // Show final state briefly then clear
-                    this.updateVisualization(data, 'stop');
-                    setTimeout(() => this.clearDisplay(), 2000);
-                }
-                return;
-            }
-            
-            if (action === 'reset') {
-                console.log('🗑️ RESET received - clearing everything');
-                this.lastVersion = version;
-                this.clearDisplay();
-                return;
-            }
-            
-            // Version check - ignore old updates
-            if (version && version < this.lastVersion) {
-                console.log(`Ignoring old update (v${version} < v${this.lastVersion})`);
-                return;
-            }
-            
-            // Update game state
-            const wasRunning = this.isGameRunning;
-            this.isGameRunning = data.running === true;
-            
-            if (wasRunning && !this.isGameRunning) {
-                console.log('🛑 Game stopped');
-                this.clearDisplay();
-                return;
-            }
-            
-            if (!wasRunning && this.isGameRunning) {
-                console.log('🚀 Game started');
-            }
-            
-            // Update visualization
-            this.updateVisualization(data, 'realtime');
-        }
-
-        // ========== HTTP POLLING FALLBACK ==========
+        // ========== HTTP POLLING ==========
         startPolling() {
             this.stopPolling();
             
             if (!this.isPageVisible) return;
             
+            console.log(`📡 Starting HTTP polling (${POLL_INTERVAL}ms intervals)`);
+            
             this.consecutiveErrors = 0;
             this.pollInterval = setInterval(() => this.poll(), POLL_INTERVAL);
             this.poll(); // Initial poll
-            
-            console.log(`📡 HTTP polling started (${POLL_INTERVAL}ms)`);
         }
 
         stopPolling() {
@@ -275,9 +154,18 @@
             }
 
             try {
-                const response = await fetch(`${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}`, { 
-                    cache: 'no-store',
-                    headers: { 'Content-Type': 'application/json' }
+                const url = this.channelId ? 
+                    `${EBS}/heatmap?channel=${encodeURIComponent(this.channelId)}` :
+                    `${EBS}/heatmap`;
+                    
+                const response = await fetch(url, { 
+                    method: 'GET',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    mode: 'cors',
+                    cache: 'no-cache'
                 });
                 
                 if (!response.ok) {
@@ -285,39 +173,176 @@
                 }
 
                 const data = await response.json();
-                this.handleRealtimeUpdate(data);
+                this.handleUpdate(data);
                 this.consecutiveErrors = 0;
 
             } catch (error) {
-                this.consecutiveErrors++;
-                console.warn(`Poll error ${this.consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}:`, error.message);
+                this.handlePollError(error);
+            }
+        }
+
+        handlePollError(error) {
+            this.consecutiveErrors++;
+            
+            console.warn(`Poll error ${this.consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}:`, error.message);
+            
+            if (this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                console.error('❌ Too many polling errors');
                 
-                if (this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-                    console.error('❌ Too many errors');
-                    this.stopPolling();
-                    
-                    // Try to reconnect WebSocket
-                    if (this.preferWebSocket) {
-                        this.connectWebSocket();
+                // Try to reconnect after a delay
+                this.stopPolling();
+                setTimeout(() => {
+                    if (this.isPageVisible) {
+                        console.log('🔄 Retrying connection...');
+                        this.startPolling();
                     }
+                }, 10000);
+            }
+        }
+
+        // ========== WEBSOCKET UPGRADE ==========
+        tryWebSocketUpgrade() {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                return;
+            }
+            
+            if (!this.channelId) {
+                console.log('No channel ID for WebSocket');
+                return;
+            }
+            
+            const wsUrl = EBS.replace('https://', 'wss://').replace('http://', 'ws://');
+            const fullUrl = `${wsUrl}/ws/${this.channelId}`;
+            
+            console.log(`🔌 Attempting WebSocket connection: ${fullUrl}`);
+            
+            try {
+                this.ws = new WebSocket(fullUrl);
+                
+                this.ws.onopen = () => {
+                    console.log('✅ WebSocket connected!');
+                    this.wsReconnectAttempts = 0;
+                    this.consecutiveErrors = 0;
+                    this.useWebSocket = true;
+                    
+                    // Stop polling since we have WebSocket
+                    this.stopPolling();
+                };
+                
+                this.ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        this.handleUpdate(data);
+                    } catch (error) {
+                        console.error('WebSocket parse error:', error);
+                    }
+                };
+                
+                this.ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                };
+                
+                this.ws.onclose = () => {
+                    console.log('🔌 WebSocket disconnected');
+                    this.ws = null;
+                    this.useWebSocket = false;
+                    
+                    // Fall back to polling
+                    if (this.isPageVisible && !this.pollInterval) {
+                        console.log('📡 Falling back to HTTP polling');
+                        this.startPolling();
+                    }
+                    
+                    // Try to reconnect WebSocket after delay
+                    if (this.wsReconnectAttempts < this.maxWsReconnects) {
+                        this.wsReconnectAttempts++;
+                        setTimeout(() => {
+                            if (this.isPageVisible) {
+                                this.tryWebSocketUpgrade();
+                            }
+                        }, 5000);
+                    }
+                };
+                
+            } catch (error) {
+                console.error('WebSocket connection failed:', error);
+                this.useWebSocket = false;
+                
+                // Make sure polling is running
+                if (!this.pollInterval) {
+                    this.startPolling();
                 }
             }
         }
 
-        // ========== VISUALIZATION ==========
-        updateVisualization(data, source = 'update') {
-            if (!this.renderer) return;
+        // ========== UPDATE HANDLING ==========
+        handleUpdate(data) {
+            if (!data) return;
             
-            // Only update if game is running or it's a final state
-            if (!this.isGameRunning && source !== 'stop') {
+            const action = data.action;
+            const version = data.version || 0;
+            
+            // Handle actions
+            if (action === 'start') {
+                console.log('🚀 START received');
+                this.isGameRunning = true;
+                this.lastVersion = version;
+                this.clearDisplay();
                 return;
             }
+            
+            if (action === 'stop' || action === 'stop_clear') {
+                console.log('🛑 STOP received');
+                this.isGameRunning = false;
+                this.lastVersion = version;
+                
+                if (action === 'stop_clear') {
+                    this.clearDisplay();
+                } else {
+                    this.updateVisualization(data, 'stop');
+                    setTimeout(() => this.clearDisplay(), 2000);
+                }
+                return;
+            }
+            
+            if (action === 'reset') {
+                console.log('🗑️ RESET received');
+                this.lastVersion = version;
+                this.clearDisplay();
+                return;
+            }
+            
+            // Version check
+            if (version && version < this.lastVersion) {
+                console.log(`Ignoring old update (v${version} < v${this.lastVersion})`);
+                return;
+            }
+            
+            // Update state
+            const wasRunning = this.isGameRunning;
+            this.isGameRunning = data.running === true;
+            
+            if (wasRunning && !this.isGameRunning) {
+                console.log('Game stopped');
+                setTimeout(() => this.clearDisplay(), 2000);
+            }
+            
+            if (!wasRunning && this.isGameRunning) {
+                console.log('Game started');
+            }
+            
+            // Update visualization
+            this.updateVisualization(data, this.useWebSocket ? 'websocket' : 'http');
+        }
+
+        updateVisualization(data, source = 'update') {
+            if (!this.renderer) return;
             
             const clusters = Array.isArray(data) ? data : (data?.clusters || []);
             this.updateCount++;
             this.lastUpdate = Date.now();
             
-            // Log significant updates
+            // Log updates
             if (clusters.length > 0 || this.updateCount % 10 === 1) {
                 const mode = data?.mode || 'UNKNOWN';
                 console.log(`🎨 Update #${this.updateCount} (${source}): ${clusters.length} clusters, mode: ${mode}`);
@@ -341,24 +366,22 @@
             document.body.classList.remove('clickmap-active', 'clickmap-has-data');
         }
 
-        // ========== VISIBILITY TRACKING ==========
+        // ========== VISIBILITY ==========
         setupVisibilityTracking() {
             document.addEventListener('visibilitychange', () => {
                 this.isPageVisible = !document.hidden;
                 
                 if (this.isPageVisible) {
-                    console.log('👁️ Page visible');
+                    console.log('👁️ Page visible - resuming');
                     
-                    // Reconnect if needed
-                    if (this.preferWebSocket && !this.ws) {
-                        this.connectWebSocket();
-                    } else if (!this.preferWebSocket && !this.pollInterval) {
+                    if (this.useWebSocket && !this.ws) {
+                        this.tryWebSocketUpgrade();
+                    } else if (!this.pollInterval) {
                         this.startPolling();
                     }
                 } else {
-                    console.log('🫥 Page hidden');
+                    console.log('🫥 Page hidden - pausing');
                     
-                    // Disconnect to save resources
                     if (this.ws) {
                         this.ws.close();
                         this.ws = null;
@@ -371,14 +394,16 @@
         // ========== UTILITIES ==========
         getChannelFromUrl() {
             const params = new URLSearchParams(window.location.search);
-            return params.get('channel') || params.get('c');
+            const channel = params.get('channel') || params.get('c') || '';
+            
+            // Clean the channel ID
+            return channel.replace(/[^a-zA-Z0-9_-]/g, '');
         }
 
         getStatus() {
-            const rendererStatus = this.renderer?.getStatus ? this.renderer.getStatus() : {};
-            
             return {
-                channelId: this.channelId,
+                backend: EBS,
+                channelId: this.channelId || 'global',
                 transport: this.ws ? 'WebSocket' : 'HTTP Polling',
                 isGameRunning: this.isGameRunning,
                 lastVersion: this.lastVersion,
@@ -386,7 +411,7 @@
                 lastUpdate: this.lastUpdate,
                 consecutiveErrors: this.consecutiveErrors,
                 isPageVisible: this.isPageVisible,
-                renderer: rendererStatus
+                renderer: this.renderer ? 'Active' : 'None'
             };
         }
 
@@ -411,25 +436,22 @@
     // ========== INITIALIZATION ==========
     function initialize() {
         try {
-            const overlay = new RealTimeOverlay();
-            window.realtimeOverlay = overlay;
+            const overlay = new SmartOverlay();
             
-            // Global debugging commands
-            window.overlayDebug = {
-                status: () => overlay.getStatus(),
-                clear: () => overlay.clearDisplay(),
-                destroy: () => overlay.destroy(),
-                reconnect: () => overlay.connectWebSocket()
-            };
+            // Make available for debugging
+            window.smartOverlay = overlay;
+            window.overlayStatus = () => overlay.getStatus();
+            window.overlayReconnect = () => overlay.tryWebSocketUpgrade();
             
-            console.log('🎯 Real-time overlay initialized');
-            console.log('Debug commands: window.overlayDebug.status()');
+            console.log('✅ Overlay ready!');
+            console.log('Debug: window.overlayStatus()');
             
         } catch (error) { 
             console.error('Failed to initialize overlay:', error); 
         }
     }
 
+    // Wait for DOM
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initialize);
     } else {

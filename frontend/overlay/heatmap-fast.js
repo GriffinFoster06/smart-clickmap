@@ -365,45 +365,67 @@ class FastHeatmapRenderer {
         ctx.restore();
     }
 
-    // ENHANCED: Even low quality gets readable text
+    // 🔥 MASSIVE: Even low quality gets huge readable text
     drawSimpleReadableText(x, y, percentage, radius, isTop) {
         const ctx = this.ctx;
+        const str = `${percentage}%`;
         
-        // Still larger than original - increased from 0.3 to 0.45
-        const fontSize = Math.max(20, Math.min(40, radius * 0.45));
+        // 🚀 MASSIVE even in low quality - increased from 0.45 to 0.7
+        const fontSize = Math.max(30, Math.min(60, radius * 0.7));
         
         ctx.save();
         
         // Strong shadow for readability
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-        ctx.shadowBlur = Math.max(8, fontSize * 0.3);
-        ctx.shadowOffsetX = 2;
-        ctx.shadowOffsetY = 2;
+        ctx.shadowColor = 'rgba(0, 0, 0, 1.0)'; // Pure black
+        ctx.shadowBlur = fontSize * 0.5; // Much bigger blur
+        ctx.shadowOffsetX = 4; // Bigger offset
+        ctx.shadowOffsetY = 4;
         
-        // Text
+        // Text with extra bold weight
         ctx.fillStyle = '#ffffff';
-        ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+        ctx.font = `900 ${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`; // Extra bold
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`${percentage}%`, x, y);
+        ctx.fillText(str, x, y);
         
-        // Black outline for definition
+        // Medium shadow
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        ctx.shadowBlur = fontSize * 0.3;
+        ctx.shadowOffsetX = 3;
+        ctx.shadowOffsetY = 3;
+        ctx.fillText(str, x, y);
+        
+        // Reset shadow for outlines
         ctx.shadowBlur = 0;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-        ctx.lineWidth = 3;
-        ctx.strokeText(`${percentage}%`, x, y);
+        
+        // Massive black outline for definition
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+        ctx.lineWidth = Math.max(6, fontSize * 0.12); // Proportional thick outline
+        ctx.strokeText(str, x, y);
+        
+        // Second black outline
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.lineWidth = Math.max(4, fontSize * 0.08);
+        ctx.strokeText(str, x, y);
         
         // Colored outline
-        const outlineColor = isTop ? 'rgba(0, 255, 255, 0.9)' : 'rgba(147, 51, 234, 0.9)';
+        const outlineColor = isTop ? 'rgba(0, 255, 255, 1.0)' : 'rgba(147, 51, 234, 1.0)';
         ctx.strokeStyle = outlineColor;
-        ctx.lineWidth = 1.5;
-        ctx.strokeText(`${percentage}%`, x, y);
+        ctx.lineWidth = Math.max(3, fontSize * 0.06);
+        ctx.strokeText(str, x, y);
         
-        // Final white text
+        // Final bright white text
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(`${percentage}%`, x, y);
+        ctx.fillText(str, x, y);
+        
+        // Extra glow for top cluster even in low quality
+        if (isTop) {
+            ctx.shadowColor = 'rgba(0, 255, 255, 0.7)';
+            ctx.shadowBlur = fontSize * 0.4;
+            ctx.fillText(str, x, y);
+        }
         
         ctx.restore();
     }
@@ -419,7 +441,7 @@ class FastHeatmapRenderer {
             clusters: this.clusters.length,
             animated: this.animatedClusters.size,
             threshold: this.PERCENTAGE_THRESHOLD,
-            enhancedText: true // Flag to indicate enhanced text rendering
+            enhancedText: 'readable' // Flag to indicate enhanced but reasonable text rendering
         };
     }
 }

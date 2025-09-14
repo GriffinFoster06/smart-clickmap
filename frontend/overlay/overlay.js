@@ -1,5 +1,5 @@
-// frontend/overlay/overlay.js - OPTIMAL client for 50k clicks/sec
-// Designed to work perfectly with the optimal server WebSocket manager
+// frontend/overlay/overlay.js - OPTIMAL client with MUCH BIGGER, readable percentages
+// Only modifying the overlay renderer, not touching frontend/heatmap.js
 
 (function () {
     'use strict';
@@ -19,7 +19,7 @@
     const MAX_CACHE_ENTRIES = 20;
     const responseCache = new Map();
 
-    // ========== OPTIMAL PERFORMANCE RENDERER ==========
+    // ========== ENHANCED PERFORMANCE RENDERER WITH MASSIVE TEXT ==========
     class OptimalPerformanceRenderer {
         constructor(canvas) {
             this.canvas = canvas;
@@ -52,7 +52,7 @@
             this.resize();
             this.start();
             
-            console.log('🎨 OPTIMAL renderer initialized');
+            console.log('🎨 OPTIMAL renderer with MASSIVE readable text initialized');
         }
 
         _spring(value = 0, omega = 8, zeta = 0.8) { 
@@ -257,7 +257,8 @@
                     this.renderOptimizedCircle(d.cx, d.cy, r, colors, isTop);
                 }
 
-                this.renderSimpleText(d.cx, d.cy, Math.round(d.percentage), r, isTop);
+                // ENHANCED: Use the new MASSIVE text renderer
+                this.renderMassiveText(d.cx, d.cy, Math.round(d.percentage), r, isTop);
             }
         }
 
@@ -316,36 +317,92 @@
             ctx.stroke();
         }
 
-        renderSimpleText(cx, cy, percentage, radius, isTop) {
+        // 🔥 NEW: MASSIVE, super-readable text rendering
+        renderMassiveText(cx, cy, percentage, radius, isTop) {
             const ctx = this.ctx;
             const str = `${percentage}%`;
-            const fontSize = Math.max(16, Math.min(36, radius * 0.3));
+            
+            // 🚀 HUGE TEXT: Increased multiplier from 0.3 to 0.75 (2.5x bigger!)
+            const fontSize = Math.max(35, Math.min(75, radius * 0.75));
             
             ctx.save();
             
-            if (this.renderQuality > 0.7) {
-                ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-                ctx.shadowBlur = Math.max(6, fontSize * 0.2);
-                ctx.shadowOffsetX = 1;
-                ctx.shadowOffsetY = 1;
-            }
-
+            // 🔥 MASSIVE SHADOW SYSTEM for extreme readability
+            
+            // Layer 1: Huge black background shadow
+            ctx.shadowColor = 'rgba(0, 0, 0, 1.0)'; // Pure black
+            ctx.shadowBlur = fontSize * 0.6; // HUGE blur
+            ctx.shadowOffsetX = 6; // Big offset
+            ctx.shadowOffsetY = 6;
+            
             ctx.fillStyle = '#ffffff';
-            ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+            ctx.font = `900 ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`; // Extra bold
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(str, cx, cy);
-
-            if (this.renderQuality > 0.6) {
-                ctx.shadowBlur = 0;
-                ctx.shadowOffsetX = 0;
-                ctx.shadowOffsetY = 0;
+            
+            // Layer 2: Medium black shadow for depth
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+            ctx.shadowBlur = fontSize * 0.4;
+            ctx.shadowOffsetX = 4;
+            ctx.shadowOffsetY = 4;
+            ctx.fillText(str, cx, cy);
+            
+            // Layer 3: Close shadow for definition
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+            ctx.shadowBlur = fontSize * 0.2;
+            ctx.shadowOffsetX = 2;
+            ctx.shadowOffsetY = 2;
+            ctx.fillText(str, cx, cy);
+            
+            // Reset shadow for outlines
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+            
+            // 🎯 MASSIVE OUTLINE SYSTEM
+            
+            // Outermost black outline (super thick)
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.95)';
+            ctx.lineWidth = Math.max(8, fontSize * 0.15); // Proportional thick outline
+            ctx.strokeText(str, cx, cy);
+            
+            // Second black outline (medium thick)
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.lineWidth = Math.max(6, fontSize * 0.12);
+            ctx.strokeText(str, cx, cy);
+            
+            // Colored outline
+            const outlineColor = isTop ? 'rgba(0, 255, 255, 1.0)' : 'rgba(147, 51, 234, 1.0)';
+            ctx.strokeStyle = outlineColor;
+            ctx.lineWidth = Math.max(4, fontSize * 0.08);
+            ctx.strokeText(str, cx, cy);
+            
+            // Inner colored outline for more definition
+            ctx.strokeStyle = isTop ? 'rgba(0, 255, 255, 0.8)' : 'rgba(147, 51, 234, 0.8)';
+            ctx.lineWidth = Math.max(2, fontSize * 0.05);
+            ctx.strokeText(str, cx, cy);
+            
+            // Final bright white text
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(str, cx, cy);
+            
+            // 🌟 EXTRA GLOW for top cluster
+            if (isTop) {
+                ctx.shadowColor = 'rgba(0, 255, 255, 0.8)';
+                ctx.shadowBlur = fontSize * 0.5;
+                ctx.fillText(str, cx, cy);
                 
-                const outlineColor = isTop ? 'rgba(0, 255, 255, 0.9)' : 'rgba(147, 51, 234, 0.9)';
-                ctx.strokeStyle = outlineColor;
-                ctx.lineWidth = isTop ? 1.5 : 1;
-                ctx.strokeText(str, cx, cy);
+                // Extra bright highlight
+                ctx.shadowColor = 'rgba(255, 255, 255, 0.6)';
+                ctx.shadowBlur = fontSize * 0.3;
+                ctx.fillText(str, cx, cy);
             }
+            
+            // 💎 FINAL HIGHLIGHT for extreme visibility
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = isTop ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 255, 255, 0.8)';
+            ctx.fillText(str, cx, cy);
             
             ctx.restore();
         }
@@ -398,7 +455,7 @@
             this.isPageVisible = !document.hidden;
             this.setupVisibilityTracking();
 
-            console.log('🎯 OPTIMAL hybrid overlay initializing...');
+            console.log('🎯 OPTIMAL hybrid overlay with MASSIVE text initializing...');
             this.init();
         }
 
@@ -416,7 +473,7 @@
                 await this.checkInitialStatus();
             }
             
-            console.log(`🎯 OPTIMAL overlay ready: ${this.channelId}`);
+            console.log(`🎯 OPTIMAL overlay with MASSIVE text ready: ${this.channelId}`);
         }
 
         // ========== WEBSOCKET MANAGEMENT ==========
@@ -615,92 +672,91 @@
 
         // ========== UNIFIED MESSAGE HANDLING ==========
         
-        // Updated handleMessage method in overlay.js
-handleMessage(data, source) {
-    const clusters = Array.isArray(data) ? data : (data?.clusters || []);
-    const gameRunning = data?.running === true;
-    const action = data?.action;
-    const allDataCleared = data?.allDataCleared === true;
-    const hardReset = data?.hardReset === true;
-    const stickyReset = data?.stickyReset === true;
-    const startWithClear = data?.startWithClear === true; // New flag for start with clear
-    const resetSignalId = data?.resetSignalId;
-    
-    this.updateCount++;
-    this.messageStats.dataUpdates++;
-    
-    // RESET HANDLING - Now includes START with clear
-    if (action === 'reset' || action === 'start' && (allDataCleared || startWithClear) || allDataCleared || hardReset || stickyReset) {
-        const clearType = action === 'start' ? 'START+CLEAR' : 'RESET';
-        console.log(`🗑️ ${clearType} via ${source}: ${action}, cleared=${allDataCleared}, hard=${hardReset}, sticky=${stickyReset}, startClear=${startWithClear}`);
-        
-        if (resetSignalId && this.lastProcessedResetId === resetSignalId) {
-            return; // Duplicate reset/start signal
-        }
-        
-        if (resetSignalId) {
-            this.lastProcessedResetId = resetSignalId;
-            setTimeout(() => {
-                if (this.lastProcessedResetId === resetSignalId) {
-                    this.lastProcessedResetId = null;
+        handleMessage(data, source) {
+            const clusters = Array.isArray(data) ? data : (data?.clusters || []);
+            const gameRunning = data?.running === true;
+            const action = data?.action;
+            const allDataCleared = data?.allDataCleared === true;
+            const hardReset = data?.hardReset === true;
+            const stickyReset = data?.stickyReset === true;
+            const startWithClear = data?.startWithClear === true; 
+            const resetSignalId = data?.resetSignalId;
+            
+            this.updateCount++;
+            this.messageStats.dataUpdates++;
+            
+            // RESET HANDLING - Now includes START with clear
+            if (action === 'reset' || action === 'start' && (allDataCleared || startWithClear) || allDataCleared || hardReset || stickyReset) {
+                const clearType = action === 'start' ? 'START+CLEAR' : 'RESET';
+                console.log(`🗑️ ${clearType} via ${source}: ${action}, cleared=${allDataCleared}, hard=${hardReset}, sticky=${stickyReset}, startClear=${startWithClear}`);
+                
+                if (resetSignalId && this.lastProcessedResetId === resetSignalId) {
+                    return; // Duplicate reset/start signal
                 }
-            }, 30000);
-        }
-        
-        // Clear visualization
-        if (this.renderer) {
-            this.renderer.updateClusters([]);
-            if (this.renderer.springs) this.renderer.springs.clear();
-            if (this.renderer.targets) this.renderer.targets.clear();
-        }
-        
-        // Clear caches
-        responseCache.clear();
-        
-        this.isGameRunning = gameRunning;
-        this.lastKnownState = null;
-        
-        document.body.classList.remove('clickmap-has-data');
-        document.body.classList.toggle('clickmap-active', gameRunning);
-        
-        // For start with clear, show active state
-        if (action === 'start' && startWithClear) {
-            document.body.classList.add('clickmap-active');
-            console.log('🎮 Started with fresh clickmap');
-        }
-        
-        // Adjust polling based on new state
-        if (!this.wsConnected) {
-            this.stopHttpPolling();
-            this.startHttpPolling();
-        }
-        
-        return;
-    }
-    
-    // Regular START handling (without clear)
-    if (action === 'start' && !allDataCleared && !startWithClear) {
-        console.log(`🎮 START via ${source} (keeping existing data)`);
-    }
-    
-    // STATE CHANGES
-    if (gameRunning !== this.isGameRunning) {
-        console.log(`🎮 State change via ${source}: ${this.isGameRunning} → ${gameRunning}`);
-        this.isGameRunning = gameRunning;
-        
-        // Adjust polling frequency
-        if (!this.wsConnected) {
-            this.stopHttpPolling();
-            this.startHttpPolling();
-        }
-    }
-    
-    if (clusters.length > 0) {
-        this.hasEverHadData = true;
-    }
+                
+                if (resetSignalId) {
+                    this.lastProcessedResetId = resetSignalId;
+                    setTimeout(() => {
+                        if (this.lastProcessedResetId === resetSignalId) {
+                            this.lastProcessedResetId = null;
+                        }
+                    }, 30000);
+                }
+                
+                // Clear visualization
+                if (this.renderer) {
+                    this.renderer.updateClusters([]);
+                    if (this.renderer.springs) this.renderer.springs.clear();
+                    if (this.renderer.targets) this.renderer.targets.clear();
+                }
+                
+                // Clear caches
+                responseCache.clear();
+                
+                this.isGameRunning = gameRunning;
+                this.lastKnownState = null;
+                
+                document.body.classList.remove('clickmap-has-data');
+                document.body.classList.toggle('clickmap-active', gameRunning);
+                
+                // For start with clear, show active state
+                if (action === 'start' && startWithClear) {
+                    document.body.classList.add('clickmap-active');
+                    console.log('🎮 Started with fresh clickmap');
+                }
+                
+                // Adjust polling based on new state
+                if (!this.wsConnected) {
+                    this.stopHttpPolling();
+                    this.startHttpPolling();
+                }
+                
+                return;
+            }
+            
+            // Regular START handling (without clear)
+            if (action === 'start' && !allDataCleared && !startWithClear) {
+                console.log(`🎮 START via ${source} (keeping existing data)`);
+            }
+            
+            // STATE CHANGES
+            if (gameRunning !== this.isGameRunning) {
+                console.log(`🎮 State change via ${source}: ${this.isGameRunning} → ${gameRunning}`);
+                this.isGameRunning = gameRunning;
+                
+                // Adjust polling frequency
+                if (!this.wsConnected) {
+                    this.stopHttpPolling();
+                    this.startHttpPolling();
+                }
+            }
+            
+            if (clusters.length > 0) {
+                this.hasEverHadData = true;
+            }
 
-    this.updateVisualization(data, source);
-}
+            this.updateVisualization(data, source);
+        }
 
         // ========== SHARED UTILITIES ==========
         
@@ -746,49 +802,48 @@ handleMessage(data, source) {
             }
         }
 
-        // Updated updateVisualization method in overlay.js
-updateVisualization(data, source) {
-    if (!this.renderer) return;
-    
-    const clusters = Array.isArray(data) ? data : (data?.clusters || []);
-    const allDataCleared = data?.allDataCleared === true;
-    const hardReset = data?.hardReset === true;
-    const stickyReset = data?.stickyReset === true;
-    const startWithClear = data?.startWithClear === true;
-    const action = data?.action;
-    
-    this.lastUpdate = Date.now();
-    
-    // Clear visualization for any clearing action (reset or start with clear)
-    if (source.includes('reset') || allDataCleared || hardReset || stickyReset || startWithClear || (action === 'start' && allDataCleared)) {
-        console.log(`🎨 Clearing visualization for: ${action || 'reset'}`);
-        this.renderer.updateClusters([]);
-    } else {
-        this.renderer.updateClusters(clusters);
-    }
-    
-    // Update CSS classes
-    const isActive = data?.running !== false;
-    const hasData = clusters.length > 0;
-    
-    document.body.classList.toggle('clickmap-active', isActive);
-    document.body.classList.toggle('clickmap-has-data', hasData);
-    
-    // Special handling for clearing actions
-    if (source.includes('reset') || allDataCleared || hardReset || stickyReset || startWithClear || (action === 'start' && allDataCleared)) {
-        document.body.classList.remove('clickmap-has-data');
-        
-        // Force reflow for immediate visual update
-        document.body.offsetHeight;
-        
-        // For start with clear, ensure active state is set
-        if (action === 'start' && (startWithClear || allDataCleared)) {
-            document.body.classList.add('clickmap-active');
+        updateVisualization(data, source) {
+            if (!this.renderer) return;
+            
+            const clusters = Array.isArray(data) ? data : (data?.clusters || []);
+            const allDataCleared = data?.allDataCleared === true;
+            const hardReset = data?.hardReset === true;
+            const stickyReset = data?.stickyReset === true;
+            const startWithClear = data?.startWithClear === true;
+            const action = data?.action;
+            
+            this.lastUpdate = Date.now();
+            
+            // Clear visualization for any clearing action (reset or start with clear)
+            if (source.includes('reset') || allDataCleared || hardReset || stickyReset || startWithClear || (action === 'start' && allDataCleared)) {
+                console.log(`🎨 Clearing visualization for: ${action || 'reset'}`);
+                this.renderer.updateClusters([]);
+            } else {
+                this.renderer.updateClusters(clusters);
+            }
+            
+            // Update CSS classes
+            const isActive = data?.running !== false;
+            const hasData = clusters.length > 0;
+            
+            document.body.classList.toggle('clickmap-active', isActive);
+            document.body.classList.toggle('clickmap-has-data', hasData);
+            
+            // Special handling for clearing actions
+            if (source.includes('reset') || allDataCleared || hardReset || stickyReset || startWithClear || (action === 'start' && allDataCleared)) {
+                document.body.classList.remove('clickmap-has-data');
+                
+                // Force reflow for immediate visual update
+                document.body.offsetHeight;
+                
+                // For start with clear, ensure active state is set
+                if (action === 'start' && (startWithClear || allDataCleared)) {
+                    document.body.classList.add('clickmap-active');
+                }
+            }
+            
+            this.lastKnownState = data;
         }
-    }
-    
-    this.lastKnownState = data;
-}
 
         setupVisibilityTracking() {
             document.addEventListener('visibilitychange', () => {
@@ -847,7 +902,8 @@ updateVisualization(data, source) {
                     renderQuality: this.renderer ? this.renderer.getRenderQuality() : 1,
                     clusterCount: this.renderer ? this.renderer.getClusterCount() : 0
                 },
-                cacheSize: responseCache.size
+                cacheSize: responseCache.size,
+                textEnhancements: 'MASSIVE - 2.5x bigger with extreme readability'
             };
         }
 
@@ -864,7 +920,7 @@ updateVisualization(data, source) {
                 this.renderer.destroy();
             }
             responseCache.clear();
-            console.log('🧹 OPTIMAL overlay destroyed');
+            console.log('🧹 OPTIMAL overlay with MASSIVE text destroyed');
         }
     }
 
@@ -873,12 +929,12 @@ updateVisualization(data, source) {
         try {
             const overlay = new OptimalHybridOverlay();
             window.optimalOverlay = overlay;
-            console.log('🎯 OPTIMAL hybrid overlay loaded (WebSocket + HTTP fallback)');
+            console.log('🎯 OPTIMAL hybrid overlay with MASSIVE text loaded');
             
             // Performance monitoring
             setInterval(() => {
                 const status = overlay.getStatus();
-                console.log(`📊 Transport: ${status.transportMode}, Updates: ${status.messageStats.dataUpdates}, FPS: ${status.performance.fps}`);
+                console.log(`📊 Transport: ${status.transportMode}, Updates: ${status.messageStats.dataUpdates}, FPS: ${status.performance.fps}, ${status.textEnhancements}`);
             }, 30000);
             
         } catch (error) { 

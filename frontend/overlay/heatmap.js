@@ -1,6 +1,4 @@
-// frontend/overlay/heatmap.js - OPTIMIZED for 5-second updates with ALL original visual features preserved
-// High-performance renderer that works perfectly with the ultra-fast backend
-
+// frontend/overlay/heatmap.js - OPTIMIZED with enhanced readable percentages
 class HeatmapRenderer {
     constructor(canvas) {
         this.canvas = canvas;
@@ -36,7 +34,7 @@ class HeatmapRenderer {
         this.resize();
         this.start();
         
-        console.log('🎨 Optimized renderer with ALL visual features initialized (5s updates)');
+        console.log('🎨 Optimized renderer with ENHANCED readable text initialized');
     }
 
     // ========== PRESERVE: COMPLETE ORIGINAL ANIMATION SYSTEM ==========
@@ -86,7 +84,7 @@ class HeatmapRenderer {
                 this.lastRenderTime = ts;
                 
                 if (this.targets.size > 0) {
-                    console.log(`🎨 Renderer: ${this.fps} FPS, ${this.targets.size} active clusters`);
+                    console.log(`🎨 Enhanced Renderer: ${this.fps} FPS, ${this.targets.size} active clusters`);
                 }
             }
 
@@ -143,7 +141,7 @@ class HeatmapRenderer {
             .filter(c => (c.percentage || 0) >= this.PERCENTAGE_THRESHOLD);
 
         if (this.updateCount % 3 === 1 || filtered.length > 0) {
-            console.log(`🎨 Update #${this.updateCount}: ${filtered.length} sophisticated clusters (≥${this.PERCENTAGE_THRESHOLD}%, optimized 5s)`);
+            console.log(`🎨 Update #${this.updateCount}: ${filtered.length} clusters with ENHANCED text`);
         }
 
         const nextTargets = new Map();
@@ -259,7 +257,7 @@ class HeatmapRenderer {
         return Math.max(baseSize, Math.min(280, baseSize + activityBonus + densityBonus + countBonus + spreadBonus));
     }
 
-    // ========== PRESERVE: COMPLETE SOPHISTICATED RENDERING ENGINE ==========
+    // ========== RENDER ENGINE WITH ENHANCED TEXT ==========
     render(tSec = 0) {
         const W = this.canvas.width / (window.devicePixelRatio || 1);
         const H = this.canvas.height / (window.devicePixelRatio || 1);
@@ -321,8 +319,8 @@ class HeatmapRenderer {
                 this.renderEnhancedCircularArea(d.cx, d.cy, r, colors, isTop, d);
             }
 
-            // PRESERVE: Advanced label rendering with off-screen detection and sophistication
-            this._renderAdvancedPercentageLabelCanvas(d.cx, d.cy, Math.round(d.percentage), r, isTop, d.isSplit, d.complexity);
+            // ENHANCED: New super-readable label rendering
+            this._renderSuperReadablePercentageLabel(d.cx, d.cy, Math.round(d.percentage), r, isTop, d.isSplit, d.complexity);
         }
     }
 
@@ -492,54 +490,14 @@ class HeatmapRenderer {
         }
     }
 
-    // ========== PRESERVE: ADVANCED SOPHISTICATED LABEL SYSTEM ==========
-    _pointRectDistance(px, py, rx, ry, rw, rh) {
-        const cx = Math.max(rx, Math.min(px, rx + rw));
-        const cy = Math.max(ry, Math.min(py, ry + rh));
-        const dx = px - cx;
-        const dy = py - cy;
-        return Math.hypot(dx, dy);
-    }
-
-    _computeAdvancedLabelLayoutCanvas(cx, cy, text, fontSize, radius) {
-        const ctx = this.ctx;
-        const W = this.canvas.width / (window.devicePixelRatio || 1);
-        const H = this.canvas.height / (window.devicePixelRatio || 1);
-
-        const textWidth = ctx.measureText(text).width;
-        const boxW = Math.ceil(textWidth);
-        const boxH = Math.ceil(fontSize);
-
-        let lx = cx, ly = cy;
-        const gutter = 8;
-        const minX = gutter + boxW / 2;
-        const maxX = W - gutter - boxW / 2;
-        const minY = gutter + boxH / 2;
-        const maxY = H - gutter - boxH / 2;
-
-        const clampedLx = Math.max(minX, Math.min(maxX, lx));
-        const clampedLy = Math.max(minY, Math.min(maxY, ly));
-
-        const box = {
-            x: Math.round(clampedLx - boxW / 2),
-            y: Math.round(clampedLy - boxH / 2),
-            w: boxW,
-            h: boxH
-        };
-
-        const dist = this._pointRectDistance(cx, cy, box.x, box.y, box.w, box.h);
-        const separated = dist > Math.max(0, radius - 4);
-
-        return { box, center: { x: clampedLx, y: clampedLy }, separated };
-    }
-
-    _renderAdvancedPercentageLabelCanvas(cx, cy, percentage, radius, isTop, isSplit, complexity = 0) {
+    // ========== ENHANCED SUPER-READABLE LABEL SYSTEM ==========
+    _renderSuperReadablePercentageLabel(cx, cy, percentage, radius, isTop, isSplit = false, complexity = 0) {
         const ctx = this.ctx;
         const str = `${percentage}%`;
 
-        // PRESERVE: Dynamic font sizing with importance scaling and complexity awareness
-        const baseFontSize = Math.max(16, Math.min(44, radius * 0.35));
-        const importanceBonus = isTop ? baseFontSize * 0.15 : (percentage >= 25 ? baseFontSize * 0.08 : 0);
+        // ENHANCED: Much larger text - increased from 0.35 to 0.55!
+        const baseFontSize = Math.max(28, Math.min(58, radius * 0.55));
+        const importanceBonus = isTop ? baseFontSize * 0.2 : (percentage >= 25 ? baseFontSize * 0.1 : 0);
         const complexityBonus = complexity * baseFontSize * 0.05;
         const fontSize = baseFontSize + importanceBonus + complexityBonus;
         
@@ -547,75 +505,64 @@ class HeatmapRenderer {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        const layout = this._computeAdvancedLabelLayoutCanvas(cx, cy, str, fontSize, radius);
-
-        // PRESERVE: Enhanced sophisticated leader line for off-screen labels
-        if (layout.separated) {
-            const ang = Math.atan2(layout.center.y - cy, layout.center.x - cx);
-            const sx = cx + Math.cos(ang) * Math.max(0, radius - 6);
-            const sy = cy + Math.sin(ang) * Math.max(0, radius - 6);
-
-            const halfW = layout.box.w / 2, halfH = layout.box.h / 2;
-            const ex = layout.center.x - Math.sign(Math.cos(ang)) * (halfW - 4);
-            const ey = layout.center.y - Math.sign(Math.sin(ang)) * (halfH - 4);
-
-            ctx.save();
-            const lineColor = isTop ? 'rgba(0, 255, 255, 0.85)' : 'rgba(147, 51, 234, 0.85)';
-            ctx.strokeStyle = lineColor;
-            ctx.lineWidth = isSplit ? 3 : (2.5 + complexity * 0.5);
-            ctx.setLineDash([4, 2]);
-            ctx.beginPath();
-            ctx.moveTo(sx, sy);
-            ctx.lineTo(ex, ey);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.restore();
-        }
-
-        // PRESERVE: Enhanced sophisticated text rendering with multiple effects
         ctx.save();
         
-        // PRESERVE: Advanced shadow system with complexity awareness
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-        ctx.shadowBlur = Math.max(10, fontSize * 0.25 + complexity * 3);
+        // ENHANCED: Multiple shadow layers for maximum readability
+        // Layer 1: Deep black background shadow
+        ctx.shadowColor = 'rgba(0, 0, 0, 1.0)'; // Pure black
+        ctx.shadowBlur = Math.max(18, fontSize * 0.4); // Much bigger blur
+        ctx.shadowOffsetX = 4; // Bigger offset
+        ctx.shadowOffsetY = 4;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(str, cx, cy);
+
+        // Layer 2: Medium black shadow for depth
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        ctx.shadowBlur = Math.max(12, fontSize * 0.25);
         ctx.shadowOffsetX = 2;
         ctx.shadowOffsetY = 2;
+        ctx.fillText(str, cx, cy);
 
-        // Main text
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(str, layout.center.x, layout.center.y);
-
-        // Reset shadow
+        // Reset shadow for outlines
         ctx.shadowBlur = 0;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
 
-        // PRESERVE: Enhanced sophisticated outline system
-        const outlineWidth = isTop ? 2 : (isSplit ? 1.5 : 1) + complexity * 0.3;
+        // ENHANCED: Triple outline system for extreme visibility
+        // Outermost black outline (thickest)
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+        ctx.lineWidth = 5; // Very thick black outline
+        ctx.strokeText(str, cx, cy);
+
+        // Middle colored outline
         const outlineColor = isTop ? 'rgba(0, 255, 255, 0.95)' : 'rgba(147, 51, 234, 0.95)';
         ctx.strokeStyle = outlineColor;
-        ctx.lineWidth = outlineWidth;
-        ctx.strokeText(str, layout.center.x, layout.center.y);
-        
-        // PRESERVE: Extra sophisticated glow for top cluster
+        ctx.lineWidth = isTop ? 3 : 2.5; // Thicker colored outline
+        ctx.strokeText(str, cx, cy);
+
+        // Inner white text (final layer)
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(str, cx, cy);
+
+        // ENHANCED: Extra glow for top cluster
         if (isTop) {
-            ctx.shadowColor = 'rgba(0, 255, 255, 0.6)';
-            ctx.shadowBlur = 18 + complexity * 5;
-            ctx.fillText(str, layout.center.x, layout.center.y);
+            ctx.shadowColor = 'rgba(0, 255, 255, 0.7)';
+            ctx.shadowBlur = 22 + complexity * 6;
+            ctx.fillText(str, cx, cy);
         }
         
-        // PRESERVE: Split cluster sophisticated indication
+        // ENHANCED: Split cluster additional indication
         if (isSplit) {
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-            ctx.lineWidth = 0.5 + complexity * 0.2;
-            ctx.strokeText(str, layout.center.x, layout.center.y);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.lineWidth = 1 + complexity * 0.3;
+            ctx.strokeText(str, cx, cy);
         }
         
-        // PRESERVE: High complexity additional sophistication
+        // ENHANCED: High complexity additional sophistication
         if (complexity > 0.7) {
-            ctx.strokeStyle = `rgba(255, 255, 255, ${0.2 + complexity * 0.1})`;
-            ctx.lineWidth = 0.3;
-            ctx.strokeText(str, layout.center.x, layout.center.y);
+            ctx.strokeStyle = `rgba(255, 255, 255, ${0.3 + complexity * 0.15})`;
+            ctx.lineWidth = 0.5;
+            ctx.strokeText(str, cx, cy);
         }
         
         ctx.restore();

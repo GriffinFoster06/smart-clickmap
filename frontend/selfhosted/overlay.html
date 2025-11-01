@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Self-hosted Smart ClickMap Overlay</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <style>
+        html, body {
+            background: transparent;
+        }
+    </style>
+</head>
+<body class="overlay">
+    <div class="overlay__root">
+        <div class="overlay__message" id="overlay-status">Connecting…</div>
+        <canvas class="overlay__canvas" id="overlay-canvas"></canvas>
+    </div>
+
+    <script type="module" src="/static/heatmap.js"></script>
+    <script type="module" src="/static/overlay.js"></script>
+</body>
+</html>

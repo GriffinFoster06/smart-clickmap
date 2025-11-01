@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Self-hosted Smart ClickMap Viewer</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body class="viewer">
+    <header class="viewer__header">
+        <h1>Self-hosted Smart ClickMap</h1>
+        <div class="viewer__status">
+            <span class="status-pill" id="status-connection">Connecting…</span>
+            <span class="status-pill" id="status-channel">Channel: -</span>
+            <span class="status-pill" id="status-clicks">Clicks: 0</span>
+        </div>
+        <p style="margin:0; color: var(--muted); font-size: 0.92rem;">
+            Share this page so viewers can click directly on the embedded Twitch player. Their clicks are sent to your local overlay instantly, no hosted backend required.
+        </p>
+    </header>
+
+    <main class="viewer__stage" id="stage">
+        <iframe id="twitch-player" title="Twitch Player" allowfullscreen allow="autoplay; fullscreen" loading="lazy"></iframe>
+        <canvas id="heatmap-canvas" aria-hidden="true"></canvas>
+        <div id="capture-layer" role="presentation" aria-hidden="true"></div>
+        <div class="viewer__toolbar">
+            <button id="toggle-interaction" class="is-inactive">Allow Player Controls</button>
+        </div>
+    </main>
+
+    <footer class="viewer__footer">
+        <span>Hotkeys run on your local backend terminal for quick resets.</span>
+        <span>OBS overlay URL → <code id="overlay-url"></code></span>
+    </footer>
+
+    <script type="module" src="/static/heatmap.js"></script>
+    <script type="module" src="/static/viewer.js"></script>
+</body>
+</html>

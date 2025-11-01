@@ -1,0 +1,14 @@
+{
+  "port": 4173,
+  "defaultStreamer": "phummylw",
+  "allowedStreamers": ["phummylw", "dougdoug"],
+  "retentionMinutes": 30,
+  "hotkeys": {
+    "resetAll": "r",
+    "quit": "q",
+    "resetChannels": {
+      "phummylw": "1",
+      "dougdoug": "2"
+    }
+  }
+}

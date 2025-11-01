@@ -4,7 +4,10 @@
 (function () {
     'use strict';
 
-    const EBS = 'https://smart-clickmap-backend.onrender.com';
+    const DEFAULT_ENDPOINT = window.location.origin && window.location.origin !== 'null'
+        ? window.location.origin
+        : `${window.location.protocol}//${window.location.host}`;
+    const EBS = window.__CLICKMAP_ENDPOINT__ || DEFAULT_ENDPOINT;
     const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     // OPTIMAL PERFORMANCE SETTINGS

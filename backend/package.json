@@ -12,6 +12,8 @@
     "start": "node server.js",
     "dev": "node --inspect server.js",
     "test": "node test.js",
+    "local": "node local-server.js",
+    "check-config": "node local-server.js --check-config",
     "lint": "echo 'Linting would go here'",
     "health": "curl -f http://localhost:${PORT:-8080}/health || exit 1"
   },

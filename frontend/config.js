@@ -2,7 +2,10 @@
 
 class BulletproofConfigPanel {
     constructor() {
-        this.EBS = 'https://smart-clickmap-backend.onrender.com';
+        const defaultEndpoint = window.location.origin && window.location.origin !== 'null'
+            ? window.location.origin
+            : `${window.location.protocol}//${window.location.host}`;
+        this.EBS = window.__CLICKMAP_ENDPOINT__ || defaultEndpoint;
         this.pollInterval = null;
         this.renderer = null;
         this.sessionStart = null;

@@ -1,0 +1,23 @@
+{
+  "port": 4000,
+  "defaultStreamer": "phummylw",
+  "hotkeys": {
+    "resetHeatmap": "r",
+    "nextStreamer": "]",
+    "previousStreamer": "[",
+    "switchToStreamer": {
+      "phummylw": "1",
+      "dougdoug": "2"
+    }
+  },
+  "streamers": {
+    "phummylw": {
+      "twitchChannel": "phummylw",
+      "displayName": "PhummyLW"
+    },
+    "dougdoug": {
+      "twitchChannel": "dougdoug",
+      "displayName": "DougDoug"
+    }
+  }
+}

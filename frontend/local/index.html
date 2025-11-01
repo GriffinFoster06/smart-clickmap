@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart ClickMap Overlay</title>
+  <link rel="stylesheet" href="/static/local/style.css">
+  <script src="https://player.twitch.tv/js/embed/v1.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="app-header">
+      <div class="branding">
+        <span class="dot"></span>
+        <h1 id="streamer-name">Smart ClickMap</h1>
+      </div>
+      <div class="status" id="connection-status">Connecting…</div>
+    </header>
+
+    <main class="app-main">
+      <div class="player-wrapper" id="player-wrapper">
+        <div class="player-container">
+          <div id="twitch-embed" class="twitch-embed" aria-label="Twitch player"></div>
+          <canvas id="heatmap-canvas" class="heatmap"></canvas>
+        </div>
+        <div class="click-catcher" id="click-catcher" aria-hidden="true"></div>
+      </div>
+      <aside class="sidebar">
+        <section class="info">
+          <h2>Overlay status</h2>
+          <dl>
+            <div>
+              <dt>Total clicks</dt>
+              <dd id="total-clicks">0</dd>
+            </div>
+            <div>
+              <dt>Last reset</dt>
+              <dd id="last-reset">—</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="hotkeys" id="hotkey-list">
+          <h2>Hotkeys</h2>
+          <ul></ul>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="app-footer">
+      <p>Overlay hosted locally. Share the link to invite viewers to click.</p>
+    </footer>
+  </div>
+
+  <template id="hotkey-template">
+    <li>
+      <kbd></kbd>
+      <span class="label"></span>
+    </li>
+  </template>
+
+  <script src="/static/heatmap.js"></script>
+  <script type="module" src="/static/local/overlay.js"></script>
+</body>
+</html>

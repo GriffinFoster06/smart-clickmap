@@ -12,7 +12,10 @@ class HTTPClickCollector {
         this.maxRetries = 5;
         this.twitchReady = false;
 
-        this.EBS = 'https://smart-clickmap-backend.onrender.com';
+        const defaultEndpoint = window.location.origin && window.location.origin !== 'null'
+            ? window.location.origin
+            : `${window.location.protocol}//${window.location.host}`;
+        this.EBS = window.__CLICKMAP_ENDPOINT__ || defaultEndpoint;
 
         // Click processing settings
         this.clickQueue = [];

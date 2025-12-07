@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Clickmap - OBS Overlay</title>
+  <style>
+    * { margin: 0; padding: 0; }
+    body {
+      background: transparent;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+    canvas {
+      display: block;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="overlay-canvas"></canvas>
+  <script src="overlay.js" type="module"></script>
+</body>
+</html>

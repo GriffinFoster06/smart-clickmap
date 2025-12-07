@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Clickmap - Admin</title>
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+  <div class="admin-panel">
+    <header>
+      <h1>Smart Clickmap Control Panel</h1>
+    </header>
+
+    <div class="status-bar">
+      <span id="status-indicator" class="status-stopped"></span>
+      <span id="status-text">Stopped</span>
+      <span id="ws-status" class="ws-disconnected">●</span>
+    </div>
+
+    <div class="controls">
+      <button id="btn-start" class="btn btn-start">▶ Start</button>
+      <button id="btn-stop" class="btn btn-stop">⏸ Stop</button>
+      <button id="btn-reset" class="btn btn-reset">🗑 Reset</button>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Total Clicks</div>
+        <div id="stat-clicks" class="stat-value">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Unique Users</div>
+        <div id="stat-users" class="stat-value">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Clusters</div>
+        <div id="stat-clusters" class="stat-value">0</div>
+      </div>
+    </div>
+
+    <div class="hotkeys-info">
+      <h3>Keyboard Shortcuts</h3>
+      <div class="hotkey-list">
+        <div class="hotkey-item">
+          <kbd>Ctrl</kbd> + <kbd>1</kbd>
+          <span>Toggle Start/Stop</span>
+        </div>
+        <div class="hotkey-item">
+          <kbd>Ctrl</kbd> + <kbd>2</kbd>
+          <span>Reset Data</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="preview-section">
+      <h3>Live Preview</h3>
+      <canvas id="preview-canvas" width="320" height="180"></canvas>
+    </div>
+  </div>
+
+  <script src="admin.js" type="module"></script>
+</body>
+</html>

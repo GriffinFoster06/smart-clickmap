@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Clickmap - Viewer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Twitch Embed Container -->
+  <div id="twitch-embed"></div>
+
+  <!-- Transparent Click Layer (on top of Twitch embed) -->
+  <div id="click-layer"></div>
+
+  <!-- Status Indicator -->
+  <div id="status">Connecting...</div>
+
+  <!-- Twitch Embed SDK -->
+  <script src="https://embed.twitch.tv/embed/v1.js"></script>
+
+  <!-- Click Collector -->
+  <script src="app.js" type="module"></script>
+</body>
+</html>

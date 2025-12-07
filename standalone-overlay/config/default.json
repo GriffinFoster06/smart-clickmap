@@ -1,0 +1,25 @@
+{
+  "twitchChannel": "phummylw",
+  "server": {
+    "port": 8080,
+    "broadcastInterval": 5000
+  },
+  "sampling": {
+    "client": 10,
+    "server": 5
+  },
+  "clustering": {
+    "threshold": 3,
+    "maxClusters": 20,
+    "mergeDistance": 0.05
+  },
+  "memory": {
+    "maxClicksInMemory": 10000,
+    "clickMaxAge": 3600000,
+    "cleanupInterval": 30000
+  },
+  "hotkeys": {
+    "toggle": "Ctrl+1",
+    "reset": "Ctrl+2"
+  }
+}
